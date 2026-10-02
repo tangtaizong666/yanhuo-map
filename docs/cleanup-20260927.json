@@ -1,0 +1,1013 @@
+{
+  "date": "2026-09-27T19:33:04.5495845+08:00",
+  "root": "C:\\my_pycharm\\流动摊贩",
+  "status": "completed",
+  "targets": [
+    {
+      "path": ".runtime\\enable-simulation.ps1",
+      "files": 1,
+      "bytes": 3839,
+      "directory": false
+    },
+    {
+      "path": ".runtime\\food-research",
+      "files": 117,
+      "bytes": 8897686,
+      "directory": true
+    },
+    {
+      "path": ".runtime\\vite-session.log",
+      "files": 1,
+      "bytes": 10176,
+      "directory": false
+    },
+    {
+      "path": ".runtime\\vite-session.mjs",
+      "files": 1,
+      "bytes": 545,
+      "directory": false
+    },
+    {
+      "path": "backend\\config\\__pycache__",
+      "files": 4,
+      "bytes": 8953,
+      "directory": true
+    },
+    {
+      "path": "backend\\market\\__pycache__",
+      "files": 26,
+      "bytes": 549765,
+      "directory": true
+    },
+    {
+      "path": "backend\\market\\management\\__pycache__",
+      "files": 1,
+      "bytes": 164,
+      "directory": true
+    },
+    {
+      "path": "backend\\market\\management\\commands\\__pycache__",
+      "files": 7,
+      "bytes": 26258,
+      "directory": true
+    },
+    {
+      "path": "backend\\market\\migrations\\__pycache__",
+      "files": 8,
+      "bytes": 36282,
+      "directory": true
+    },
+    {
+      "path": "frontend\\dist",
+      "files": 91,
+      "bytes": 8835623,
+      "directory": true
+    },
+    {
+      "path": "frontend\\playwright-report",
+      "files": 1,
+      "bytes": 521567,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results",
+      "files": 44,
+      "bytes": 11215549,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-delivery-checkout-visual",
+      "files": 3,
+      "bytes": 335835,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-delivery-live",
+      "files": 3,
+      "bytes": 122369,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-delivery-live-regression",
+      "files": 13,
+      "bytes": 7085760,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-delivery-merchant",
+      "files": 6,
+      "bytes": 494846,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-delivery-settings-final",
+      "files": 3,
+      "bytes": 172126,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-delivery-student",
+      "files": 11,
+      "bytes": 1132783,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-delivery-student-final",
+      "files": 5,
+      "bytes": 276047,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-delivery-visual",
+      "files": 5,
+      "bytes": 566527,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-dish-details",
+      "files": 5,
+      "bytes": 1424722,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-dish-discovery",
+      "files": 5,
+      "bytes": 1001499,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-entry-fix",
+      "files": 1,
+      "bytes": 45,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-final",
+      "files": 34,
+      "bytes": 6148804,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-handoff",
+      "files": 3,
+      "bytes": 2532956,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-lan",
+      "files": 1,
+      "bytes": 45,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-merchant",
+      "files": 18,
+      "bytes": 1625641,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-merchant-layout",
+      "files": 29,
+      "bytes": 5538515,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-merchant-settings-mode",
+      "files": 3,
+      "bytes": 71617,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-merchant-simulation",
+      "files": 3,
+      "bytes": 147081,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-merchant-simulation-regression",
+      "files": 7,
+      "bytes": 565237,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-payment-discovery",
+      "files": 5,
+      "bytes": 290657,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-payment-merchant-ui",
+      "files": 2,
+      "bytes": 75422,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-payment-student",
+      "files": 2,
+      "bytes": 63185,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-payment-student-final",
+      "files": 2,
+      "bytes": 63185,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-payment-visibility-regression",
+      "files": 17,
+      "bytes": 8453550,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-payments-final-focus",
+      "files": 10,
+      "bytes": 993688,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-payments-full",
+      "files": 80,
+      "bytes": 38022655,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-polish-final",
+      "files": 45,
+      "bytes": 13206359,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-polish-verified",
+      "files": 59,
+      "bytes": 20216793,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-recovery",
+      "files": 16,
+      "bytes": 1707320,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-student-status",
+      "files": 5,
+      "bytes": 5983378,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-visual-v2",
+      "files": 9,
+      "bytes": 7800847,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-visual-v3",
+      "files": 13,
+      "bytes": 9444771,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-workflows",
+      "files": 14,
+      "bytes": 2671992,
+      "directory": true
+    },
+    {
+      "path": "frontend\\test-results-workflows-final",
+      "files": 73,
+      "bytes": 30081820,
+      "directory": true
+    },
+    {
+      "path": "frontend\\tsconfig.tsbuildinfo",
+      "files": 1,
+      "bytes": 1774,
+      "directory": false
+    },
+    {
+      "path": "scripts\\__pycache__",
+      "files": 1,
+      "bytes": 2387,
+      "directory": true
+    }
+  ],
+  "total_files": 814,
+  "total_bytes": 198428645,
+  "retained_test_runs": [
+    {
+      "path": "frontend\\test-results\\.last-run.json",
+      "modified": "2026-09-27T03:20:10.1804382Z",
+      "result": {
+        "status": "failed",
+        "failedTests": [
+          "6a76ef77b2f3681939df-d60fbaff52971d67cfc1",
+          "6a76ef77b2f3681939df-ab1f35d2851006f8e2cf"
+        ]
+      }
+    },
+    {
+      "path": "frontend\\test-results\\simulation-live\\.last-run.json",
+      "modified": "2026-09-27T03:26:26.3619029Z",
+      "result": {
+        "status": "failed",
+        "failedTests": [
+          "f2c2885b0bbf3c02d979-204f9f684df6937b9acf"
+        ]
+      }
+    },
+    {
+      "path": "frontend\\test-results\\simulation-readonly-live\\.last-run.json",
+      "modified": "2026-09-27T03:28:11.291007Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results\\simulation-regression\\.last-run.json",
+      "modified": "2026-09-27T03:24:45.4389363Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results\\simulation-student-final\\.last-run.json",
+      "modified": "2026-09-27T03:20:43.8767123Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-delivery-checkout-visual\\.last-run.json",
+      "modified": "2026-09-27T02:51:33.5932831Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-delivery-live\\.last-run.json",
+      "modified": "2026-09-27T02:54:54.3211326Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-delivery-live-regression\\.last-run.json",
+      "modified": "2026-09-27T02:53:37.918978Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-delivery-merchant\\.last-run.json",
+      "modified": "2026-09-27T02:46:59.4116335Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-delivery-settings-final\\.last-run.json",
+      "modified": "2026-09-27T02:47:31.8907813Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-delivery-student\\.last-run.json",
+      "modified": "2026-09-27T02:44:18.6608185Z",
+      "result": {
+        "status": "failed",
+        "failedTests": [
+          "262367eb8392df185b29-a6b7057bf5a748c8d38f"
+        ]
+      }
+    },
+    {
+      "path": "frontend\\test-results-delivery-student-final\\.last-run.json",
+      "modified": "2026-09-27T02:48:26.6851044Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-delivery-visual\\.last-run.json",
+      "modified": "2026-09-27T02:50:56.9018809Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-dish-details\\.last-run.json",
+      "modified": "2026-09-26T11:37:06.0983972Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-dish-discovery\\.last-run.json",
+      "modified": "2026-09-26T11:31:15.8796616Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-entry-fix\\.last-run.json",
+      "modified": "2026-09-26T11:40:54.3932087Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-final\\.last-run.json",
+      "modified": "2026-09-26T10:56:05.8108469Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-handoff\\.last-run.json",
+      "modified": "2026-09-26T09:11:31.8431046Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-lan\\.last-run.json",
+      "modified": "2026-09-26T11:08:07.3864441Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-merchant\\.last-run.json",
+      "modified": "2026-09-26T10:51:39.149021Z",
+      "result": {
+        "status": "failed",
+        "failedTests": [
+          "76207b3e076e17ff6c03-b829e3e147a31fcbde20",
+          "76207b3e076e17ff6c03-ef509f86f99a106db768",
+          "76207b3e076e17ff6c03-cad606e194a781d64331",
+          "76207b3e076e17ff6c03-f817048e0719a4bc53f3"
+        ]
+      }
+    },
+    {
+      "path": "frontend\\test-results-merchant-layout\\.last-run.json",
+      "modified": "2026-09-26T10:52:55.8225444Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-merchant-settings-mode\\.last-run.json",
+      "modified": "2026-09-27T03:28:32.5779816Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-merchant-simulation\\.last-run.json",
+      "modified": "2026-09-27T03:23:28.9028345Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-merchant-simulation-regression\\.last-run.json",
+      "modified": "2026-09-27T03:17:34.1044819Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-payment-discovery\\.last-run.json",
+      "modified": "2026-09-26T13:16:29.3095195Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-payment-merchant-ui\\.last-run.json",
+      "modified": "2026-09-26T12:48:23.10932Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-payment-student\\.last-run.json",
+      "modified": "2026-09-26T12:54:24.2910911Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-payment-student-final\\.last-run.json",
+      "modified": "2026-09-26T13:07:59.1416454Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-payment-visibility-regression\\.last-run.json",
+      "modified": "2026-09-26T13:19:31.7378994Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-payments-final-focus\\.last-run.json",
+      "modified": "2026-09-26T13:05:01.0262956Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-payments-full\\.last-run.json",
+      "modified": "2026-09-26T13:00:38.6349944Z",
+      "result": {
+        "status": "failed",
+        "failedTests": [
+          "25ab1bfc84c57e3e3a45-1d607c4e46cb9b62e782",
+          "261f295bc2fcceaaf1dc-0471609d7d6ba35c7c22"
+        ]
+      }
+    },
+    {
+      "path": "frontend\\test-results-polish-final\\.last-run.json",
+      "modified": "2026-09-26T11:39:10.4701094Z",
+      "result": {
+        "status": "failed",
+        "failedTests": [
+          "25ab1bfc84c57e3e3a45-1d607c4e46cb9b62e782",
+          "f2c2885b0bbf3c02d979-c84a7e9e5171de1b5ead",
+          "f2c2885b0bbf3c02d979-204f9f684df6937b9acf",
+          "76207b3e076e17ff6c03-cf55e8f0b35bfa0754cd",
+          "76207b3e076e17ff6c03-97edff5e384eff475f52",
+          "76207b3e076e17ff6c03-b829e3e147a31fcbde20",
+          "76207b3e076e17ff6c03-ef509f86f99a106db768",
+          "76207b3e076e17ff6c03-cad606e194a781d64331",
+          "76207b3e076e17ff6c03-f817048e0719a4bc53f3",
+          "225a4f3b51d281b6be60-25515b1e89d725c27785",
+          "225a4f3b51d281b6be60-509d6e77381ef8504a9c",
+          "225a4f3b51d281b6be60-5904c399d361592640d6",
+          "225a4f3b51d281b6be60-0a112ff938487e7fb1bb",
+          "225a4f3b51d281b6be60-7cc7f4f6656be7149077"
+        ]
+      }
+    },
+    {
+      "path": "frontend\\test-results-polish-verified\\.last-run.json",
+      "modified": "2026-09-26T11:43:20.730152Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-recovery\\.last-run.json",
+      "modified": "2026-09-26T12:16:56.1552083Z",
+      "result": {
+        "status": "failed",
+        "failedTests": [
+          "d8d5696b4241185631cc-8c5f2cf22ce8525d8cb5",
+          "d8d5696b4241185631cc-9b2273630ba11fe53223",
+          "d8d5696b4241185631cc-e3eaee4b2debe607d4ad",
+          "d8d5696b4241185631cc-497c165f74230a5dd53e",
+          "d8d5696b4241185631cc-61cca80829511e40ba94",
+          "f32453f85162ba3c8d77-959ccfe3ea339b681aaa",
+          "f32453f85162ba3c8d77-b317429c49edbb0ef22f"
+        ]
+      }
+    },
+    {
+      "path": "frontend\\test-results-student-status\\.last-run.json",
+      "modified": "2026-09-26T12:05:16.573814Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-visual-v2\\.last-run.json",
+      "modified": "2026-09-26T11:28:57.6657441Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-visual-v3\\.last-run.json",
+      "modified": "2026-09-26T11:35:33.897065Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    },
+    {
+      "path": "frontend\\test-results-workflows\\.last-run.json",
+      "modified": "2026-09-26T12:03:41.009109Z",
+      "result": {
+        "status": "failed",
+        "failedTests": [
+          "f32453f85162ba3c8d77-b317429c49edbb0ef22f"
+        ]
+      }
+    },
+    {
+      "path": "frontend\\test-results-workflows-final\\.last-run.json",
+      "modified": "2026-09-26T12:22:47.5081309Z",
+      "result": {
+        "status": "passed",
+        "failedTests": []
+      }
+    }
+  ],
+  "protected_files": [
+    {
+      "path": "AGENTS.md",
+      "sha256": "FBB2AC06F5819D29A97530C35066A8C0EC6B3A819C1266AA2A776E7F61844200"
+    },
+    {
+      "path": ".runtime\\processes.json",
+      "sha256": "00F213323FC49143A0126EAD310713D02FE8DFB1D6DADDF4B81CA86E8F7BFC7A"
+    },
+    {
+      "path": ".runtime\\before-delivery-20260927-105002.sqlite3",
+      "sha256": "A93F72496874910E62C63295EC82D43259D19BF96F462F80A49A3D0767E7527C"
+    },
+    {
+      "path": ".runtime\\before-simulation-20260927-112554.sqlite3",
+      "sha256": "0F1425DA19C7B95342C6FBBD43AEE777ED7BBBA37FF7FF8AFDBFE11427EB0F96"
+    },
+    {
+      "path": ".runtime\\before-wechat-20260926-205727.sqlite3",
+      "sha256": "3A2151FE257663B33D7615C6E312B1F5A594D22034BDFB28FDC152243F82C705"
+    },
+    {
+      "path": "backend\\backups\\demo-20260926-085803-447800.sqlite3",
+      "sha256": "AD1430624EBA0CC9A783E7FD02578BD2C27B1EBE747635658036CAB7DB3453F9"
+    },
+    {
+      "path": "frontend\\public\\favicon.svg",
+      "sha256": "1530BD7256985C585332006A084CBF096E3447B1B9D9A7F25C23C14705AF342D"
+    },
+    {
+      "path": "frontend\\public\\images\\ATTRIBUTION.md",
+      "sha256": "21929A11DC368D5BBA2DD20128D607DE86A9F425E9C3B47ECD5C741B4D30927F"
+    },
+    {
+      "path": "frontend\\public\\images\\food-burger.jpg",
+      "sha256": "BBDC28A66469BAB78622C2E49B86B8A4C00CD671C88D07613E65C51BFEB3575A"
+    },
+    {
+      "path": "frontend\\public\\images\\food-chicken-cutlet.jpg",
+      "sha256": "1517DA4D79805593EFBCF47131704D0BFCB14EA1439EEA2C2560095E86C914EF"
+    },
+    {
+      "path": "frontend\\public\\images\\food-chicken-rice.jpg",
+      "sha256": "761FA8B09681E6F6E58870ED2D32D9BF4266F166DE89CD866FFD1AC8979B4AAA"
+    },
+    {
+      "path": "frontend\\public\\images\\food-chicken-wings.jpg",
+      "sha256": "4125FF46589948D2B4813554CB4F31F64E74B7825CEEC389C35F270B55AAFDC7"
+    },
+    {
+      "path": "frontend\\public\\images\\food-ciba.jpg",
+      "sha256": "A0174EFE418EE98BAE690AE59895E8DA046C63FBD6E7C9D0570DBD4AD0FC1388"
+    },
+    {
+      "path": "frontend\\public\\images\\food-cold-noodles.jpg",
+      "sha256": "9F1B1D5CDACFEC0DECC9222B17028C9296A245EC344F86E24BAC8E758B13CF10"
+    },
+    {
+      "path": "frontend\\public\\images\\food-corn.jpg",
+      "sha256": "A04EF32B02C0B10E679CDA12C4EA9FD8AA55332B7F9B4945561F662EFAEC02AD"
+    },
+    {
+      "path": "frontend\\public\\images\\food-crispy-tofu.jpg",
+      "sha256": "91EA4A64C472C87E69B493BF51E40A0217D3F50618BFFF61DCC1B7C7E5B71C8F"
+    },
+    {
+      "path": "frontend\\public\\images\\food-dark-lemon-tea.jpg",
+      "sha256": "CEA269C17099CD867EEB2B75CD30562A7A350AF8A725E7B2E131F8A900350EB9"
+    },
+    {
+      "path": "frontend\\public\\images\\food-dessert.jpg",
+      "sha256": "CD334327B9DF750DC402C1EDB8D4C425C9CCB6169785395101502730F5178461"
+    },
+    {
+      "path": "frontend\\public\\images\\food-dumplings.jpg",
+      "sha256": "8DA914BF17251B3A973C25D6DD9ECCC52EF1A86FBF9BC0EE4925A0A052D9E751"
+    },
+    {
+      "path": "frontend\\public\\images\\food-egg-noodles.jpg",
+      "sha256": "47DACEBBC840C0F249F1F4E70F6507D7CD83B0E9936A67E9FD11F7DDAC64E99F"
+    },
+    {
+      "path": "frontend\\public\\images\\food-eggplant.jpg",
+      "sha256": "4801DBBDE36A6CF1DF97C7CAEF867A036CBAF0D656E6871144A72EF5C89CE70F"
+    },
+    {
+      "path": "frontend\\public\\images\\food-fried-rice.jpg",
+      "sha256": "3818C661FB0FF729175D7FC459EAECF0A164E516A27AEC1B8D5C3825A60FBDCF"
+    },
+    {
+      "path": "frontend\\public\\images\\food-jianbing-making.jpg",
+      "sha256": "C848989514CC0F8CADA6FB629DA56D56875D9B035D2530CC37813A19D4DF776D"
+    },
+    {
+      "path": "frontend\\public\\images\\food-jianbing.jpg",
+      "sha256": "EB641A2A0F64FE76332D8600114F688C2D4C162100A0F91C0EC2568921D8A1A2"
+    },
+    {
+      "path": "frontend\\public\\images\\food-lemon-tea.jpg",
+      "sha256": "8DB187F35D0D83F4C6B6D40389568D0106D38D116B5409E21651742AE1E7CBB7"
+    },
+    {
+      "path": "frontend\\public\\images\\food-mango-rice.jpg",
+      "sha256": "0DB7C439F7C272486F0BCA29B77EBEEF5337B8F201A0A8C1E9C296DD5A66A19D"
+    },
+    {
+      "path": "frontend\\public\\images\\food-marinated-tofu.jpg",
+      "sha256": "24EBDA836CF6557F0B5C9BA50ACB6DCD94332DA9372FA65FAA269B14CE9D5EA1"
+    },
+    {
+      "path": "frontend\\public\\images\\food-noodles-griddle.jpg",
+      "sha256": "13FB70A8A60434382C471C17A6F6C5814E4D1B6B9B30834C1C5A5CA0C96F57E7"
+    },
+    {
+      "path": "frontend\\public\\images\\food-noodles.jpg",
+      "sha256": "EE7855A38080F12784B53774BD54E6ADD7E391B30D87506A0B5C699397D46134"
+    },
+    {
+      "path": "frontend\\public\\images\\food-oolong.jpg",
+      "sha256": "921E76AE8A402FFB00DBE66D126F9B12CCFA6B1AF1748A3850A78B7D607023B8"
+    },
+    {
+      "path": "frontend\\public\\images\\food-pancake.jpg",
+      "sha256": "77991C828B0C0C7783100B03E1B16ADD032F1DD31838A0F8D2E1CE24843C3818"
+    },
+    {
+      "path": "frontend\\public\\images\\food-plum-juice.jpg",
+      "sha256": "B185F00122FEF2D2A85DE73D1D4A01341C52E04517752246480FA36E56508ADC"
+    },
+    {
+      "path": "frontend\\public\\images\\food-pork-rice.jpg",
+      "sha256": "8AF26EB89283CE03008E0D2C73EFCD0B0AB17AC1E04D35640671F764FEB6F3C6"
+    },
+    {
+      "path": "frontend\\public\\images\\food-potato.jpg",
+      "sha256": "6BF4D934E26C628663DB410DF86760BE5476E03761CF6C0EBC6D38B81F775961"
+    },
+    {
+      "path": "frontend\\public\\images\\food-red-oil-wontons.jpg",
+      "sha256": "FD84681D7C439E0D7D78B81C571C8D98AF87D632439A68405166BB41895BBA9B"
+    },
+    {
+      "path": "frontend\\public\\images\\food-sago.jpg",
+      "sha256": "5291BDE44A372B9A6F24483EED3589BA9B0CBF699FB45491EF132A81398DBB76"
+    },
+    {
+      "path": "frontend\\public\\images\\food-skewers.jpg",
+      "sha256": "16AC425CF8A543F85D38AAF9E2BCC5E13D9136E116B30834F40EF3CCBE6CABCF"
+    },
+    {
+      "path": "frontend\\public\\images\\food-tangyuan.jpg",
+      "sha256": "7EE8120EDACA85845D737335289A23FC30FBCD4597660569C0A68CFB11EF6D57"
+    },
+    {
+      "path": "frontend\\public\\images\\food-tea.jpg",
+      "sha256": "88A50C8C3BCE5220486BA6A16962E4EA3A80AD1526B60ADB1E3DF5F5D6BEEBD8"
+    },
+    {
+      "path": "frontend\\public\\images\\food-tofu.jpg",
+      "sha256": "199AEBC91C472322F2247FDCE3DC351B3C9C0069AECC0A5810D0022E0C1688B0"
+    },
+    {
+      "path": "frontend\\public\\images\\food-wonton-soup.jpg",
+      "sha256": "336488648865B3C38E213838A2DE2550E71A63A8BA480205F3EB08E29B014157"
+    },
+    {
+      "path": "frontend\\public\\images\\food-wontons.jpg",
+      "sha256": "8659D56E79776FDE1E1FD5D6F707FCC9FF4039A0D50368173FC69270647A49DD"
+    },
+    {
+      "path": "frontend\\public\\images\\night-market.jpg",
+      "sha256": "8C9D78A698A9AA8249337EAB54974EC194201CDB0DE993D5B430D3D711627FE3"
+    },
+    {
+      "path": "frontend\\public\\images\\sources.json",
+      "sha256": "7FC9CAAFF62D7D62137A1CA71B219FA9B2A6103BA8BA9A219DA699DFAAB01CAE"
+    },
+    {
+      "path": "backend\\media\\merchants\\1\\0a1396dfa3034e4d8a45f53e4e21f6d4.jpg",
+      "sha256": "B067C571E89E577E076CB084810D6B23D570A0216D10CCDE57BAECA74D1A9A97"
+    },
+    {
+      "path": "backend\\media\\merchants\\1\\7bb64e3eea834be2982f4340ea962f79.jpg",
+      "sha256": "B067C571E89E577E076CB084810D6B23D570A0216D10CCDE57BAECA74D1A9A97"
+    },
+    {
+      "path": "backend\\media\\merchants\\1\\834d42138f37421494f23bb26bec72ee.jpg",
+      "sha256": "B067C571E89E577E076CB084810D6B23D570A0216D10CCDE57BAECA74D1A9A97"
+    },
+    {
+      "path": "backend\\media\\merchants\\1\\92be7ff61b6244acb5f897547bfefd06.jpg",
+      "sha256": "B067C571E89E577E076CB084810D6B23D570A0216D10CCDE57BAECA74D1A9A97"
+    },
+    {
+      "path": "backend\\media\\merchants\\1\\daf4f88cd8cb4a60abad6b5bb867b4e6.jpg",
+      "sha256": "B067C571E89E577E076CB084810D6B23D570A0216D10CCDE57BAECA74D1A9A97"
+    },
+    {
+      "path": "backend\\media\\merchants\\1\\f25c6d1ee26643fc99ad5d1def598852.jpg",
+      "sha256": "B067C571E89E577E076CB084810D6B23D570A0216D10CCDE57BAECA74D1A9A97"
+    },
+    {
+      "path": "docs\\previews\\cart-desktop.png",
+      "sha256": "00F731E8F1FF40820EE010605027015D2546453265D0DD828E02F55527A058EF"
+    },
+    {
+      "path": "docs\\previews\\cart-mobile.png",
+      "sha256": "12FFFBF63A1AEDC6C9FC8E236C0D266F3281389341CA9A2C6EA4E7A12163D9BA"
+    },
+    {
+      "path": "docs\\previews\\checkout-payment-methods.png",
+      "sha256": "FF8858675643A1DD2240D19B10EE26F5CE6778ECA221C5B9A07AF6E1B215F063"
+    },
+    {
+      "path": "docs\\previews\\dish-detail-desktop.png",
+      "sha256": "FBC1DBBC7F3546D866774F586B98E26F9036EBCAF16814EE7E5574D9A3F5570F"
+    },
+    {
+      "path": "docs\\previews\\food-gallery-desktop.png",
+      "sha256": "0AD22898F77CE1804657B49D2EC0E484862B1D37A292842F2E110158F23CAE1E"
+    },
+    {
+      "path": "docs\\previews\\food-gallery-mobile.png",
+      "sha256": "AF56C72F8D1F712737A64523E9D736D61E47352B48689CD2017C68EFDDA41E31"
+    },
+    {
+      "path": "docs\\previews\\live-merchant-delivery-mobile.png",
+      "sha256": "AEF5C367AE5D3CB43EF40E31A393C453C326242C38291D03F94A4964F7ADC2BE"
+    },
+    {
+      "path": "docs\\previews\\live-student-delivery-mobile.png",
+      "sha256": "293AADD61A9A507F117FF4C842CA2E4BA7441EDA9C04170B79BB787166F64CDF"
+    },
+    {
+      "path": "docs\\previews\\merchant-attention-desktop.png",
+      "sha256": "E254101C3AC9C663027E20A2690206EA167CBB4DB1DEBAA142E3E9CF8067500B"
+    },
+    {
+      "path": "docs\\previews\\merchant-attention-mobile.png",
+      "sha256": "307362DB32234AE2DEB3B87FE8F791D7A17E3A093EBB6A4D0EC80EDDA6EA89F4"
+    },
+    {
+      "path": "docs\\previews\\merchant-delivery-arrived-mobile.png",
+      "sha256": "1CE7416DF818953878400E053D4972C7F9F0B4C24D414E21E4DB250E667D62E7"
+    },
+    {
+      "path": "docs\\previews\\merchant-delivery-detail-mobile.png",
+      "sha256": "A965C038E74C1D16D04761A845FF00DB8A76934A66711B3EA8153AA221ACE951"
+    },
+    {
+      "path": "docs\\previews\\merchant-delivery-orders-desktop.png",
+      "sha256": "E36144B7B1416B24243559AB9607A49858E4FD99801447D3BF1D1A239DEF1504"
+    },
+    {
+      "path": "docs\\previews\\merchant-delivery-settings-desktop.png",
+      "sha256": "D459C6642458325B285606691647C36011C487856B84AA505D8A48AED16349FF"
+    },
+    {
+      "path": "docs\\previews\\merchant-delivery-settings-mobile.png",
+      "sha256": "1DB93A63D9B5AD15D031CC215044A53B01BA89AB0FC57E4F1714AC7BB3659618"
+    },
+    {
+      "path": "docs\\previews\\merchant-desktop.png",
+      "sha256": "194A95689246762AEE668003D9807077F341E003113CA7D667D0936D19969EDA"
+    },
+    {
+      "path": "docs\\previews\\merchant-mobile.png",
+      "sha256": "4D617070EEA1070BAC5EE94D4E5138C2F25B03D11B5ABF92F9EDFD301F45EB68"
+    },
+    {
+      "path": "docs\\previews\\merchant-simulation-services-desktop.png",
+      "sha256": "D461B7789EE4551D25A1EE05A4C662B891CA74DFA0842FC8780DF7BC13669289"
+    },
+    {
+      "path": "docs\\previews\\merchant-simulation-services-mobile.png",
+      "sha256": "F574DE3479AB34ADCDFDCD2DB5944CE2E7E4669236299AA34209053106E233C9"
+    },
+    {
+      "path": "docs\\previews\\reorder-mobile.png",
+      "sha256": "520C5EBD1F1A039F148AADA61F346EEEB9EB04780AEE1C9A081A6233EF0AADD0"
+    },
+    {
+      "path": "docs\\previews\\simulation-arrived-mobile.png",
+      "sha256": "18DF44AC18CD077047E7864741B8DCF6AF81CB9886CA8DFF6EE8387F612CF7B5"
+    },
+    {
+      "path": "docs\\previews\\simulation-checkout-mobile.png",
+      "sha256": "E0D39D9A0B5AF1BBBFF06BEB67F7436670ED3BA2D5441802CBD1455E55D15C00"
+    },
+    {
+      "path": "docs\\previews\\simulation-store-desktop.png",
+      "sha256": "B9B43BE37331CE7B38E8EF5F5B05CF7983D834A8BB653A02D405D3A2C2A4AB0F"
+    },
+    {
+      "path": "docs\\previews\\student-delivery-arrived-desktop.png",
+      "sha256": "36FBF864DFD9738933A2A9FD93269B60287F81E321B479F6A4C247C4AB98B204"
+    },
+    {
+      "path": "docs\\previews\\student-delivery-arrived-mobile.png",
+      "sha256": "E8AE23796BEDF3E1ADAB11BD5E333BAB33FAA79A48285A62987455ABA7BC258E"
+    },
+    {
+      "path": "docs\\previews\\student-delivery-checkout-desktop.png",
+      "sha256": "C062F33BF237AA259CBED78A24ADCBC7B022B27C728516B57741F4EDC1175CC8"
+    },
+    {
+      "path": "docs\\previews\\student-delivery-checkout-mobile.png",
+      "sha256": "B1CF8A5CF16F522C30C36AF0102CE84B3E6059EFBAB1665BE945BBC9E62A5A73"
+    },
+    {
+      "path": "docs\\previews\\student-delivery-unavailable-mobile.png",
+      "sha256": "3033DA552EFF816444EEB6C9B028582C945037BEA09283F10083342E63F2FFED"
+    },
+    {
+      "path": "docs\\previews\\student-home-mobile.png",
+      "sha256": "560578299362718BD6CD2A71ACE2A7FD7BE4A6AD345E1B9A8C005237F61D9538"
+    },
+    {
+      "path": "backend\\test-results\\delivery-boundaries-postgres.txt",
+      "sha256": "950DBB89B18B57DD7FB77144D8BB967FE0DE8BAAEC0446E20B4E31D6A6896C66"
+    },
+    {
+      "path": "backend\\test-results\\delivery-full-postgres.txt",
+      "sha256": "70C2DBF458C20D8BA78A734A288F6195B7B930EEE7A843A340ABBD7A0521A82F"
+    },
+    {
+      "path": "backend\\test-results\\postgres-concurrency.txt",
+      "sha256": "DD2AF91027E35248917AD9D43EAC679F2A99FD16409865895F264A3A0144609F"
+    },
+    {
+      "path": "backend\\test-results\\postgres-verification.txt",
+      "sha256": "AD27E77CEE6AB5250DA061AA236C19B2AA7F1D21C7014D36158B7CC6200DB295"
+    },
+    {
+      "path": "backend\\test-results\\simulation-postgres.txt",
+      "sha256": "928735A4A2B07BCCAF87EEE6BD5E79CE44CEB8D9C227B48F5A579A34D312BBC6"
+    },
+    {
+      "path": "backend\\test-results\\simulation-regression-postgres.txt",
+      "sha256": "DD2AF91027E35248917AD9D43EAC679F2A99FD16409865895F264A3A0144609F"
+    },
+    {
+      "path": "backend\\test-results\\wechat-full-postgres.txt",
+      "sha256": "663AF0962ED297B1579ECEFC5268B6D261F46590D51A9F00CE74ABB731A18730"
+    },
+    {
+      "path": "流动摊贩动态标记与合规外卖平台可行性与实施方案研究报告.docx",
+      "sha256": "02F7D2BE31F9E37BCF9C4B58A067D1358D86F8249DA0EF05A26046C01B2F1EF8"
+    }
+  ],
+  "live_database": "backend\\db.sqlite3",
+  "completed_at": "2026-09-27T19:37:21.3924056+08:00",
+  "protected_files_verified": 87,
+  "validation": {
+    "health": "ok",
+    "student_http": 200,
+    "merchant_lan_http": 200,
+    "frontend_module_http": 200,
+    "simulation_enabled": true,
+    "lan_url": "http://10.201.131.220:5183",
+    "runtime_note": "After cleanup, the computer network address was found to have changed. Only this project backend was restarted with the current LAN host and CSRF origin; the frontend and workers stayed running. The process record was intentionally updated; Python may regenerate bytecode caches."
+  }
+}

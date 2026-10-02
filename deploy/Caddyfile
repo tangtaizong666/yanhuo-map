@@ -1,0 +1,32 @@
+{$PUBLIC_DOMAIN} {
+    encode zstd gzip
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy strict-origin-when-cross-origin
+        Permissions-Policy "camera=(), microphone=()"
+    }
+    handle /api/* {
+        reverse_proxy backend:8000 {
+            # Overwrite untrusted incoming values. Caddy must face clients directly.
+            header_up X-Real-IP {remote_host}
+        }
+    }
+    handle /admin/* {
+        reverse_proxy backend:8000 {
+            header_up X-Real-IP {remote_host}
+        }
+    }
+    handle_path /static/* {
+        root * /srv/backend-static
+        file_server
+    }
+    handle_path /media/* {
+        root * /srv/backend-media
+        file_server
+    }
+    handle {
+        root * /srv
+        try_files {path} /index.html
+        file_server
+    }
+}

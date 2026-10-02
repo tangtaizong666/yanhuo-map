@@ -1,0 +1,7 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<p>当前线上可售余量：<strong>{{ product.stock }}</strong>；库存版本：{{ product.stock_version }}。</p>
+<p>保存时会检查下单、归还与补货是否改变了库存。发生冲突时，请刷新此页并重新盘点，不要覆盖新变化。</p>
+<form method="post">{% csrf_token %}{{ form.as_p }}<input type="submit" value="确认更正并记录原因" class="default"></form>
+<p><a href="{% url 'admin:market_product_change' product.pk %}">返回商品</a></p>
+{% endblock %}

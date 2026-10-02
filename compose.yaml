@@ -1,0 +1,99 @@
+services:
+  db:
+    image: postgis/postgis:17-3.5
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: yanhuo
+      POSTGRES_USER: yanhuo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a strong POSTGRES_PASSWORD}
+    volumes:
+      - database:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U yanhuo -d yanhuo"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    # The backend has no public port; only self-controlled containers share this network.
+    # Preserve Caddy's HTTPS scheme while still stripping other proxy headers.
+    command: ["sh", "-c", "python manage.py migrate --noinput && python manage.py collectstatic --noinput && waitress-serve --host=0.0.0.0 --port=8000 --threads=8 --trusted-proxy='*' --trusted-proxy-headers=x-forwarded-proto config.wsgi:application"]
+    environment: &backend_environment
+      DJANGO_ENV: production
+      DEMO_MODE: "false"
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?Set a random DJANGO_SECRET_KEY}
+      DJANGO_ALLOWED_HOSTS: ${PUBLIC_DOMAIN:?Set PUBLIC_DOMAIN}
+      CSRF_TRUSTED_ORIGINS: https://${PUBLIC_DOMAIN}
+      DATABASE_URL: postgresql://yanhuo:${POSTGRES_PASSWORD}@db:5432/yanhuo
+      DB_SSLMODE: disable
+      TRUST_PROXY: "true"
+      AUTH_TRUST_PROXY_CLIENT_IP: "true"
+      PUBLIC_BASE_URL: https://${PUBLIC_DOMAIN}
+      # New payment creation remains disabled unless explicitly configured.
+      WECHAT_PAY_ENABLED: ${WECHAT_PAY_ENABLED:-false}
+      WECHAT_PAY_CONFIG_FILE: ""
+      WECHAT_PAY_PUBLIC_ORIGIN: https://${PUBLIC_DOMAIN}
+      # Enable only behind the supplied direct-facing Caddy proxy; see payments guide.
+      WECHAT_PAY_TRUST_PROXY_CLIENT_IP: ${WECHAT_PAY_TRUST_PROXY_CLIENT_IP:-false}
+      AMAP_KEY: ${AMAP_KEY:-}
+      AMAP_SECURITY_CODE: ${AMAP_SECURITY_CODE:-}
+      BRAND_NAME: ${BRAND_NAME:-烟火地图}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - backend_static:/app/staticfiles
+      - backend_media:/app/media
+    healthcheck:
+      test: ["CMD", "python", "-c", "import http.client,os; c=http.client.HTTPConnection('127.0.0.1',8000,timeout=5); c.request('GET','/api/v1/health',headers={'Host':os.environ['DJANGO_ALLOWED_HOSTS'].split(',')[0],'X-Forwarded-Proto':'https'}); assert c.getresponse().status==200"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    command: ["python", "manage.py", "expire_orders", "--loop"]
+    environment: *backend_environment
+    depends_on:
+      backend:
+        condition: service_healthy
+  payment_worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    command: ["python", "manage.py", "reconcile_payments", "--loop", "--interval", "30", "--limit", "100"]
+    environment: *backend_environment
+    depends_on:
+      backend:
+        condition: service_healthy
+  web:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?Set PUBLIC_DOMAIN}
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+      - backend_static:/srv/backend-static:ro
+      - backend_media:/srv/backend-media:ro
+    depends_on:
+      - backend
+volumes:
+  database:
+  backend_static:
+  backend_media:
+  caddy_data:
+  caddy_config:

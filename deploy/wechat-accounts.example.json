@@ -1,0 +1,19 @@
+{
+  "accounts": {
+    "example_business": {
+      "enabled": false,
+      "merchant_profile_id": 123456789,
+      "mode": "direct",
+      "mchid": "REPLACE_WITH_YOUR_MERCHANT_ID",
+      "appid": "REPLACE_WITH_YOUR_APP_ID",
+      "serial_no": "REPLACE_WITH_MERCHANT_CERTIFICATE_SERIAL",
+      "private_key_path": "example-business/apiclient_key.pem",
+      "api_v3_key_file": "example-business/api-v3-key.txt",
+      "payment_public_keys": {
+        "PUB_KEY_ID_0000000000": "example-business/wechatpay-public-key.pem"
+      },
+      "channels": ["native"],
+      "timeout": 8
+    }
+  }
+}
