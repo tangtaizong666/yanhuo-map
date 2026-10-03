@@ -4,7 +4,7 @@
 
 2026-10-03 已加入细粒度运营权限、共享登录失败限流、流式上传保护、多次退款历史与服务端核验结案。餐袋按账号隔离，新增商品在弱网下可安全重试，订单历史分页，活动与资金待处理订单单独同步。运行 `scripts/verify-pilot.ps1 -Postgres` 可重做完整 PostgreSQL 回归及隔离备份恢复演练；部署、资金处理和逐商户开通步骤见[试点运维指南](docs/pilot-operations.md)，本轮结果见[实施与验收记录](docs/pilot-verification-20261003.md)。真实微信实付/退款和实体手机仍须另行验收。
 
-本次审计逐项整改见[原文 20 项行动清单](docs/audit-remediation-checklist.md)，七阶段实现与实际测试证据见[审计验证台账](docs/audit-operations-verification-20261003.md)。台账明确区分本地已验证、远端 CI 待运行及真实商户/实机/异机恢复待验收。
+本次审计逐项整改见[原文 20 项行动清单](docs/audit-remediation-checklist.md)，七阶段实现与实际测试证据见[审计验证台账](docs/audit-operations-verification-20261003.md)。后续[远端 CI 四项检查已实际通过](docs/remote-ci-20261003.md)；历史本地结果与真实商户／实机／异机恢复待验收项分别记录。
 
 审计阶段验证：隔离 PostgreSQL 403 项通过、Chromium/WebKit 回归 93＋16 项通过、隔离真实 API 浏览器 12 项通过、备份失败保护 12 项通过。后续界面改进的验证单独记录于文末链接。真实微信实付、实体手机、生产异机恢复和 48 小时观察仍需按部署手册验收。
 

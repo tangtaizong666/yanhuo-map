@@ -13,8 +13,8 @@
 | 回调入口保护 | `config/callback_wsgi.py`、`payment_views.py`、`deploy/Caddyfile`、`compose.yaml` | 已实现独立受限进程、2 MiB、两处理槽和过载失败响应。真实 Caddy 请求大小与可信代理测试已执行；生产并发与真实验签延迟待目标环境验收。 |
 | 公开摘要与详情分离 | `serializers.py`、`discovery_queries.py`、前端 `lib/types.ts` | 已实现公开／商家类型拆分；摘要每卡最多两餐点，详情单独读。公开不含精确库存、库存版本、备餐量、配送容量或原始接单心跳；电话默认不公开。 |
 | 分页及地图范围查询 | `discovery_api.py`、`HomeView.vue`、`MapView.vue` | 已实现默认 20／最多 50、服务端搜索排序、独立餐点搜索；地图视口最多 200 点，超限提示缩小范围。100／500／2000 摊位实测见规模报告。 |
-| 持续集成 | `.github/workflows/verify.yml`、`playwright.ci.config.ts`、`scripts/verify_browser_integration.py` | 已配置 PostgreSQL/PostGIS、迁移、类型／构建、状态测试、Chromium/WebKit、依赖审计和失败产物。远端 Actions 尚未推送执行，保护分支必过检查需仓库管理员设置。 |
-| 独立生产迁移 | `compose.yaml`、[发布指南](deployment-release.md) | 已实现单次 release 门控；本批 WSL/Linux 实际失败迁移阻断、完整 HTTPS 启动及3个 worker恢复均已通过。本地开发方式保留；远端 CI／目标服务器仍需实际验收。 |
+| 持续集成 | `.github/workflows/verify.yml`、`playwright.ci.config.ts`、`scripts/verify_browser_integration.py` | 已配置 PostgreSQL/PostGIS、迁移、类型／构建、状态测试、Chromium/WebKit、依赖审计和失败产物。远端实际四项检查已通过，首轮失败和修复见[远端 CI 记录](remote-ci-20261003.md)；保护分支必过检查没有自动更改。 |
+| 独立生产迁移 | `compose.yaml`、[发布指南](deployment-release.md) | 已实现单次 release 门控；本批 WSL/Linux 与远端 CI 的实际失败迁移阻断、完整 HTTPS 启动及3个 worker恢复均已通过。本地开发方式保留；真实目标服务器仍需实际验收。 |
 | 浏览器安全策略 | `deploy/Caddyfile` | SPA 已强制禁止嵌入；完整资源 CSP 为报告阶段。正式高德、二维码、支付跳转通过兼容验收后再收紧执行。 |
 | 移除任意商家外链图片 | `media_policy.py`、`merchant.py`、前端 `lib/media.ts` | 新图片仅平台上传／受控路径；旧值保留但公开与商家浏览器都不请求外链，商家可重新上传。订单图片快照也过滤显示；不覆盖已有上传文件。 |
 | 账号失败冷却 | `auth_limits.py`、`recovery.py`、`views.py` | 已实现跨 IP 的 5／10／20／30 秒短冷却，只在放行验证失败时推进。成功或有效恢复清账户桶，来源 IP 限制保留；不宣称消除所有针对性登录干扰。 |
@@ -33,7 +33,7 @@
 
 结果及原始日志索引见 [本轮验证台账](audit-operations-verification-20261003.md)，规模测量及条件见 [发现接口实测](discovery-scale-20261003.md)。原有历史验证记录不覆盖。
 
-后续运行验收已完成本机部分，最新统一入口、411项 PostgreSQL 回归、真实加密通知、实际 SFTP/restic/PostGIS 恢复及告警证据见[运行验收索引](runtime-evidence-20261003.md)。主机巡检每60秒运行并持久保存投递状态；同机恢复不能代替异机灾备，远端 Actions 仍未实际执行。
+后续运行验收已完成本机和远端 CI 部分；统一入口、PostgreSQL 回归、真实加密通知、实际 SFTP/restic/PostGIS 恢复及告警的历次证据见[运行验收索引](runtime-evidence-20261003.md)，最新全量为432项通过。主机巡检每60秒运行并持久保存投递状态；同机恢复仍不能代替异机灾备。
 
 继续逐项复核时发现并修复了账号切换提交竞态、运营退款核验绕过查询预算、健康心跳掩盖到期积压及恢复失败被普通备份误清除。先失败后修复的证据与更新后的回归结果单列于[试点边界复核](pilot-boundaries-20261003.md)，原有证据继续保留。
 
