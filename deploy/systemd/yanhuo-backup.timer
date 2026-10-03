@@ -1,0 +1,11 @@
+[Unit]
+Description=Yanhuo backup twice hourly (RPO target one hour)
+
+[Timer]
+OnCalendar=*-*-* *:00,30:00
+Persistent=true
+RandomizedDelaySec=30
+Unit=yanhuo-backup.service
+
+[Install]
+WantedBy=timers.target

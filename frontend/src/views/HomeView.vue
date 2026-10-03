@@ -28,7 +28,7 @@ import DiscoveryEmpty from "../components/DiscoveryEmpty.vue";
 import ReorderDialog from "../components/ReorderDialog.vue";
 import MealBudget from "../components/MealBudget.vue";
 import { productAvailable } from "../lib/availability";
-import { useStalls } from "../lib/discovery";
+import { useStalls, useMeals } from "../lib/discovery";
 import { useSession } from "../stores/session";
 import { api, money } from "../lib/api";
 import type { Order, Product, Stall } from "../lib/types";
@@ -41,6 +41,8 @@ const {
     pendingFollows,
     filters,
     lastSyncedAt,
+    next: nextStalls,
+    loadMore: loadMoreStalls,
   } = useStalls(),
   session = useSession(),
   route = useRoute(),
@@ -78,71 +80,16 @@ function setMealSort(value: string) {
     },
   });
 }
-type Meal = { product: Product; stall: Stall };
-function budgetMeals(items: Meal[]): Meal[] {
-  const result = items.filter(
-    ({ product }) =>
-      !mealBudget.value || product.price_cents <= mealBudget.value,
-  );
-  return mealSort.value === "price"
-    ? result.sort(
-        (a, b) =>
-          a.product.price_cents - b.product.price_cents ||
-          a.product.id - b.product.id,
-      )
-    : result;
-}
-const meals = computed(() => {
-  const query = filters.q.trim().toLocaleLowerCase();
-  const groups = visible.value.map((stall) =>
-    stall.products
-      .filter(productAvailable)
-      .filter(
-        (product) =>
-          !query ||
-          `${product.name} ${product.description} ${stall.name}`
-            .toLocaleLowerCase()
-            .includes(query),
-      )
-      .map((product) => ({ product, stall })),
-  );
-  const result: { product: Product; stall: Stall }[] = [];
-  for (
-    let index = 0;
-    index < Math.max(0, ...groups.map((group) => group.length));
-    index++
-  ) {
-    for (const group of groups) {
-      const item = group[index];
-      if (item) result.push(item);
-    }
-  }
-  return budgetMeals(result);
-});
-const availableMeals = computed(() => {
-  const groups = visible.value
-    .filter((stall) => stall.status === "open")
-    .map((stall) => ({
-      stall,
-      products: stall.products.filter(productAvailable),
-    }));
-  const picks: typeof meals.value = [];
-  // Give different stalls a place on the shelf before repeating one stall.
-  for (
-    let index = 0;
-    index < Math.max(0, ...groups.map((group) => group.products.length));
-    index++
-  ) {
-    for (const group of groups) {
-      const product = group.products[index];
-      if (product) picks.push({ product, stall: group.stall });
-    }
-  }
-  return picks;
-});
-const featuredMeals = computed(() =>
-  budgetMeals(availableMeals.value).slice(0, 4),
-);
+const {
+  meals,
+  loading: mealsLoading,
+  error: mealsError,
+  next: nextMeals,
+  load: loadMeals,
+  loadMore: loadMoreMeals,
+} = useMeals(mealBudget, mealSort);
+const availableMeals = meals;
+const featuredMeals = computed(() => meals.value.slice(0, 4));
 const recentOrders = ref<Order[]>([]);
 const recentError = ref("");
 const recentLoading = ref(false);
@@ -380,12 +327,14 @@ onMounted(() =>
         @update:budget="setMealBudget"
         @update:sort="setMealSort"
       />
-      <div v-if="loading" class="skeleton-grid">
+      <div v-if="mealsLoading" class="skeleton-grid">
         <div v-for="n in 4" :key="n" class="skeleton skeleton-card"></div>
       </div>
-      <div v-else-if="error" class="empty-state card">
-        <p>{{ error }}</p>
-        <button class="btn btn-secondary" @click="load">重新加载餐点</button>
+      <div v-else-if="mealsError" class="empty-state card">
+        <p>{{ mealsError }}</p>
+        <button class="btn btn-secondary" @click="loadMeals">
+          重新加载餐点
+        </button>
       </div>
       <div v-else-if="meals.length" class="dish-grid">
         <DishCard v-for="item in meals" :key="item.product.id" v-bind="item" />
@@ -409,6 +358,14 @@ onMounted(() =>
           清除餐费预算
         </button>
       </div>
+      <button
+        v-if="nextMeals"
+        class="btn btn-secondary"
+        :disabled="mealsLoading"
+        @click="loadMoreMeals"
+      >
+        {{ mealsLoading ? "正在加载" : "加载更多餐点" }}
+      </button>
     </section>
     <section
       v-if="!searching || resultType !== 'dishes'"
@@ -498,6 +455,14 @@ onMounted(() =>
           :follow-busy="pendingFollows.has(stall.id)"
         />
       </div>
+      <button
+        v-if="nextStalls"
+        class="btn btn-secondary"
+        :disabled="loading"
+        @click="loadMoreStalls"
+      >
+        {{ loading ? "正在加载" : "加载更多摊位" }}
+      </button>
     </section>
     <section
       v-if="!searching && !followOnly && (recentOrders.length || recentError)"
@@ -557,7 +522,7 @@ onMounted(() =>
       v-if="
         !searching &&
         !followOnly &&
-        !error &&
+        !mealsError &&
         (availableMeals.length || mealBudget)
       "
       class="meal-inspiration"
@@ -1216,7 +1181,7 @@ onMounted(() =>
     gap: 3px;
   }
   .categories button {
-    font-size: 10px;
+    font-size: 12px;
     gap: 5px;
     min-height: 62px;
     padding: 0;
@@ -1236,7 +1201,8 @@ onMounted(() =>
     height: 3px;
   }
   .nearby-section .eyebrow {
-    font-size: 8px;
+    display: none;
+    font-size: 12px;
     letter-spacing: 1.2px;
     margin-bottom: 4px;
   }
@@ -1247,10 +1213,10 @@ onMounted(() =>
     font-size: 21px;
   }
   .count {
-    font-size: 10px;
+    font-size: 12px;
   }
   .map-shortcut {
-    font-size: 10px;
+    font-size: 12px;
     gap: 3px;
   }
   .home-bottom-note {
@@ -1263,7 +1229,7 @@ onMounted(() =>
     font-size: 14px;
   }
   .home-bottom-note p {
-    font-size: 10px;
+    font-size: 12px;
   }
   .note-icon {
     width: 37px;
@@ -1274,7 +1240,7 @@ onMounted(() =>
     margin-left: 48px;
   }
   .image-credit-note {
-    font-size: 9px;
+    font-size: 12px;
     text-align: left;
   }
 }

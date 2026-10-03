@@ -287,7 +287,7 @@ test("orders recover after timeout and never show an empty-order claim for a fai
   });
   await held?.abort().catch(() => {});
   await page.route("**/api/v1/orders?*", (route) =>
-    route.fulfill({ json: [] }),
+    route.fulfill({ json: { results: [], next: null, counts: { all: 0, active: 0, followup: 0, attention: 0, completed: 0, cancelled: 0 } } }),
   );
   await page.getByRole("button", { name: "重新加载" }).click();
   await expect(page.getByRole("alert")).toHaveCount(0);

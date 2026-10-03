@@ -387,7 +387,7 @@ test("product taste settings are optional preserve values and reject duplicates"
     path: "/merchant/products",
     order: "none",
   });
-  await page.getByRole("button", { name: "编辑商品", exact: true }).click();
+  await page.getByRole("button", { name: /^编辑商品：/ }).click();
   const modal = page.getByRole("dialog", { name: "编辑商品" });
   await modal.getByText("口味选择（选填、免费）", { exact: false }).click();
   await expect(modal.getByLabel("第 1 组名称")).toHaveValue("辣度");

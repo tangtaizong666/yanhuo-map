@@ -142,10 +142,23 @@ class AuditAdmin(ReadOnlyAdmin):
     search_fields = ['target', 'actor__username']
 
 
+class FeedbackVerificationForm(forms.ModelForm):
+    class Meta:
+        model = Feedback
+        fields = '__all__'
+
+    def clean(self):
+        values = super().clean()
+        if values.get('verification') in ('confirmed', 'dismissed') and not values.get('verification_note', '').strip():
+            self.add_error('verification_note', '请记录核实方式与结论依据，处理完成本身不代表已核实。')
+        return values
+
+
 @admin.register(Feedback)
 class FeedbackAdmin(AuditedAdmin):
-    list_display = ['created_at', 'kind', 'stall', 'order', 'user', 'content', 'resolved']
-    list_filter = ['resolved', 'kind']
+    form = FeedbackVerificationForm
+    list_display = ['created_at', 'kind', 'stall', 'order', 'user', 'content', 'verification', 'resolved']
+    list_filter = ['resolved', 'kind', 'verification']
     readonly_fields = ['user', 'kind', 'stall', 'order', 'location_snapshot', 'content', 'contact', 'created_at', 'dedupe_key', 'request_hash']
     def has_add_permission(self, request): return False
 

@@ -193,6 +193,10 @@ async function submit() {
               placeholder="0"
               :aria-label="`${product.name}本次新增份数`"
             /><span>份</span>
+            <div class="quick-restock">
+              <button type="button" :disabled="busy || !!pending" @click="quantities[product.id] = String(Math.min(100000, (Number(quantities[product.id]) || 0) + 5))" :aria-label="`${product.name}本批加5份`">+5</button>
+              <button type="button" :disabled="busy || !!pending" @click="quantities[product.id] = String(Math.min(100000, (Number(quantities[product.id]) || 0) + 10))" :aria-label="`${product.name}本批加10份`">+10</button>
+            </div>
           </div>
         </fieldset>
         <ul v-if="pending" class="batch-summary">
@@ -251,6 +255,7 @@ fieldset {
 }
 .restock-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   padding: 12px 0;
@@ -294,6 +299,12 @@ fieldset {
   padding-left: 20px;
 }
 @media (max-width: 600px) {
+  .restock { margin: 12px 0; border-radius: 12px; }
+  .restock summary { padding: 12px; min-height: 54px; }
+  .restock:not([open]) summary small { display: none; }
+  .restock summary::after { content: '展开补货'; margin-left: auto; font-size: 13px; font-weight: 400; }
+  .restock[open] summary::after { content: '收起'; }
+
   .restock-footer button {
     width: 100%;
   }

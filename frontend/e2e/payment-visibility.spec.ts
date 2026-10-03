@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { assertNoHorizontalOverflow } from "./helpers";
+import { publicProduct, publicStall } from "./public-contracts";
 
 // Discovery and presentation only. Every API request is intercepted; these
 // fixtures must never reserve real inventory or reach a payment provider.
@@ -109,7 +110,7 @@ async function fixture(
       });
     if (path === "/auth/me") return send(user);
     if (path === "/orders/active-summary") return send([]);
-    if (path === "/stalls/993") return send(stall);
+    if (path === "/stalls/993") return send(publicStall(stall));
     if (path === "/orders") return send(orders);
     const selected = orders.find((item) => path === `/orders/${item.id}`);
     if (selected) return send(selected);
@@ -180,7 +181,7 @@ for (const available of [false, true]) {
         "yanhuo-cart-v2:user:993",
         JSON.stringify({ 993: [{ product: item, quantity: 1 }] }),
       );
-    }, product);
+    }, publicProduct(product));
     await page.goto("/checkout/993");
     const methods = page.locator(".checkout-payment-methods");
     await expect(

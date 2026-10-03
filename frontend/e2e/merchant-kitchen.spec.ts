@@ -453,7 +453,7 @@ test("product editing never patches inventory and pausing supply preserves posit
   page,
 }) => {
   const data = await fixture(page, "/merchant/products");
-  await page.getByRole("button", { name: "编辑商品", exact: true }).click();
+  await page.getByRole("button", { name: /^编辑商品：/ }).click();
   const dialog = page.getByRole("dialog", { name: "编辑商品", exact: true });
   await expect(dialog.getByLabel("线上剩余可卖份数")).toHaveCount(0);
   await dialog.getByLabel("商品名称", { exact: false }).fill("招牌煎饼（新）");
@@ -593,7 +593,7 @@ test("switching merchant during CSRF preflight aborts the old inventory correcti
   ).toHaveCount(0);
   data.releaseCsrf();
   await expect(
-    page.getByRole("button", { name: "编辑商品", exact: true }),
+    page.getByRole("button", { name: /^编辑商品：/ }),
   ).toBeVisible();
   expect(correctionWrites(data)).toEqual([]);
   expect(data.product.stock).toBe(10);

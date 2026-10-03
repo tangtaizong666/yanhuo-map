@@ -4,6 +4,10 @@
 
 2026-10-03 已加入细粒度运营权限、共享登录失败限流、流式上传保护、多次退款历史与服务端核验结案。餐袋按账号隔离，新增商品在弱网下可安全重试，订单历史分页，活动与资金待处理订单单独同步。运行 `scripts/verify-pilot.ps1 -Postgres` 可重做完整 PostgreSQL 回归及隔离备份恢复演练；部署、资金处理和逐商户开通步骤见[试点运维指南](docs/pilot-operations.md)，本轮结果见[实施与验收记录](docs/pilot-verification-20261003.md)。真实微信实付/退款和实体手机仍须另行验收。
 
+本次审计逐项整改见[原文 20 项行动清单](docs/audit-remediation-checklist.md)，七阶段实现与实际测试证据见[审计验证台账](docs/audit-operations-verification-20261003.md)。台账明确区分本地已验证、远端 CI 待运行及真实商户/实机/异机恢复待验收。
+
+审计阶段验证：隔离 PostgreSQL 403 项通过、Chromium/WebKit 回归 93＋16 项通过、隔离真实 API 浏览器 12 项通过、备份失败保护 12 项通过。后续界面改进的验证单独记录于文末链接。真实微信实付、实体手机、生产异机恢复和 48 小时观察仍需按部署手册验收。
+
 ## 立即体验
 
 本机地址：**http://127.0.0.1:5183**。商家工作台：**http://127.0.0.1:5183/merchant**；运营后台：**http://127.0.0.1:5183/admin/**。
@@ -89,14 +93,18 @@
 .\scripts\stop-dev.ps1
 ```
 
-也可以分别开启三个终端运行：
+也可以分别开启五个终端运行（均使用相同的开发环境配置）：
 
 ```powershell
 # 终端 1，项目根目录
 .\backend\.venv\Scripts\python.exe backend\manage.py runserver 127.0.0.1:8087
 # 终端 2，项目根目录
 .\backend\.venv\Scripts\python.exe backend\manage.py expire_orders --loop
-# 终端 3
+# 终端 3，项目根目录
+.\backend\.venv\Scripts\python.exe backend\manage.py reconcile_payments --loop
+# 终端 4，项目根目录
+.\backend\.venv\Scripts\python.exe backend\manage.py process_payment_notifications --loop
+# 终端 5
 cd frontend
 npm run dev
 ```
@@ -155,15 +163,26 @@ npm run dev
 
 ## 测试
 
+手机操作简化的改动、状态问题根因及本轮独立验证见[手机流程复查记录](docs/mobile-simplification-20261003.md)。商家默认进入接单台，低频设置在“更多”；学生下单成功后只移除已提交餐点，保留后续新增的餐袋内容。
+
+对照本地夜市项目与成熟商家产品的研究、具体借鉴和排除项见[参考实现研究](docs/reference-study-20261003.md)。菜品资料统一在编辑面板修改，日常列表保留可卖份数和供应操作；学生菜品详情把逐份要求留在正文，手机底部只保留购买操作区。
+
+后续[开摊与交餐改进](docs/daily-handoff-20261003.md)：店铺页的支付配送和接单量设置按需展开；取餐面板先核对餐点、金额和付款状态，再独立收款／核销。修复学生取消或评价成功后被旧刷新漏掉状态的问题。
+
 ```powershell
 .\backend\.venv\Scripts\python.exe backend\manage.py test market
 cd frontend
+npm run test:unit
 npm run build
-npx playwright install chromium
-npm run test:e2e
+npx playwright install chromium webkit
+npx playwright test --config playwright.ci.config.ts
+cd ..
+.\backend\.venv\Scripts\python.exe scripts\verify_browser_integration.py
 ```
 
-浏览器测试需要 8087 / 5183 已启动，且必须使用开发示例环境。业务流程测试会创建独立的测试学生账号和示例订单，不应对正式环境运行。支付界面合约测试显式截获 API、使用独立响应桩，不调用真实微信；网关与支付状态机测试使用隔离数据和替代传输。测试覆盖手机/平板/电脑布局、搜索、地图失败、注册登录、关注持久化、双角色自取流程、评价、取消库存恢复及支付界面状态。
+上面的 CI 浏览器入口使用 5196／5197 端口和截获的 API 响应，不代理业务数据库；真实 API 验证脚本使用临时数据库、媒体目录及 8097／5195 端口，结束后只关闭自己启动的进程。两者均不会写开发订单或调用真实微信，失败日志、截图和 trace 会保留。测试覆盖手机/平板/电脑布局、搜索、地图失败、注册登录、关注持久化、双角色自取流程、评价、取消库存恢复及支付界面状态。
+
+旧 `npm run test:e2e` 入口默认访问已启动的 8087／5183，会创建测试账号和示例订单，只适用于专门准备的测试环境。日常回归优先使用上述隔离入口。网关与支付状态机测试使用隔离数据和替代传输。
 
 PostgreSQL 专用并发测试需要 PostgreSQL/PostGIS 的 `DATABASE_URL`，不能以 SQLite 下跳过的测试证明生产并发安全。构建不会连接第三方地图或触发真实支付。
 
@@ -177,9 +196,9 @@ PostgreSQL 专用并发测试需要 PostgreSQL/PostGIS 的 `DATABASE_URL`，不�
 4. 在管理后台录入**非示例**校园、商户和商品。运营人员完成准入审核后才开启点单。
 5. 核实 HTTPS、地图、日志、备份恢复、接单超时任务和真实双设备操作，再邀请首批学生。
 
-生产配置默认关闭示例模式和线上支付、不建立示例账号，不公开数据库或后端端口。Caddy 承担 HTTPS 与同源前端/API 代理，过期任务由独立 `worker` 执行，在途支付/退款查询由独立 `payment_worker` 执行。开发数据不会自动迁移进生产。开通付款后，即使暂停新支付，也应保留密钥挂载与付款查询任务处理既有交易。
+生产配置默认关闭示例模式和线上支付、不建立示例账号，不公开数据库、后端或回调端口。独立 `release` 容器先完成迁移与静态收集，成功后应用及三个 worker 才启动。Caddy 将付款回调送到受限 `callback`，验签入队后由 `notification_worker` 处理；过期任务由 `worker` 执行，在途支付/退款查询由 `payment_worker` 执行。开发数据不会自动迁移进生产。开通付款后，即使暂停新支付，也应保留密钥挂载与付款查询任务处理既有交易。升级停写、发布门控、CSP 报告阶段和逐商户真实验收见[发布与48小时观察](docs/deployment-release.md)。
 
-备份示例（服务器 Bash，保存在仅管理员可访问的目录）：
+临时数据库备份示例（只包含数据库，不能替代完整灾备；服务器 Bash，保存在仅管理员可访问的目录）：
 
 ```bash
 mkdir -p backups
@@ -187,7 +206,15 @@ umask 077
 docker compose --env-file .env.production exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "backups/yanhuo-$(date +%Y%m%d-%H%M%S).dump"
 ```
 
-配置每天执行备份，并把副本保存到独立存储。恢复演练应使用新建的独立数据库，按 `pg_restore --exit-on-error --no-owner` 恢复后检查订单数量、金额和关联记录；未经演练不要用恢复命令覆盖运行中的数据库。支付配置及密钥须另作受控加密备份；恢复后保持新支付关闭，核对支付/退款流水再补查在途交易。API 错误、操作事件可通过相应 Compose 配置的 `logs backend worker payment_worker` 查看，支付栈需始终带上 `-f compose.yaml -f compose.payments.yaml`。
+完整备份工具见[加密异机备份与隔离恢复](docs/backup-recovery.md)：默认每30分钟调度，目标 RPO 1小时/RTO 2小时，统一保存数据库、媒体、运行配置与支付密钥，校验加密回传并提供断网 PostGIS 恢复演练。真实目的地和告警未配置时拒绝运行，不把本机卷或虚拟演练标为生产灾备成功。未经演练不要覆盖运行中的数据库；恢复后保持新支付关闭，核对支付/退款流水再补查在途交易。API/回调/操作事件可通过相应 Compose 配置的 `logs backend callback worker payment_worker notification_worker` 查看，支付栈需始终带上 `-f compose.yaml -f compose.payments.yaml`。
+
+## 运行验收与巡检
+
+Linux、WSL 和 CI 共用 `scripts/verify_runtime.py`，Windows 可运行 `scripts/verify-runtime.ps1 -FullRegression`。入口使用临时 Compose 项目验证 HTTPS、迁移失败阻断、工作进程恢复、PostgreSQL 库存争抢、真实加密回调，以及 SFTP/restic/PostGIS 备份恢复；不会操作开发数据库和 5183／8087。运行方法见[隔离验收入口](docs/runtime-acceptance.md)，结果见[统一证据索引](docs/runtime-evidence-20261003.md)。
+
+生产主机的[全局巡检](docs/operations-monitor.md)每 60 秒检查业务积压、工作进程、容器与备份，持久保存通知去重和失败重试。真实异机目的地、告警接收人、商户实付及实体手机仍需单独验收。
+
+后续[试点边界复核](docs/pilot-boundaries-20261003.md)补齐跨标签账号错配拦截、运营外部退款查询预算、到期订单积压及恢复失败告警，记录首次失败与修复后的独立验收结果。
 
 ## 图片来源
 

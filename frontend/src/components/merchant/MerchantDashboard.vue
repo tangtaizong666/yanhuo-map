@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ownedImage } from "../../lib/media";
 import { computed } from "vue";
 import {
   ArrowUpRight,
@@ -128,7 +129,7 @@ const recent = computed(() => props.orders.slice(0, 4));
         </button>
       </div>
       <div class="m-welcome-art">
-        <img :src="stall.image" :alt="stall.name + '美食照片'" /><span
+        <img v-if="ownedImage(stall.image)" :src="ownedImage(stall.image)" :alt="stall.name + '美食照片'" /><span
           ><Store :size="14" /> 小摊有烟火，好味有人情</span
         >
       </div>
@@ -220,10 +221,10 @@ const recent = computed(() => props.orders.slice(0, 4));
           ><button @click="emit('navigate', 'reviews')">
             <span><MessageSquare :size="22" /></span><b>顾客评价</b
             ><small>听听大家说</small></button
-          ><RouterLink :to="`/stalls/${stall.id}`"
+          ><RouterLink v-if="stall.is_visible" :to="`/stalls/${stall.id}`"
             ><span><Store :size="22" /></span><b>预览摊位</b
             ><small>看看学生视角</small></RouterLink
-          >
+          ><button v-else @click="emit('navigate', 'store')"><span><Store :size="22" /></span><b>完善开摊资料</b><small>公开后可预览摊位</small></button>
         </div>
       </section>
     </div>
@@ -247,7 +248,7 @@ const recent = computed(() => props.orders.slice(0, 4));
           :key="order.id"
           @click="emit('navigate', 'orders', 'all')"
         >
-          <img :src="order.items[0]?.image || stall.image" alt="" />
+          <img v-if="ownedImage(order.items[0]?.image || stall.image)" :src="ownedImage(order.items[0]?.image || stall.image)" alt="" />
           <div>
             <strong>{{ order.items.map((i: any) => i.name).join("、") }}</strong
             ><small

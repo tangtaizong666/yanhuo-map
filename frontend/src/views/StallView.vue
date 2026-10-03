@@ -49,6 +49,11 @@ const route = useRoute(),
   error = ref(""),
   tab = ref("menu");
 const id = computed(() => Number(route.params.id));
+const mobileQuery = window.matchMedia('(max-width: 767px)');
+const mobileLayout = ref(mobileQuery.matches);
+const updateLayout = () => { mobileLayout.value = mobileQuery.matches; };
+onMounted(() => mobileQuery.addEventListener('change', updateLayout));
+onUnmounted(() => mobileQuery.removeEventListener('change', updateLayout));
 const followState = useFollowState((changedId, followed) => {
   if (stall.value?.id === changedId && id.value === changedId)
     stall.value.is_followed = followed;
@@ -78,8 +83,8 @@ function quantity(p: Product) {
 function change(p: Product, d: number) {
   if (!stall.value?.can_order || error.value) return;
   if (d > 0 && !productAvailable(p)) return;
-  if (d > 0 && quantity(p) + d > p.stock) {
-    notify("这份好味道的库存不够了。", "info");
+  if (d > 0 && cart.remaining(id.value) <= 0) {
+    notify("每个摊位一单合计最多 10 份，请调整餐袋。", "info");
     return;
   }
   cart.setQuantity(id.value, p, quantity(p) + d);
@@ -247,9 +252,16 @@ onUnmounted(() => {
               </div>
             </div>
           </section>
-          <StallVisitInfo :stall="stall" />
+          <details class="stall-arrival" :open="!mobileLayout">
+            <summary>
+              <MapPin :size="19" />
+              <span><strong>{{ stall.address || '商家暂未提供位置' }}</strong><small>{{ confirmedText(stall.last_confirmed_at) }}</small></span>
+              <span class="arrival-action">认摊与路线<ChevronRight :size="15" /></span>
+            </summary>
+            <StallVisitInfo :stall="stall" />
+            <div class="stall-share-entry"><StallShare :stall="stall" /></div>
+          </details>
           <ReceivingNotice :stall="stall" />
-          <div class="stall-share-entry"><StallShare :stall="stall" /></div>
           <div v-if="availability" class="availability-note">
             <AlertCircle :size="16" />{{ availability }}
           </div>
@@ -301,8 +313,8 @@ onUnmounted(() => {
                     /></RouterLink>
                   </h3>
                   <p>{{ p.description }}</p>
-                  <small v-if="productAvailable(p) && p.stock < 10"
-                    >线上剩余 {{ p.stock }} 份</small
+                  <small v-if="productAvailable(p)"
+                    >可选餐，提交时核对余量</small
                   >
                   <div class="product-bottom">
                     <span class="price"
@@ -323,7 +335,7 @@ onUnmounted(() => {
                       ><button
                         class="plus"
                         @click="change(p, 1)"
-                        :disabled="quantity(p) >= p.stock"
+                        :disabled="cart.remaining(id) <= 0"
                         :aria-label="'添加' + p.name"
                       >
                         <Plus :size="16" />
@@ -484,6 +496,7 @@ onUnmounted(() => {
   </div>
 </template>
 <style scoped>
+.stall-arrival > summary { display: none; }
 .stall-share-entry {
   display: flex;
   justify-content: flex-end;
@@ -1012,9 +1025,9 @@ onUnmounted(() => {
     margin-bottom: 12px;
   }
   .stall-hero {
-    height: 240px;
-    margin: 0 -18px;
-    border-radius: 0;
+    height: 196px;
+    margin: 0;
+    border-radius: 16px;
   }
   .stall-hero-caption {
     left: 20px;
@@ -1026,20 +1039,24 @@ onUnmounted(() => {
     letter-spacing: 1px;
   }
   .stall-hero-caption h1 {
-    font-size: 28px;
-    margin-top: 8px;
+    font-size: 26px;
+    margin-top: 6px;
   }
   .stall-hero-caption p {
-    font-size: 10px;
-    margin-top: 8px;
+    font-size: 12px;
+    margin-top: 6px;
     max-width: 67%;
-    line-height: 1.8;
+    line-height: 1.6;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
   .hero-follow {
     right: 18px;
     bottom: 26px;
-    min-height: 35px;
-    font-size: 10px;
+    min-height: 44px;
+    font-size: 12px;
     padding: 7px 10px;
     gap: 5px;
   }
@@ -1053,14 +1070,24 @@ onUnmounted(() => {
   }
   .stall-layout {
     display: block;
-    margin-top: 18px;
+    margin-top: 14px;
   }
   .pickup-aside {
     display: none;
   }
   .stall-overview {
-    padding: 18px;
+    padding: 15px;
   }
+  .stall-arrival { margin-top: 12px; background: #fffbf5; border: 1px solid var(--line); border-radius: 14px; }
+  .stall-arrival > summary { display: flex; align-items: center; gap: 9px; min-height: 64px; padding: 12px 14px; cursor: pointer; list-style: none; color: #795133; }
+  .stall-arrival > summary::-webkit-details-marker { display: none; }
+  .stall-arrival > summary > svg { flex: none; }
+  .stall-arrival > summary > span:not(.arrival-action) { min-width: 0; display: grid; gap: 4px; }
+  .stall-arrival summary strong { font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+  .stall-arrival summary small { font-size: 11px; color: #81705f; }
+  .arrival-action { flex: none; display: flex; align-items: center; margin-left: auto; font-size: 11px; }
+  .stall-arrival[open] .arrival-action svg { transform: rotate(90deg); }
+  .stall-arrival :deep(.stall-visit) { margin: 0; border: 0; border-top: 1px solid var(--line); border-radius: 0 0 14px 14px; }
   .overview-top {
     gap: 8px;
   }
@@ -1082,11 +1109,11 @@ onUnmounted(() => {
     padding: 4px 6px;
   }
   .overview-facts {
-    gap: 11px;
-    margin-top: 16px;
+    gap: 8px;
+    margin-top: 12px;
   }
   .overview-facts > div {
-    font-size: 11px;
+    font-size: 12px;
     gap: 6px;
   }
   .overview-facts svg {
@@ -1107,19 +1134,19 @@ onUnmounted(() => {
     font-size: 10px;
   }
   .product-row {
-    gap: 14px;
-    padding: 19px 0;
+    gap: 12px;
+    padding: 16px 0;
   }
   .product-image {
-    width: 95px;
-    height: 105px;
+    width: 88px;
+    height: 88px;
     border-radius: 12px;
   }
   .product-content h3 {
     font-size: 15px;
   }
   .product-content p {
-    font-size: 11px;
+    font-size: 12px;
     margin-top: 5px;
   }
   .product-bottom > .price {
@@ -1181,7 +1208,7 @@ onUnmounted(() => {
   }
   .mobile-cart .btn {
     margin-left: auto;
-    min-height: 42px;
+    min-height: 44px;
     font-size: 12px;
     border-radius: 24px;
     padding: 10px 21px;

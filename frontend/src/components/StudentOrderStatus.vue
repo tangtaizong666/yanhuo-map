@@ -50,7 +50,7 @@ const title = computed(() => {
     ? "餐点做好啦，记得来取"
     : order.value?.status === "preparing"
       ? "你的好味道，正在制作"
-      : "订单已送达，等待商家接单";
+      : "订单已提交，等待商家接单";
 });
 let sequence = 0;
 let controller: AbortController | null = null;
@@ -266,25 +266,36 @@ onUnmounted(() => {
 }
 @media (max-width: 767px) {
   .order-status-wrap {
-    padding: 0 18px;
-    margin-top: 14px;
+    padding: 0 16px;
+    margin-top: 10px;
   }
   .order-status-banner {
-    padding: 12px;
-    gap: 9px;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: 30px minmax(0, 1fr) auto;
+    padding: 10px;
+    gap: 8px;
+    border-radius: 12px;
   }
   .order-status-icon {
-    height: 36px;
-    width: 36px;
-    border-radius: 11px;
+    height: 30px;
+    width: 30px;
+    border-radius: 9px;
   }
-  .order-status-copy {
-    flex-basis: calc(100% - 50px);
+  .order-status-copy strong {
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .order-status-copy p {
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .order-status-action,
   .order-status-retry {
-    margin: -4px 0 -7px auto;
+    margin: 0;
+    gap: 4px;
+    font-size: 12px;
   }
 }
 </style>

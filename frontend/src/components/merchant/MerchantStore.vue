@@ -1,21 +1,21 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { ownedImage } from "../../lib/media";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import {
   Store,
   MapPin,
-  Clock3,
   Navigation,
   ShieldCheck,
   Save,
   Check,
   Camera,
+  Settings2,
   ExternalLink,
-  Coffee,
   CircleCheck,
   CirclePause,
 } from "lucide-vue-next";
-import { api, formatTime, statusText } from "../../lib/api";
+import { api } from "../../lib/api";
 import { loadAMap, locate } from "../../lib/amap";
 import { useSession } from "../../stores/session";
 import { notify } from "../../lib/notify";
@@ -35,6 +35,7 @@ const profile = reactive({
   image: "",
   prep_minutes: 10,
   contact_phone: "",
+  public_phone_enabled: false,
   arrival_note: "",
   arrival_image: "",
   location_draft_address: "",
@@ -49,7 +50,7 @@ const location = reactive({
 const profileBase: Record<string, any> = {};
 const locationBase: Record<string, string> = {};
 const route = useRoute();
-const locationOpen = ref(route.hash === "#location" || !props.stall.address),
+const locationOpen = ref(route.hash === "#location" || !props.stall.activation?.has_location),
   mapOpen = ref(false),
   mapElement = ref<HTMLElement>();
 let map: any = null,
@@ -73,6 +74,9 @@ function showLocation() {
       ?.scrollIntoView({ behavior: "smooth", block: "start" }),
   );
 }
+onMounted(() => {
+  if (route.hash === "#location") showLocation();
+});
 const confirmationStatus = computed(() =>
   props.stall.status === "closed"
     ? "closed"
@@ -92,13 +96,14 @@ function fill(current: any, previous?: any) {
     image: props.stall.image,
     prep_minutes: props.stall.prep_minutes,
     contact_phone: props.stall.contact_phone,
+    public_phone_enabled: !!props.stall.public_phone_enabled,
     arrival_note: props.stall.arrival_note || "",
     arrival_image: props.stall.arrival_image || "",
     location_draft_address: props.stall.location_draft_address || "",
     usual_hours: props.stall.usual_hours || "",
   };
   const incomingLocation = {
-    address: props.stall.address || props.stall.location_draft_address || "",
+    address: props.stall.activation?.has_location ? props.stall.address : props.stall.location_draft_address || "",
     latitude: String(props.stall.latitude ?? ""),
     longitude: String(props.stall.longitude ?? ""),
     closes_at: localDate(props.stall.closes_at),
@@ -342,156 +347,6 @@ async function upload(e: Event, field: "image" | "arrival_image" = "image") {
       @refresh="emit('refresh')"
       @location="showLocation"
     />
-    <MerchantServices :stall="stall" @refresh="emit('refresh')" />
-    <div
-      v-if="stall.address && stall.latitude != null && stall.longitude != null"
-      class="m-store-grid daily-settings location-confirmation"
-    >
-      <section class="m-panel">
-        <div class="m-panel-head">
-          <h2><Clock3 :size="20" /> 营业状态</h2>
-          <span :class="['m-status', stall.status]">{{
-            statusText(stall.status)
-          }}</span>
-        </div>
-        <div class="m-business-intro">
-          <span class="m-shop-icon"><Coffee :size="30" /></span>
-          <h3>
-            {{
-              stall.status === "open"
-                ? "今天的烟火，正在升起"
-                : "准备好了，就开始今天的好生意"
-            }}
-          </h3>
-          <p>
-            自取与配送共用营业状态。暂歇和收摊会停止新订单，已有订单仍需继续处理。
-          </p>
-        </div>
-        <div class="m-confirm-location">
-          <MapPin :size="18" />
-          <div>
-            <strong>{{ stall.address }}</strong
-            ><small>最近确认：{{ formatTime(stall.last_confirmed_at) }}</small>
-          </div>
-        </div>
-        <button
-          class="btn btn-secondary m-full-button"
-          :disabled="!!busy"
-          @click="updateStatus(confirmationStatus, false, true)"
-        >
-          <Check :size="16" /> 我还在这里，确认当前位置
-        </button>
-        <p class="m-muted">位置过期时将暂停新订单。请在实际出摊位置确认。</p>
-      </section>
-    </div>
-    <details class="m-panel store-details">
-      <summary>
-        <Store :size="20" /><span
-          >店铺资料<small>名称、封面、简介与联系电话</small></span
-        >
-      </summary>
-      <section class="store-inner-section">
-        <div class="m-panel-head">
-          <h2><Store :size="20" /> 店铺信息</h2>
-          <RouterLink :to="`/stalls/${stall.id}`" class="m-text-link"
-            >预览 <ExternalLink :size="15"
-          /></RouterLink>
-        </div>
-        <form class="m-form" @submit.prevent="saveProfile">
-          <div class="m-shop-photo">
-            <img v-if="profile.image" :src="profile.image" alt="店铺封面" />
-            <div>
-              <label class="btn btn-secondary m-upload"
-                ><Camera :size="16" /> 更换店铺封面<input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  :disabled="!!busy"
-                  @change="upload"
-                  aria-label="上传店铺封面" /></label
-              ><small>JPG / PNG / WebP，最大 5MB</small>
-            </div>
-          </div>
-          <label
-            >摊位名称<input
-              v-model="profile.name"
-              required
-              maxlength="80"
-              placeholder="给小摊一个好记的名字" /></label
-          ><label
-            >店铺简介<textarea
-              v-model="profile.description"
-              rows="3"
-              maxlength="1000"
-              placeholder="介绍你的拿手好味道…"
-            />
-          </label>
-          <div class="m-field-row">
-            <label
-              >预计备餐时间（分钟）<input
-                type="number"
-                v-model.number="profile.prep_minutes"
-                min="1"
-                max="180"
-                required /></label
-            ><label
-              >公开联系电话<input
-                v-model="profile.contact_phone"
-                type="tel"
-                maxlength="30"
-                placeholder="按需填写"
-            /></label>
-          </div>
-          <p class="m-muted">
-            联系电话将公开展示，同一经营主体下的摊位共用此号码。
-          </p>
-          <label
-            >通常出摊时段（选填）<input
-              v-model="profile.usual_hours"
-              maxlength="100"
-              placeholder="例如：通常周一至周五 17:00–21:00"
-            /><small class="m-muted"
-              >只填写真实安排；这是计划说明，不代表此刻已经出摊。</small
-            ></label
-          >
-          <label
-            >怎样更容易找到你<textarea
-              v-model="profile.arrival_note"
-              rows="3"
-              maxlength="200"
-              placeholder="例如：南门入口左手边，橙色棚子下面"
-            />
-          </label>
-          <div class="m-shop-photo">
-            <img
-              v-if="profile.arrival_image"
-              :src="profile.arrival_image"
-              alt="找摊参照照片"
-            />
-            <div>
-              <label class="btn btn-secondary m-upload"
-                ><Camera :size="16" /> 上传找摊参照照片<input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  :disabled="!!busy"
-                  @change="upload($event, 'arrival_image')"
-                  aria-label="上传找摊参照照片" /></label
-              ><small>独立于店铺封面。照片中请包含路口、招牌等明显参照。</small
-              ><button
-                v-if="profile.arrival_image"
-                type="button"
-                class="m-text-link"
-                @click="profile.arrival_image = ''"
-              >
-                移除找摊照片
-              </button>
-            </div>
-          </div>
-          <button class="btn btn-primary" type="submit" :disabled="!!busy">
-            <Save :size="16" /> 保存店铺信息
-          </button>
-        </form>
-      </section>
-    </details>
     <details
       id="location"
       class="m-panel store-details"
@@ -617,6 +472,119 @@ async function upload(e: Event, field: "image" | "arrival_image" = "image") {
         </p>
       </section>
     </details>
+    <details class="m-panel store-details store-services">
+      <summary><Settings2 :size="20" /><span>支付与配送<small>线上支付、配送开关与交接点</small></span></summary>
+      <MerchantServices :stall="stall" @refresh="emit('refresh')" />
+    </details>
+    <details class="m-panel store-details">
+      <summary>
+        <Store :size="20" /><span
+          >店铺资料<small>名称、封面、简介与联系电话</small></span
+        >
+      </summary>
+      <section class="store-inner-section">
+        <div class="m-panel-head">
+          <h2><Store :size="20" /> 店铺信息</h2>
+          <RouterLink v-if="stall.is_visible" :to="`/stalls/${stall.id}`" class="m-text-link"
+            >预览 <ExternalLink :size="15"
+          /></RouterLink>
+          <small v-else class="muted">公开展示核验后可预览</small>
+        </div>
+        <form class="m-form" @submit.prevent="saveProfile">
+          <p v-if="(profile.image && !ownedImage(profile.image)) || (profile.arrival_image && !ownedImage(profile.arrival_image))" class="m-alert">旧第三方图片地址仍保留，已停止对外加载。请重新上传封面或找摊照片后保存；已有平台上传照片不受影响。</p>
+          <div class="m-shop-photo">
+            <img v-if="ownedImage(profile.image)" :src="ownedImage(profile.image)" alt="店铺封面" />
+            <div>
+              <label class="btn btn-secondary m-upload"
+                ><Camera :size="16" /> 更换店铺封面<input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  :disabled="!!busy"
+                  @change="upload"
+                  aria-label="上传店铺封面" /></label
+              ><small>JPG / PNG / WebP，最大 5MB</small>
+            </div>
+          </div>
+          <label
+            >摊位名称<input
+              v-model="profile.name"
+              required
+              maxlength="80"
+              placeholder="给小摊一个好记的名字" /></label
+          ><label
+            >店铺简介<textarea
+              v-model="profile.description"
+              rows="3"
+              maxlength="1000"
+              placeholder="介绍你的拿手好味道…"
+            />
+          </label>
+          <div class="m-field-row">
+            <label
+              >预计备餐时间（分钟）<input
+                type="number"
+                v-model.number="profile.prep_minutes"
+                min="1"
+                max="180"
+                required /></label
+            ><label
+              >公开联系电话<input
+                v-model="profile.contact_phone"
+                type="tel"
+                maxlength="30"
+                placeholder="按需填写"
+            /></label>
+          </div>
+          <label class="phone-consent"><input type="checkbox" v-model="profile.public_phone_enabled" /> 在公开摊位页展示联系电话</label>
+          <p class="m-muted">关闭公开展示后，已下单的同学仍能通过订单联系商家。同一经营主体下的摊位共用此号码。</p>
+          <label
+            >通常出摊时段（选填）<input
+              v-model="profile.usual_hours"
+              maxlength="100"
+              placeholder="例如：通常周一至周五 17:00–21:00"
+            /><small class="m-muted"
+              >只填写真实安排；这是计划说明，不代表此刻已经出摊。</small
+            ></label
+          >
+          <label
+            >怎样更容易找到你<textarea
+              v-model="profile.arrival_note"
+              rows="3"
+              maxlength="200"
+              placeholder="例如：南门入口左手边，橙色棚子下面"
+            />
+          </label>
+          <div class="m-shop-photo">
+            <img
+              v-if="ownedImage(profile.arrival_image)"
+              :src="ownedImage(profile.arrival_image)"
+              alt="找摊参照照片"
+            />
+            <div>
+              <label class="btn btn-secondary m-upload"
+                ><Camera :size="16" /> 上传找摊参照照片<input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  :disabled="!!busy"
+                  @change="upload($event, 'arrival_image')"
+                  aria-label="上传找摊参照照片" /></label
+              ><small>独立于店铺封面。照片中请包含路口、招牌等明显参照。</small
+              ><button
+                v-if="profile.arrival_image"
+                type="button"
+                class="m-text-link"
+                @click="profile.arrival_image = ''"
+              >
+                移除找摊照片
+              </button>
+            </div>
+          </div>
+          <button class="btn btn-primary" type="submit" :disabled="!!busy">
+            <Save :size="16" /> 保存店铺信息
+          </button>
+        </form>
+      </section>
+    </details>
     <details class="m-panel store-details">
       <summary>
         <Store :size="20" /><span>更多设置<small>账号安全与找回</small></span>
@@ -658,7 +626,7 @@ async function upload(e: Event, field: "image" | "arrival_image" = "image") {
   color: #755e47;
 }
 #location {
-  scroll-margin-top: 24px;
+  scroll-margin-top: 76px;
 }
 .m-shop-photo small {
   max-width: 100%;
@@ -674,6 +642,7 @@ async function upload(e: Event, field: "image" | "arrival_image" = "image") {
   padding-top: 0;
   padding-bottom: 0;
 }
+.store-services :deep(.merchant-services) { border: 0; box-shadow: none; border-radius: 0; padding: 16px 0; margin: 0; border-top: 1px solid #eee2d1; }
 .store-details > summary {
   display: flex;
   align-items: center;

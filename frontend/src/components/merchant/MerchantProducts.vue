@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ownedImage } from "../../lib/media";
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
 import {
   Check,
@@ -49,17 +50,15 @@ type Draft = {
 const search = ref("");
 const category = ref("all");
 const status = ref("all");
+const statusFilters = ref<HTMLElement>();
+watch(status, () =>
+  nextTick(() =>
+    statusFilters.value
+      ?.querySelector(".selected")
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" }),
+  ),
+);
 const busy = reactive<Record<number, boolean>>({});
-const quickEdits = reactive<
-  Record<
-    number,
-    {
-      price: string;
-      basePrice: number;
-      priceDirty: boolean;
-    }
-  >
->({});
 const products = computed<Product[]>(() => props.stall?.products || []);
 const categories = computed(() => [
   ...new Set(products.value.map((p) => p.category || "未分类")),
@@ -103,27 +102,6 @@ const shown = computed(() =>
       (status.value === "inactive" && !p.is_active);
     return matchesSearch && matchesCategory && matchesStatus;
   }),
-);
-watch(
-  products,
-  (list) => {
-    for (const p of list) {
-      const draft = quickEdits[p.id];
-      if (!draft)
-        quickEdits[p.id] = {
-          price: (p.price_cents / 100).toFixed(2),
-          basePrice: p.price_cents,
-          priceDirty: false,
-        };
-      else {
-        if (!draft.priceDirty) {
-          draft.price = (p.price_cents / 100).toFixed(2);
-          draft.basePrice = p.price_cents;
-        }
-      }
-    }
-  },
-  { immediate: true },
 );
 const modal = ref(false);
 const editingId = ref<number | null>(null);
@@ -249,32 +227,6 @@ async function patchProduct(
       body: data,
     });
     notify(message, "success");
-    emit("refresh");
-  } catch (error) {
-    notify((error as Error).message, "error");
-  } finally {
-    busy[product.id] = false;
-  }
-}
-async function saveQuick(product: Product) {
-  const draft = quickEdits[product.id];
-  if (!draft || busy[product.id]) return;
-  try {
-    const data: Record<string, unknown> = {};
-    if (draft.priceDirty && priceCents(draft.price) !== draft.basePrice)
-      data.price_cents = priceCents(draft.price);
-    if (!Object.keys(data).length) {
-      draft.priceDirty = false;
-      emit("refresh");
-      return;
-    }
-    busy[product.id] = true;
-    await api(`/merchant/products/${product.id}`, {
-      method: "PATCH",
-      body: data,
-    });
-    draft.priceDirty = false;
-    notify("商品已保存", "success");
     emit("refresh");
   } catch (error) {
     notify((error as Error).message, "error");
@@ -455,12 +407,13 @@ function tasteValues(groups: Draft["taste_options"]) {
   <section class="catalog-panel">
     <div class="catalog-heading">
       <div>
-        <span class="eyebrow">YOUR MENU</span>
-        <h2>每一份好味，都在这里</h2>
-        <p>管理菜单与线上可卖份数，缺料时暂停供应，补齐后再手动恢复。</p>
+        <h2>
+          我的菜品 <small>{{ products.length }} 道</small>
+        </h2>
       </div>
       <div class="catalog-top-actions">
         <RouterLink
+          v-if="stall.is_visible"
           class="catalog-outline"
           :to="`/stalls/${stall.id}`"
           @click="session.setConsumerPreview(true)"
@@ -503,7 +456,12 @@ function tasteValues(groups: Draft["taste_options"]) {
         ><ChevronDown :size="14"
       /></label>
     </div>
-    <div class="catalog-filters" role="group" aria-label="商品状态筛选">
+    <div
+      ref="statusFilters"
+      class="catalog-filters"
+      role="group"
+      aria-label="商品状态筛选"
+    >
       <button
         v-for="filter in filters"
         :key="filter.key"
@@ -521,103 +479,71 @@ function tasteValues(groups: Draft["taste_options"]) {
         class="merchant-product product-card"
       >
         <div class="product-top">
-          <div class="product-photo">
-            <img
-              v-if="product.image"
-              :src="product.image"
-              :alt="product.name"
-              loading="lazy"
-            /><Package v-else :size="30" />
-          </div>
-          <div class="product-info">
-            <span class="product-category">{{
-              product.category || "未分类"
-            }}</span>
-            <h3>{{ product.name }}</h3>
-            <p>{{ product.description || "还没有商品描述" }}</p>
-            <strong>¥{{ money(product.price_cents) }}</strong>
-          </div>
-          <span
-            class="product-status"
-            :class="
-              !product.is_active
-                ? 'off'
-                : product.sale_paused || product.stock === 0
-                  ? 'sold'
-                  : 'on'
-            "
-            >{{
-              !product.is_active
-                ? "已下架"
-                : product.sale_paused
-                  ? "暂停供应"
-                  : product.stock === 0
-                    ? "已售罄"
-                    : "销售中"
-            }}</span
-          >
-        </div>
-        <div v-if="quickEdits[product.id]" class="quick-fields">
-          <label
-            >单价（元）<input
-              v-model="quickEdits[product.id]!.price"
-              type="number"
-              min="0.01"
-              max="10000"
-              step="0.01"
-              inputmode="decimal"
-              :aria-label="`${product.name}售价`"
-              :disabled="busy[product.id]"
-              @input="quickEdits[product.id]!.priceDirty = true"
-          /></label>
-          <div class="stock-readout">
-            <span>线上剩余可卖</span><strong>{{ product.stock }} 份</strong>
-          </div>
           <button
-            class="quick-save"
-            :disabled="busy[product.id] || !quickEdits[product.id]!.priceDirty"
-            @click="saveQuick(product)"
+            class="product-edit"
+            :disabled="busy[product.id]"
+            :aria-label="`编辑商品：${product.name}`"
+            @click="startEditor(product)"
           >
-            <Check :size="15" />保存
+            <div class="product-photo">
+              <img
+                v-if="ownedImage(product.image)"
+                :src="ownedImage(product.image)"
+                :alt="product.name"
+                loading="lazy"
+              /><Package v-else :size="30" />
+            </div>
+            <div class="product-info">
+              <h3>
+                {{ product.name }}
+                <span class="edit-hint" aria-hidden="true"
+                  ><Pencil :size="12" />编辑</span
+                >
+              </h3>
+              <div class="product-meta">
+                <strong>¥{{ money(product.price_cents) }}</strong>
+                <span
+                  class="product-status"
+                  :class="
+                    !product.is_active
+                      ? 'off'
+                      : product.sale_paused || product.stock === 0
+                        ? 'sold'
+                        : 'on'
+                  "
+                  >{{
+                    !product.is_active
+                      ? "已下架"
+                      : product.sale_paused
+                        ? "暂停供应"
+                        : product.stock === 0
+                          ? "已售罄"
+                          : "销售中"
+                  }}</span
+                >
+              </div>
+              <span class="stock-readout"
+                >线上可卖 <b>{{ product.stock }}</b> 份</span
+              >
+            </div>
           </button>
-        </div>
-        <div class="product-actions">
-          <button :disabled="busy[product.id]" @click="startEditor(product)">
-            <Pencil :size="15" />编辑商品
+          <button
+            v-if="product.is_active"
+            class="supply-action"
+            :class="{ 'is-paused': product.sale_paused }"
+            :disabled="busy[product.id]"
+            @click="
+              patchProduct(
+                product,
+                { sale_paused: !product.sale_paused },
+                product.sale_paused
+                  ? '已恢复供应，仍需有线上可卖份数并满足接单条件'
+                  : '已暂停供应，补货和订单取消不会自动恢复供应',
+              )
+            "
+          >
+            {{ product.sale_paused ? "恢复供应" : "暂停供应" }}
           </button>
-          <div>
-            <button
-              v-if="product.is_active"
-              :disabled="busy[product.id]"
-              @click="
-                patchProduct(
-                  product,
-                  { sale_paused: !product.sale_paused },
-                  product.sale_paused
-                    ? '已恢复供应，仍需有线上可卖份数并满足接单条件'
-                    : '已暂停供应，补货和订单取消不会自动恢复供应',
-                )
-              "
-            >
-              {{ product.sale_paused ? "恢复供应" : "暂停供应" }}</button
-            ><button
-              :class="{ 'action-orange': !product.is_active }"
-              :disabled="busy[product.id]"
-              @click="
-                patchProduct(
-                  product,
-                  { is_active: !product.is_active },
-                  product.is_active
-                    ? '商品已下架'
-                    : product.stock === 0
-                      ? '已显示在菜单中，当前售罄；请先补货'
-                      : '商品已上架',
-                )
-              "
-            >
-              {{ product.is_active ? "下架" : "上架" }}
-            </button>
-          </div>
         </div>
         <MerchantInventoryCorrection
           :key="`${session.user?.id}:${stall.id}:${product.id}`"
@@ -746,8 +672,8 @@ function tasteValues(groups: Draft["taste_options"]) {
               <div class="editor-photo-row">
                 <div class="editor-photo">
                   <img
-                    v-if="form.image"
-                    :src="form.image"
+                    v-if="ownedImage(form.image)"
+                    :src="ownedImage(form.image)"
                     alt="商品图片预览"
                   /><ImagePlus v-else :size="34" />
                 </div>
@@ -765,6 +691,12 @@ function tasteValues(groups: Draft["taste_options"]) {
                   /></label>
                   <p>
                     JPG、PNG、WebP，最大 5 MB<br />使用真实照片，让好味道被看见。
+                  </p>
+                  <p
+                    v-if="form.image && !ownedImage(form.image)"
+                    class="m-alert"
+                  >
+                    原第三方图片地址仍保留，但已停止对外加载。请上传本店照片后保存。
                   </p>
                   <button
                     v-if="form.image"
@@ -907,17 +839,17 @@ function tasteValues(groups: Draft["taste_options"]) {
 
 <style scoped>
 .stock-readout {
-  display: grid;
-  gap: 7px;
-  font-size: 12px;
-  color: #7c6650;
+  display: block;
+  font-size: 13px;
+  color: #705c49;
+  white-space: nowrap;
 }
-.stock-readout strong {
+.product-meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  min-height: 44px;
-  font-size: 17px;
-  color: #58432f;
+  gap: 4px 7px;
+  margin: 3px 0;
 }
 .catalog-top-actions {
   display: flex;
@@ -977,7 +909,7 @@ function tasteValues(groups: Draft["taste_options"]) {
 }
 .eyebrow {
   display: block;
-  font-size: 10px;
+  font-size: 12px;
   letter-spacing: 2px;
   color: #a47653;
   font-weight: 700;
@@ -1067,22 +999,27 @@ function tasteValues(groups: Draft["taste_options"]) {
 }
 .catalog-filters {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 7px;
   margin-bottom: 20px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
 }
 .catalog-filters button {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 0 14px;
-  min-height: 42px;
+  min-height: 44px;
+  flex-shrink: 0;
+  white-space: nowrap;
   border-radius: 10px;
   font-size: 13px;
   color: #807260;
 }
 .catalog-filters button span {
-  font-size: 11px;
+  font-size: 12px;
   border-radius: 5px;
   background: #eee8df;
   padding: 2px 5px;
@@ -1098,23 +1035,37 @@ function tasteValues(groups: Draft["taste_options"]) {
 .catalog-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 17px;
+  gap: 14px;
+  align-items: start;
 }
 .product-card {
-  padding: 20px;
+  padding: 12px;
   border: 1px solid #eae2d7;
   border-radius: 18px;
   background: #fff;
 }
 .product-top {
   display: flex;
-  gap: 14px;
+  gap: 10px;
   position: relative;
-  min-height: 102px;
+  align-items: center;
+  min-height: 76px;
+}
+.product-edit {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  min-height: 76px;
+  text-align: left;
+  padding: 0;
+  background: transparent;
+  border-radius: 8px;
 }
 .product-photo {
-  width: 88px;
-  height: 88px;
+  width: 54px;
+  height: 54px;
   border-radius: 13px;
   overflow: hidden;
   flex-shrink: 0;
@@ -1133,42 +1084,34 @@ function tasteValues(groups: Draft["taste_options"]) {
   flex: 1;
   padding-top: 1px;
 }
-.product-category {
-  color: #907e69;
-  font-size: 10px;
-  display: block;
-  min-height: 17px;
-  padding-right: 50px;
-}
 .product-info h3 {
-  font-size: 16px;
+  font-size: 17px;
   color: #382e24;
-  margin-bottom: 4px;
+  margin: 0;
+  line-height: 1.45;
   overflow-wrap: anywhere;
 }
-.product-info p {
-  font-size: 11px;
-  line-height: 1.6;
-  color: #8b8073;
-  display: -webkit-box;
-  -webkit-line-clamp: 1;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+.edit-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 12px;
+  font-weight: 400;
+  color: #806a55;
+  white-space: nowrap;
 }
 .product-info strong {
   display: block;
   color: #cf5f22;
-  font-size: 19px;
-  margin-top: 6px;
+  font-size: 17px;
+  margin: 0;
 }
 .product-status {
-  position: absolute;
-  top: 0;
-  right: 0;
-  font-size: 10px;
+  font-size: 13px;
   border-radius: 5px;
-  padding: 4px 6px;
-  line-height: 1.2;
+  padding: 2px 4px;
+  line-height: 1.3;
+  white-space: nowrap;
 }
 .product-status.on {
   background: #eaf3eb;
@@ -1182,75 +1125,31 @@ function tasteValues(groups: Draft["taste_options"]) {
   background: #f0eded;
   color: #847974;
 }
-.quick-fields {
-  display: flex;
-  align-items: end;
-  gap: 9px;
-  background: #fcfaf6;
-  border: 1px solid #f2ede6;
-  border-radius: 12px;
-  padding: 11px;
-  margin-top: 14px;
-}
-.quick-fields label {
-  flex: 1;
-  min-width: 0;
-  font-size: 10px;
-  color: #817361;
-}
-.quick-fields input {
-  display: block;
-  width: 100%;
-  min-height: 38px;
-  background: #fff;
-  border: 1px solid #e9e1d5;
-  border-radius: 7px;
-  margin-top: 6px;
-  padding: 0 8px;
-  color: #483b2f;
-  font-size: 13px;
-}
-.quick-save {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  min-height: 38px;
+.product-top .supply-action {
+  min-height: 44px;
+  min-width: 74px;
   padding: 0 9px;
-  font-size: 12px;
-  background: #f6e4d5;
-  color: #a74f1e;
-  border-radius: 7px;
+  flex-shrink: 0;
+  font-size: 14px;
+  color: #65503e;
+  border: 1px solid #e6dbce;
+  border-radius: 10px;
+  background: #fff0e3;
+  border-color: #efd2b6;
+  color: #9f4c1d;
+  font-weight: 600;
 }
-.quick-save:disabled {
-  opacity: 0.45;
+.product-top .supply-action.is-paused {
+  background: #eaf3eb;
+  border-color: #cbdccb;
+  color: #375c3b;
 }
-.product-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-top: 1px solid #f0eae2;
-  margin-top: 15px;
-  padding-top: 6px;
-  gap: 6px;
+.product-top button:disabled {
+  opacity: 0.55;
 }
-.product-actions > button {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-.product-actions button {
-  min-height: 38px;
-  padding: 0 5px;
-  font-size: 11px;
-  color: #817362;
-}
-.product-actions > div {
-  display: flex;
-  gap: 10px;
-}
-.product-actions .action-orange {
-  color: #d36323;
-  font-weight: 700;
+.product-top button:focus-visible {
+  outline: 3px solid #d38648;
+  outline-offset: 2px;
 }
 .catalog-empty {
   text-align: center;
@@ -1385,13 +1284,13 @@ function tasteValues(groups: Draft["taste_options"]) {
   opacity: 0.5;
 }
 .editor-photo-row p {
-  font-size: 10px;
+  font-size: 12px;
   color: #9b8772;
   line-height: 1.8;
   margin-top: 8px;
 }
 .remove-photo {
-  font-size: 11px;
+  font-size: 12px;
   color: #b76034;
   min-height: 30px;
   padding: 0;
@@ -1428,7 +1327,7 @@ function tasteValues(groups: Draft["taste_options"]) {
   display: block;
   text-align: right;
   color: #a69583;
-  font-size: 10px;
+  font-size: 12px;
   margin-top: 5px;
 }
 .editor-twocol {
@@ -1453,7 +1352,7 @@ function tasteValues(groups: Draft["taste_options"]) {
 .editor-toggle small {
   display: block;
   color: #8c7760;
-  font-size: 10px;
+  font-size: 12px;
   margin-top: 5px;
 }
 .editor-toggle input {
@@ -1519,8 +1418,8 @@ function tasteValues(groups: Draft["taste_options"]) {
     grid-template-columns: 1fr;
   }
   .product-photo {
-    width: 95px;
-    height: 95px;
+    width: 54px;
+    height: 54px;
   }
 }
 @media (max-width: 600px) {
@@ -1533,18 +1432,18 @@ function tasteValues(groups: Draft["taste_options"]) {
     font-size: 20px;
   }
   .catalog-heading p {
-    font-size: 11px;
+    font-size: 12px;
     max-width: 215px;
   }
   .catalog-heading > .catalog-primary {
-    font-size: 11px;
+    font-size: 12px;
     padding: 0 11px;
     margin-top: 21px;
     min-height: 40px;
     gap: 3px;
   }
   .eyebrow {
-    font-size: 9px;
+    font-size: 12px;
   }
   .catalog-tools {
     gap: 8px;
@@ -1565,36 +1464,33 @@ function tasteValues(groups: Draft["taste_options"]) {
     gap: 7px;
   }
   .catalog-search input {
-    font-size: 12px;
+    font-size: 16px;
   }
   .catalog-filters {
-    gap: 1px;
-    justify-content: space-between;
+    gap: 4px;
+    justify-content: flex-start;
   }
   .catalog-filters button {
     padding: 0 8px;
-    font-size: 11px;
+    font-size: 12px;
     gap: 4px;
   }
   .catalog-filters button span {
-    font-size: 9px;
+    font-size: 12px;
   }
   .product-card {
-    padding: 16px;
+    padding: 12px;
     border-radius: 15px;
   }
   .product-photo {
-    width: 83px;
-    height: 83px;
+    width: 50px;
+    height: 50px;
   }
   .product-info h3 {
     font-size: 15px;
   }
   .product-top {
-    gap: 12px;
-  }
-  .product-actions button {
-    min-height: 42px;
+    gap: 8px;
   }
   .product-modal-backdrop {
     padding: 0;
@@ -1619,7 +1515,7 @@ function tasteValues(groups: Draft["taste_options"]) {
     width: 100px;
   }
   .editor-photo-row p {
-    font-size: 9px;
+    font-size: 12px;
   }
   .product-editor-panel footer {
     padding: 15px 20px max(15px, env(safe-area-inset-bottom));
@@ -1635,11 +1531,50 @@ function tasteValues(groups: Draft["taste_options"]) {
   .editor-field textarea {
     font-size: 16px;
   }
-  .quick-fields input {
-    font-size: 16px;
-  }
   .catalog-grid {
     gap: 13px;
+  }
+}
+
+.catalog-heading h2 small {
+  margin-left: 5px;
+  color: #927d68;
+  font-size: 13px;
+  font-weight: 400;
+}
+@media (max-width: 600px) {
+  .catalog-heading {
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+  .catalog-heading h2 {
+    font-size: 19px;
+    margin: 0;
+    line-height: 1.4;
+  }
+  .catalog-top-actions {
+    flex: none;
+    gap: 6px;
+  }
+  .catalog-top-actions .catalog-outline {
+    display: none;
+  }
+  .catalog-top-actions .catalog-primary {
+    padding: 10px 12px;
+    font-size: 14px;
+  }
+  .catalog-tools {
+    margin-top: 14px;
+  }
+  .catalog-filters {
+    margin-bottom: 14px;
+  }
+  .product-info h3 {
+    font-size: 17px;
+  }
+  .product-info p {
+    font-size: 13px;
   }
 }
 </style>
@@ -1649,5 +1584,47 @@ fieldset.editor-body {
   border: 0;
   margin: 0;
   min-width: 0;
+}
+
+.catalog-heading h2 small {
+  margin-left: 5px;
+  color: #927d68;
+  font-size: 13px;
+  font-weight: 400;
+}
+@media (max-width: 600px) {
+  .catalog-heading {
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+  .catalog-heading h2 {
+    font-size: 19px;
+    margin: 0;
+    line-height: 1.4;
+  }
+  .catalog-top-actions {
+    flex: none;
+    gap: 6px;
+  }
+  .catalog-top-actions .catalog-outline {
+    display: none;
+  }
+  .catalog-top-actions .catalog-primary {
+    padding: 10px 12px;
+    font-size: 14px;
+  }
+  .catalog-tools {
+    margin-top: 14px;
+  }
+  .catalog-filters {
+    margin-bottom: 14px;
+  }
+  .product-info h3 {
+    font-size: 17px;
+  }
+  .product-info p {
+    font-size: 13px;
+  }
 }
 </style>

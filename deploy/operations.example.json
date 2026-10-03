@@ -1,0 +1,15 @@
+{
+  "project_dir": "/srv/yanhuo",
+  "project_name": "yanhuo",
+  "env_file": "/etc/yanhuo/production.env",
+  "compose_files": ["compose.yaml"],
+  "state_dir": "/var/lib/yanhuo-monitor",
+  "backup_state_dir": "/var/lib/yanhuo-backup",
+  "webhook_file": "/etc/yanhuo/operations-webhook",
+  "heartbeat_seconds": 120,
+  "backlog_seconds": 600,
+  "expiry_backlog_seconds": 120,
+  "backup_rpo_seconds": 3600,
+  "reminder_seconds": 1800,
+  "runbook": "docs/operations-monitor.md"
+}

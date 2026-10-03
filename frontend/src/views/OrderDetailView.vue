@@ -25,7 +25,6 @@ import { notify } from "../lib/notify";
 import ReorderDialog from "../components/ReorderDialog.vue";
 import StudentPaymentPanel from "../components/StudentPaymentPanel.vue";
 import DeliveryOrderProgress from "../components/DeliveryOrderProgress.vue";
-import SimulationNotice from "../components/SimulationNotice.vue";
 import PortionSummary from "../components/PortionSummary.vue";
 import OrderPreparation from "../components/OrderPreparation.vue";
 import PickupCard from "../components/PickupCard.vue";
@@ -51,14 +50,20 @@ const merchantPhone = computed(() =>
 const cancelOpen = ref(false);
 const cancelDialog = ref<HTMLDialogElement>();
 let cancelTrigger: HTMLElement | null = null;
+function openCancel(event: MouseEvent) {
+  // Safari does not focus buttons on pointer click. Keep the actual trigger.
+  cancelTrigger =
+    event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+  cancelOpen.value = true;
+}
 watch(cancelOpen, async (open) => {
   if (open) {
-    cancelTrigger = document.activeElement as HTMLElement;
     await nextTick();
-    cancelDialog.value?.showModal();
+    if (cancelOpen.value) cancelDialog.value?.showModal();
   } else {
     cancelDialog.value?.close();
-    cancelTrigger?.focus();
+    await nextTick();
+    if (!cancelOpen.value) cancelTrigger?.focus();
   }
 });
 function dismissCancel() {
@@ -124,6 +129,7 @@ const refundProblem = computed(
 );
 let timer: ReturnType<typeof setInterval> | undefined;
 let fetching = false;
+let refreshQueued = false;
 let disposed = false;
 let version = 0;
 const pageUserId = session.user?.id;
@@ -136,13 +142,23 @@ function paymentChanging() {
 function paymentSettled() {
   if (!current()) return;
   paymentWorking.value = false;
-  ++version;
-  void load();
+  refreshAfterChange();
 }
-function paymentUpdated(updated: Order) {
-  if (!current()) return;
+function applyConfirmedOrder(updated: Order) {
+  if (!current()) return false;
+  if (
+    !updated || updated.id !== order.value?.id || updated.stall_id !== order.value?.stall_id ||
+    !["pending_payment", "pending", "preparing", "ready", "delivering", "arrived", "completed", "cancelled", "rejected"].includes(updated.status) ||
+    !["unpaid", "paid", "refunding", "refunded"].includes(updated.payment_status) ||
+    !Array.isArray(updated.items)
+  ) {
+    error.value = "订单返回信息不完整，请刷新确认当前状态。";
+    return false;
+  }
   ++version;
   order.value = updated;
+  error.value = "";
+  return true;
 }
 const steps = [
   { key: "pending", label: "已下单", icon: ShoppingBag },
@@ -256,13 +272,26 @@ async function load() {
     if (!current() || requestVersion !== version) return;
     order.value = result;
     error.value = "";
+    if (terminal.value || order.value.cancel_requested) cancelOpen.value = false;
   } catch (e) {
     if (current() && requestVersion === version)
       error.value = (e as Error).message;
   } finally {
     if (current()) loading.value = false;
     fetching = false;
+    if (refreshQueued && current()) {
+      refreshQueued = false;
+      void load();
+    }
   }
+}
+function refreshAfterChange() {
+  if (!current()) return;
+  ++version;
+  // An obsolete poll is still allowed to finish, but must not swallow the
+  // authoritative read needed after an uncertain mutation or payment change.
+  if (fetching) refreshQueued = true;
+  else void load();
 }
 function refreshVisible() {
   if (
@@ -306,17 +335,19 @@ async function cancelOrder() {
   busy.value = true;
   ++version;
   try {
-    await api(`/orders/${order.value.id}/cancel`, {
+    const result = await api<Order>(`/orders/${order.value.id}/cancel`, {
       method: "POST",
       body: { reason: cancelReason.value.trim() || "用户申请取消" },
       signal: controller.signal,
     });
     if (!current()) return;
-    ++version;
+    if (!applyConfirmedOrder(result)) {
+      refreshAfterChange();
+      return;
+    }
     cancelOpen.value = false;
-    await load();
     notify(
-      order.value.status === "cancelled"
+      result.status === "cancelled"
         ? "订单已取消"
         : "取消申请已发送给商家",
       "success",
@@ -324,7 +355,7 @@ async function cancelOrder() {
   } catch (e) {
     if (!current()) return;
     notify((e as Error).message, "error");
-    await load();
+    refreshAfterChange();
   } finally {
     busy.value = false;
   }
@@ -340,7 +371,7 @@ async function confirmReceipt() {
       { method: "POST", body: {}, signal: controller.signal },
     );
     if (!current()) return;
-    paymentUpdated(result);
+    if (!applyConfirmedOrder(result)) return;
     notify("已确认收餐，祝你用餐愉快", "success");
   } catch (e) {
     if (current()) notify((e as Error).message, "error");
@@ -352,21 +383,25 @@ async function confirmReceipt() {
   }
 }
 async function submitReview() {
-  if (reviewing.value) return;
+  if (reviewing.value || !current() || order.value?.review) return;
   reviewing.value = true;
+  ++version;
   try {
-    await api(`/orders/${order.value.id}/review`, {
+    const result = await api<Order>(`/orders/${order.value.id}/review`, {
       method: "POST",
       body: { rating: rating.value, content: reviewContent.value.trim() },
       signal: controller.signal,
     });
     if (!current()) return;
-    ++version;
-    await load();
+    if (!applyConfirmedOrder(result)) {
+      refreshAfterChange();
+      return;
+    }
     notify("谢谢你的评价，让好味道被更多人看见", "success");
   } catch (e) {
     if (!current()) return;
     notify((e as Error).message, "error");
+    refreshAfterChange();
   } finally {
     reviewing.value = false;
   }
@@ -391,7 +426,9 @@ async function submitReview() {
         :class="{ 'pickup-ready-heading': readyPickup }"
       >
         <div>
-          <span class="eyebrow">YOUR ORDER, MADE WITH CARE</span>
+          <span v-if="isSimulation" class="order-mode-label"
+            >模拟订单 · 不会扣款{{ isDelivery ? "、不实际送货" : "" }}</span
+          >
           <h1>{{ heading }}</h1>
           <p class="muted">{{ subtitle }}</p>
         </div>
@@ -406,7 +443,6 @@ async function submitReview() {
       </div>
       <div class="detail-layout">
         <div class="stack detail-main">
-          <SimulationNotice v-if="isSimulation" :delivery="isDelivery" />
           <PickupCard v-if="readyPickup" :order="order" :sync-error="!!error" />
           <OrderPreparation
             v-else-if="isDelivery || order.status !== 'ready'"
@@ -416,7 +452,7 @@ async function submitReview() {
           <StudentPaymentPanel
             :order="order"
             @changing="paymentChanging"
-            @updated="paymentUpdated"
+            @updated="applyConfirmedOrder"
             @settled="paymentSettled"
           />
           <section class="card progress-card">
@@ -515,7 +551,7 @@ async function submitReview() {
                     order.payment?.status,
                   )
                 "
-                @click="cancelOpen = true"
+                @click="openCancel"
                 :disabled="busy || paymentWorking"
               >
                 <X :size="17" />
@@ -689,28 +725,31 @@ async function submitReview() {
                           : "取餐时付款 · 可用方式见付款区"
             }}
           </p>
-          <dl class="receipt-meta">
-            <div>
-              <dt>订单编号</dt>
-              <dd>{{ order.number }}</dd>
-            </div>
-            <div>
-              <dt>下单时间</dt>
-              <dd>{{ formatTime(order.created_at) }}</dd>
-            </div>
-            <div v-if="order.completed_at">
-              <dt>完成时间</dt>
-              <dd>{{ formatTime(order.completed_at) }}</dd>
-            </div>
-            <div v-if="order.contact_phone">
-              <dt>联系电话</dt>
-              <dd>{{ order.contact_phone }}</dd>
-            </div>
-            <div v-if="order.note" class="note-meta">
-              <dt>口味备注</dt>
-              <dd>{{ order.note }}</dd>
-            </div>
-          </dl>
+          <details class="receipt-details">
+            <summary>订单编号、时间与备注</summary>
+            <dl class="receipt-meta">
+              <div>
+                <dt>订单编号</dt>
+                <dd>{{ order.number }}</dd>
+              </div>
+              <div>
+                <dt>下单时间</dt>
+                <dd>{{ formatTime(order.created_at) }}</dd>
+              </div>
+              <div v-if="order.completed_at">
+                <dt>完成时间</dt>
+                <dd>{{ formatTime(order.completed_at) }}</dd>
+              </div>
+              <div v-if="order.contact_phone">
+                <dt>联系电话</dt>
+                <dd>{{ order.contact_phone }}</dd>
+              </div>
+              <div v-if="order.note" class="note-meta">
+                <dt>口味备注</dt>
+                <dd>{{ order.note }}</dd>
+              </div>
+            </dl>
+          </details>
         </aside>
       </div>
     </template>
@@ -819,6 +858,37 @@ async function submitReview() {
 }
 .order-detail-page {
   padding-top: 28px;
+}
+.order-mode-label {
+  display: inline-block;
+  color: #8a622a;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.receipt-details summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  color: #725d49;
+  font-size: 13px;
+  list-style: none;
+}
+.receipt-details summary::after {
+  content: "+";
+  font-size: 20px;
+}
+.receipt-details[open] summary::after {
+  content: "−";
+}
+.receipt-details summary::-webkit-details-marker {
+  display: none;
+}
+.receipt-details summary:focus-visible {
+  outline: 3px solid #c8753a;
+  outline-offset: 3px;
 }
 .reorder-card {
   display: flex;
@@ -1335,33 +1405,84 @@ async function submitReview() {
     width: 100%;
   }
   .order-detail-page {
-    padding-top: 19px;
+    padding-top: 8px;
+  }
+  .back-link {
+    min-height: 44px;
+    margin-bottom: 6px;
+  }
+  .order-detail-heading {
+    margin-bottom: 16px;
+    align-items: flex-start;
+    gap: 10px;
   }
   .order-detail-heading h1 {
-    font-size: 23px;
-    line-height: 1.5;
+    font-size: 22px;
+    line-height: 1.4;
+    letter-spacing: -0.3px;
+    margin: 4px 0 7px;
   }
   .order-detail-heading p {
     font-size: 12px;
+    line-height: 1.65;
   }
-  .order-detail-heading .eyebrow {
-    font-size: 9px;
-    letter-spacing: 1.4px;
+  .detail-layout,
+  .detail-main {
+    gap: 14px;
+  }
+  .refresh-button {
+    flex: none;
+  }
+  .pickup-ready-heading p {
+    display: none;
   }
   .progress-card,
   .order-receipt,
   .review-card {
-    padding: 23px 19px;
+    padding: 16px;
+  }
+  .order-progress {
+    margin: 0 0 18px;
   }
   .progress-step {
-    font-size: 10px;
+    font-size: 11px;
+    gap: 7px;
   }
   .step-symbol {
-    width: 40px;
-    height: 40px;
+    width: 32px;
+    height: 32px;
   }
   .progress-step:not(:last-child)::after {
-    top: 20px;
+    top: 16px;
+    left: calc(50% + 22px);
+    right: calc(-50% + 22px);
+  }
+  .pending-hint {
+    padding: 10px 12px;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .pending-hint > span > .muted {
+    display: inline;
+    margin-left: 6px;
+  }
+  .contact-actions {
+    margin-top: 14px;
+    padding-top: 10px;
+  }
+  .receipt-header {
+    padding-bottom: 12px;
+  }
+  .receipt-header > span {
+    display: none;
+  }
+  .receipt-total {
+    padding-top: 14px;
+    margin-top: 0;
+  }
+  .payment-note {
+    font-size: 11px;
+    margin-bottom: 12px;
   }
   .order-location .btn {
     padding: 8px 11px;

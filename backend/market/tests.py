@@ -224,16 +224,16 @@ class MarketTests(TestCase):
     def test_follow_and_search_persist_without_fake_distance_or_reviews(self):
         self.assertEqual(self.client.post(f'/api/v1/stalls/{self.stall.pk}/follow').status_code, 200)
         self.assertEqual(self.client.post(f'/api/v1/stalls/{self.stall.pk}/follow').status_code, 200)
-        result = self.client.get('/api/v1/follows').data
+        result = self.client.get('/api/v1/follows').data['results']
         self.assertEqual(len(result), 1)
         self.assertTrue(result[0]['is_followed'])
         self.assertIsNone(result[0]['distance_m'])
         self.assertIsNone(result[0]['rating'])
         self.assertEqual(result[0]['review_count'], 0)
-        results = self.client.get('/api/v1/stalls', {'q': '招牌', 'lat': 31.23, 'lng': 121.47, 'sort': 'distance'}).data
+        results = self.client.get('/api/v1/stalls', {'q': '招牌', 'lat': 31.23, 'lng': 121.47, 'sort': 'distance'}).data['results']
         self.assertEqual(results[0]['distance_m'], 0)
         self.client.delete(f'/api/v1/stalls/{self.stall.pk}/follow')
-        self.assertEqual(self.client.get('/api/v1/follows').data, [])
+        self.assertEqual(self.client.get('/api/v1/follows').data['results'], [])
 
     def test_invalid_nan_coordinate_rejected(self):
         self.assertEqual(self.client.get('/api/v1/stalls?lat=nan&lng=121.4').status_code, 400)
@@ -243,7 +243,7 @@ class MarketTests(TestCase):
     def test_demo_stalls_hidden_from_production(self):
         self.stall.is_demo = True
         self.stall.save()
-        self.assertEqual(self.client.get('/api/v1/stalls').data, [])
+        self.assertEqual(self.client.get('/api/v1/stalls').data['results'], [])
         self.assertEqual(self.client.get(f'/api/v1/stalls/{self.stall.pk}').status_code, 404)
         self.assertEqual(self.client.post('/api/v1/orders', payload(self.stall, self.product), format='json').status_code, 404)
 

@@ -1,0 +1,10 @@
+[Unit]
+Description=Monthly Yanhuo isolated recovery drill
+
+[Timer]
+OnCalendar=*-*-01 03:15:00
+Persistent=true
+Unit=yanhuo-restore-check.service
+
+[Install]
+WantedBy=timers.target

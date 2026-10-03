@@ -1,4 +1,5 @@
 import type { Portion } from "./types";
+import { ref } from 'vue';
 export interface CheckoutRequest {
   stall_id: number;
   items: {
@@ -21,6 +22,7 @@ export interface CheckoutSubmission {
   key: string;
   fingerprint: string;
   cart: string;
+  cartPortions?: { productId: number; keys: string[] }[];
   note: string;
   phone: string;
   fulfillment: "pickup" | "delivery";
@@ -34,8 +36,10 @@ export interface CheckoutSubmission {
 // Retain the original write, scoped to this tab, account and stall. Reloading or
 // editing a cart elsewhere must never silently replace an unresolved request.
 const pending = new Map<string, CheckoutSubmission>();
+const revision = ref(0);
 export function saveSubmission(key: string, submission: CheckoutSubmission) {
   pending.set(key, submission);
+  revision.value++;
   try {
     sessionStorage.setItem(key, JSON.stringify(submission));
   } catch {
@@ -44,11 +48,32 @@ export function saveSubmission(key: string, submission: CheckoutSubmission) {
 }
 export function removeSubmission(key: string) {
   pending.delete(key);
+  revision.value++;
   try {
     sessionStorage.removeItem(key);
   } catch {
     /* optional browser persistence */
   }
+}
+
+export function listSubmissions(userId: number | undefined) {
+  // Let screens react when an in-app retry resolves or a new write starts.
+  void revision.value;
+  if (!userId) return [];
+  const prefix = `yanhuo-checkout-${userId}-`;
+  const keys = new Set(pending.keys());
+  try {
+    for (let index = 0; index < sessionStorage.length; index++) {
+      const key = sessionStorage.key(index);
+      if (key?.startsWith(prefix)) keys.add(key);
+    }
+  } catch { /* In-memory records still provide recovery with storage denied. */ }
+  return [...keys].filter(key => key.startsWith(prefix)).flatMap(key => {
+    const stallId = Number(key.slice(prefix.length));
+    if (!Number.isInteger(stallId) || stallId < 1) return [];
+    const record = readSubmission(key, stallId);
+    return record ? [{ stallId, record }] : [];
+  });
 }
 
 export function readSubmission(

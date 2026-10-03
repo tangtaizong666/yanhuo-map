@@ -2,7 +2,7 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import { Moon, MapPin, ArrowUpRight, RefreshCw } from "lucide-vue-next";
 import { api, statusText } from "../lib/api";
-import type { Stall } from "../lib/types";
+import type { StallSummary as Stall, DiscoveryPage } from "../lib/types";
 import { useSession } from "../stores/session";
 const props = defineProps<{
   area: number;
@@ -57,11 +57,11 @@ async function load() {
   error.value = "";
   rows.value = [];
   try {
-    const data = await api<Stall[]>(
-      `/stalls?sort=freshness${props.area ? `&area=${props.area}` : ""}`,
+    const data = await api<DiscoveryPage<Stall>>(
+      `/stalls?sort=freshness${props.area ? `&area=${props.area}` : ""}${props.following ? "&follow=1" : ""}`,
       { signal: controller.signal },
     );
-    if (current === revision) rows.value = data;
+    if (current === revision) rows.value = data.results;
   } catch (e) {
     if (current === revision) error.value = (e as Error).message;
   } finally {

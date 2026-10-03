@@ -74,6 +74,7 @@ class DeliveryPoint(models.Model):
 
 
 class Stall(models.Model):
+    public_phone_enabled = models.BooleanField('允许公开联系电话', default=False)
     arrival_note = models.CharField('认摊说明', max_length=200, blank=True)
     arrival_image = models.CharField('认摊现场照片', max_length=500, blank=True)
     location_draft_address = models.CharField('待核验位置草稿', max_length=200, blank=True)
@@ -324,6 +325,8 @@ class PaymentAttempt(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     paid_at = models.DateTimeField(null=True, blank=True)
     last_checked_at = models.DateTimeField(null=True, blank=True)
+    next_query_at = models.DateTimeField(null=True, blank=True)
+    consecutive_query_failures = models.PositiveSmallIntegerField(default=0)
     request_in_flight_until = models.DateTimeField(null=True, blank=True)
     error_code = models.CharField(max_length=80, blank=True)
     error_message = models.CharField(max_length=200, blank=True)
@@ -355,6 +358,8 @@ class PaymentRefund(models.Model):
     created_at = models.DateTimeField(default=timezone.now)
     completed_at = models.DateTimeField(null=True, blank=True)
     last_checked_at = models.DateTimeField(null=True, blank=True)
+    next_query_at = models.DateTimeField(null=True, blank=True)
+    consecutive_query_failures = models.PositiveSmallIntegerField(default=0)
     resolved_at = models.DateTimeField('核验结案时间', null=True, blank=True)
     replaces = models.ForeignKey('self', null=True, blank=True, on_delete=models.PROTECT, related_name='retries')
     source = models.CharField(max_length=16, default='application', choices=[('application', '订单申请'), ('retry', '运营重试'), ('external', '外部退款核验'), ('compensation', '异常付款补偿')])
@@ -391,6 +396,9 @@ class Review(models.Model):
 
 
 class Feedback(models.Model):
+    verification = models.CharField('位置反馈核实结果', max_length=16, default='unreviewed',
+        choices=[('unreviewed', '尚未核实'), ('confirmed', '已核实属实'), ('dismissed', '核实未成立')])
+    verification_note = models.CharField('运营核实记录（不公开）', max_length=500, blank=True)
     order = models.ForeignKey(Order, null=True, blank=True, on_delete=models.PROTECT, related_name='help_reports')
     KINDS = [('general', '意见建议'), ('not_found', '没找到摊位'), ('wrong_location', '位置不对'), ('mismatch', '信息不符')]
     kind = models.CharField(max_length=20, choices=KINDS, default='general')
@@ -475,6 +483,7 @@ class AuditLog(models.Model):
 
 
 from .recovery_models import AccountRecovery  # noqa: E402,F401
-from .security_models import AuthenticationFailureBucket, ProductCreation  # noqa: E402,F401
+from .security_models import AuthenticationFailureBucket, ProductCreation, MerchantOrderOperation  # noqa: E402,F401
 from .operational_models import WorkerHeartbeat  # noqa: E402,F401
 from .financial_models import FinancialEvidence  # noqa: E402,F401
+from .notification_models import PaymentNotification  # noqa: E402,F401

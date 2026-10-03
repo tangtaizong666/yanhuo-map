@@ -51,15 +51,9 @@ class ImageAddress(serializers.CharField):
 
     def to_internal_value(self, data):
         value = super().to_internal_value(data)
-        if value:
-            try:
-                parsed = urlsplit(value)
-            except ValueError:
-                raise serializers.ValidationError('图片地址格式不正确。')
-            local = value.startswith(('/images/', '/media/')) and not parsed.netloc
-            remote = parsed.scheme == 'https' and bool(parsed.netloc) and not parsed.username
-            if not (local or remote) or '\\' in value:
-                raise serializers.ValidationError('请上传图片，或使用 HTTPS 图片地址。')
+        from .media_policy import public_image
+        if value and not public_image(value):
+            raise serializers.ValidationError('请上传图片或选择本站素材，不支持外部图片地址。')
         return value
 
 
@@ -80,6 +74,7 @@ class ProductCreateInput(ProductInput):
 
 
 class StallProfileInput(StrictInput):
+    public_phone_enabled = serializers.BooleanField(required=False)
     prep_capacity = serializers.IntegerField(min_value=1, max_value=100, allow_null=True, required=False)
     usual_hours = serializers.CharField(max_length=100, allow_blank=True, required=False)
     arrival_note = serializers.CharField(max_length=200, allow_blank=True, required=False)
@@ -420,7 +415,9 @@ def metrics(request):
         refunded_at=Subquery(latest_refund.values('completed_at')[:1]))[:20])
     for payment in payments:
         payment['refunded'] = payment['refund_status'] == 'success'
+    from .pilot_metrics import evidence
     return Response({'mode': mode, 'period_days': days, 'stall_views': views, 'orders_created': total, 'orders_completed': completed,
+        'pilot_evidence': evidence(query, stall_query, start, now, mode),
         'source_counts': source_counts,
         'completed_customer_count': completed_customers, 'returning_customer_count': returning_customers,
         'returning_customer_rate': round(returning_customers / completed_customers, 3) if completed_customers else None,

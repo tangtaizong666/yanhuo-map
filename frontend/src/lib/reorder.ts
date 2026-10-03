@@ -20,24 +20,26 @@ export function reorderRows(
   stall: Stall,
   draft: CartItem[],
 ): ReorderRow[] {
+  let remaining = Math.max(
+    0,
+    10 - draft.reduce((sum, item) => sum + item.quantity, 0),
+  );
   return order.items.map((previous) => {
     const product = stall.products.find(
       (item) => item.id === previous.product_id,
     );
     const saved = draft.find((item) => item.product.id === previous.product_id);
     const existing = saved?.quantity || 0;
-    const capacity =
-      product && productAvailable(product)
-        ? Math.max(0, Math.min(product.stock, 99) - existing)
-        : 0;
+    const capacity = product && productAvailable(product) ? remaining : 0;
     const add = Math.min(previous.quantity, capacity);
+    remaining -= add;
     let reason = "";
     if (!product) reason = "已下架或暂时不可售，本次跳过";
     else if (!productAvailable(product))
       reason = `${productUnavailableReason(product)}，本次跳过`;
     else if (!add) reason = "餐袋中已有数量达到当前可售上限，本次不再添加";
     else if (add < previous.quantity)
-      reason = `受当前库存与每种最多 99 份限制，本次可加 ${add} 份`;
+      reason = `受每单合计最多 10 份限制，本次可加 ${add} 份`;
     return {
       previous,
       product,

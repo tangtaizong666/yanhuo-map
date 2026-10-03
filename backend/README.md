@@ -138,7 +138,7 @@ prep_minutes 为 1–180 的整数，reason 不超过 200 字，idempotency_key 
 商品的 stock 表示**尚未被订单预留的线上可售份数**，不是包含已接订单的现场总余量。商家应单独划分线上份数；现场售出后按实际未预留余量盘点，不能把正在制作或待付款订单的份数重新计入线上库存。
 
 - `Product.sale_paused` 默认 false，可通过商品 PATCH 独立修改。暂停不清零库存、不取消已有订单；恢复只解除该标记，仍检查库存、上下架、摊位营业与交易权限。下单遇到暂停商品返回 409 `product_sale_paused`，附 product_id。
-- `Product.stock_version` 默认 0，商品响应均返回。每次下单预留、取消/超时归还、增量补货、成功盘点更正都会递增；幂等重放和重复释放不再递增。编辑价格、口味、暂停供应等资料不变更库存版本。
+- `Product.stock_version` 默认 0，仅所属商家的商品响应返回；公开商品仅返回 `availability` 和 `max_order_quantity`，不返回精确 `stock` 或版本。每次下单预留、取消/超时归还、增量补货、成功盘点更正都会递增；幂等重放和重复释放不再递增。编辑价格、口味、暂停供应等资料不变更库存版本。
 - 商品 PATCH 含 stock 时整次拒绝，返回 400 `stock_edit_requires_correction`；新建商品仍可设置初始库存。`POST /merchant/stalls/:id/restock` 继续按新增份数补货，不接受绝对覆盖。
 - `POST /merchant/products/:id/stock-correction` 接收 `{stock,expected_stock_version,idempotency_key,reason}`。stock 为 0–100000 的整数，版本为非负整数，key 长度 8–128，reason 为必填说明、不超过 200 字。成功返回 `{product,replayed}`。
 - 更正在摊位、商品锁内先检查已成功的幂等记录，再检查版本。同 key、同内容返回当前最新商品且 `replayed:true`；同 key 不同内容返回 409 `idempotency_conflict`。版本不符返回 409 `stock_version_conflict` 并附最新 product，此时没有执行更正；客户端须让商家重新盘点确认，不能自动用新版本覆盖重试。

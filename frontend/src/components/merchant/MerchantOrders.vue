@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ownedImage } from "../../lib/media";
 import {
   computed,
   nextTick,
@@ -9,7 +10,6 @@ import {
   watch,
 } from "vue";
 import {
-  ArrowUpRight,
   Bike,
   Check,
   CheckCircle2,
@@ -69,11 +69,26 @@ const props = withDefaults(
 const emit = defineEmits<{ refresh: [updatedOrder?: any] }>();
 const session = useSession();
 type PrepRequest = {
-  action: "accept" | "update_prep";
-  prep_minutes: number;
+  action: string;
+  prep_minutes?: number;
+  pickup_code?: string;
   reason?: string;
   idempotency_key: string;
 };
+const orderMutations = [
+  "accept",
+  "update_prep",
+  "reject",
+  "ready",
+  "confirm_payment",
+  "complete",
+  "approve_cancel",
+  "deny_cancel",
+  "dispatch",
+  "arrive",
+  "report_delivery_issue",
+  "resolve_delivery_issue",
+];
 const prepMinutes = reactive<Record<string, number>>({});
 const pendingPrep = reactive<Record<string, PrepRequest>>({});
 const revisedMinutes = ref(10);
@@ -93,10 +108,13 @@ function loadPrepRequests() {
     for (const [id, raw] of Object.entries(saved)) {
       const value = raw as PrepRequest;
       if (
-        ["accept", "update_prep"].includes(value.action) &&
-        Number.isInteger(value.prep_minutes) &&
-        value.prep_minutes >= 1 &&
-        value.prep_minutes <= 180 &&
+        orderMutations.includes(value.action) &&
+        (!["accept", "update_prep"].includes(value.action) ||
+          (Number.isInteger(value.prep_minutes) &&
+            Number(value.prep_minutes) >= 1 &&
+            Number(value.prep_minutes) <= 180)) &&
+        (value.pickup_code === undefined ||
+          /^\d{8}$/.test(value.pickup_code)) &&
         typeof value.idempotency_key === "string" &&
         value.idempotency_key.length >= 8 &&
         value.idempotency_key.length <= 128 &&
@@ -120,12 +138,9 @@ function preparationText(order: any) {
   return `${past ? "已超过预计时间，请更新实际安排；原预计" : "预计出餐"} ${formatTime(order.estimated_ready_at)}`;
 }
 const filter = ref(
-  props.initialFilter === "cancellation" ? "active" : props.initialFilter,
-);
-const boardMode = ref(
-  ["active", "pending", "preparing", "ready"].includes(props.initialFilter)
-    ? "kitchen"
-    : "all",
+  ["active", "cancellation"].includes(props.initialFilter)
+    ? "pending"
+    : props.initialFilter,
 );
 const history = ref<Order[]>([]);
 const historyNext = ref<string | null>(null);
@@ -135,9 +150,11 @@ const historyPages = new Map<string, { rows: Order[]; next: string | null }>();
 let historyGeneration = 0;
 let historyController: AbortController | undefined;
 const historyFilter = computed(() =>
-  ["all", "completed", "cancelled"].includes(filter.value)
-    ? filter.value
-    : null,
+  filter.value === "recovery"
+    ? "all"
+    : ["all", "completed", "cancelled"].includes(filter.value)
+      ? filter.value
+      : null,
 );
 async function loadHistory(more = false) {
   if (
@@ -193,11 +210,12 @@ function filterCount(value: string) {
 }
 const lookupOrder = ref<any>(null);
 const toolsOpen = ref(false);
-function setBoard(value: string) {
-  boardMode.value = value;
-  filter.value = value === "kitchen" ? "active" : "all";
+const lookupOpen = ref(false);
+function selectStage(value: string) {
+  filter.value = value;
   cancellationOnly.value = false;
   query.value = "";
+  fulfillment.value = "all";
 }
 const query = ref("");
 const fulfillment = ref("all");
@@ -234,27 +252,23 @@ const allOrders = computed(() => {
     );
   return values;
 });
-const kitchenStages = [
-  "pending",
-  "preparing",
-  "ready",
-  "pending_payment",
-  "delivering",
-  "arrived",
+const primaryStages = [
+  { value: "pending", label: "新订单" },
+  { value: "preparing", label: "制作中" },
+  { value: "ready", label: "待取餐" },
 ];
-const stageNames: Record<string, string> = {
-  pending: "先接新单",
-  preparing: "正在制作",
-  ready: "已经出餐",
-  pending_payment: "待付款占位",
-  delivering: "配送途中",
-  arrived: "交接点待收餐",
-};
-function stageTitle(order: any) {
-  return stageNames[order.status] || statusText(order.status);
-}
-function stageCount(status: string) {
-  return shownOrders.value.filter((order) => order.status === status).length;
+const pendingOperationCount = computed(() => Object.keys(pendingPrep).length);
+const queueTitle = computed(() =>
+  cancellationOnly.value
+    ? "取消申请"
+    : filter.value === "recovery"
+      ? "待确认的原操作"
+      : primaryStages.find((item) => item.value === filter.value)?.label ||
+        filters.find((item) => item.value === filter.value)?.label ||
+        "订单",
+);
+function queueCount(value: string) {
+  return allOrders.value.filter((order) => matchesFilter(order, value)).length;
 }
 function orderPriorityTime(order: any) {
   const raw =
@@ -275,17 +289,10 @@ const confirmationOrder = computed(() =>
   ),
 );
 const filters = [
-  { value: "active", label: "进行中" },
   { value: "followup", label: "售后跟进" },
-  { value: "pending_payment", label: "待付款" },
-  { value: "pending", label: "待接单" },
-  { value: "preparing", label: "制作中" },
-  { value: "ready", label: "已出餐" },
-  { value: "delivering", label: "配送中" },
-  { value: "arrived", label: "待收餐" },
   { value: "completed", label: "已完成" },
   { value: "cancelled", label: "已取消" },
-  { value: "all", label: "全部" },
+  { value: "all", label: "全部记录" },
 ];
 const cancelCount = computed(
   () =>
@@ -297,6 +304,11 @@ const cancelCount = computed(
 );
 function matchesFilter(order: any, value: string) {
   if (value === "all") return true;
+  if (value === "recovery") return !!pendingPrep[order.id];
+  if (value === "pending")
+    return ["pending", "pending_payment"].includes(order.status);
+  if (value === "ready")
+    return ["ready", "delivering", "arrived"].includes(order.status);
   if (value === "followup") return needsMerchantFollowUp(order);
   if (value === "active") return activeOrderStatuses.includes(order.status);
   if (value === "cancelled")
@@ -307,7 +319,10 @@ const shownOrders = computed(() =>
   allOrders.value
     .filter(
       (order) =>
-        matchesFilter(order, filter.value) &&
+        (cancellationOnly.value
+          ? order.cancel_requested &&
+            cancellableDeliveryStatuses.includes(order.status)
+          : matchesFilter(order, filter.value)) &&
         (fulfillment.value === "all" ||
           (order.fulfillment_type || "pickup") === fulfillment.value) &&
         (!cancellationOnly.value || order.cancel_requested) &&
@@ -323,10 +338,24 @@ const shownOrders = computed(() =>
           Date.parse(a.refund?.created_at || a.created_at) -
             Date.parse(b.refund?.created_at || b.created_at)
         );
-      if (boardMode.value === "kitchen") {
+      if (primaryStages.some((item) => item.value === filter.value)) {
         const rank = (order: any) =>
-          kitchenStages.includes(order.status)
-            ? kitchenStages.indexOf(order.status)
+          [
+            "pending",
+            "preparing",
+            "ready",
+            "pending_payment",
+            "delivering",
+            "arrived",
+          ].includes(order.status)
+            ? [
+                "pending",
+                "preparing",
+                "ready",
+                "pending_payment",
+                "delivering",
+                "arrived",
+              ].indexOf(order.status)
             : 99;
         if (rank(a) !== rank(b)) return rank(a) - rank(b);
         if (a.cancel_requested !== b.cancel_requested)
@@ -389,13 +418,13 @@ function actions(order: any) {
   if (order.status === "pending")
     return [
       { value: "reject", label: "暂时无法接单", primary: false },
-      { value: "accept", label: "确认接单", primary: true },
+      { value: "accept", label: "接单开始做", primary: true },
     ];
   if (order.status === "preparing")
     return [
       {
         value: "ready",
-        label: isDelivery(order) ? "做好了，准备送餐" : "做好了，通知取餐",
+        label: "做好了",
         primary: true,
       },
     ];
@@ -425,7 +454,7 @@ function actions(order: any) {
     return [
       {
         value: "confirm_payment",
-        label: `确认已收到 ¥${money(order.total_cents)}`,
+        label: `收款 ¥${money(order.total_cents)}`,
         primary: true,
       },
     ];
@@ -479,6 +508,12 @@ function moreActions(order: any) {
   const items = actions(order).filter(
     (item) => !item.primary && !order.cancel_requested,
   );
+  if (canAct(order, "update_prep"))
+    items.push({
+      value: "update_prep",
+      label: "还要等一会，更新预估",
+      primary: false,
+    });
   for (const [value, label] of [
     ["report_delivery_issue", "配送遇到问题"],
     ["resolve_delivery_issue", "异常已解决，继续处理"],
@@ -505,6 +540,38 @@ function moreActions(order: any) {
   return items.filter(
     (item) => !followupActions(order).some((main) => main.value === item.value),
   );
+}
+function cardAction(order: any) {
+  if (pendingPrep[order.id])
+    return {
+      value: pendingPrep[order.id]!.action,
+      label: "确认原操作结果",
+      details: false,
+    };
+  if (order.cancel_requested)
+    return { value: "details", label: "处理取消申请", details: true };
+  if (needsMerchantFollowUp(order))
+    return {
+      value: "details",
+      label: order.delivery_issue ? "处理配送问题" : "查看款项问题",
+      details: true,
+    };
+  if (canAct(order, "complete"))
+    return {
+      value: "details",
+      label: isDelivery(order) ? "核对收餐码" : "核对取餐码",
+      details: true,
+    };
+  const action = mainActions(order).find(
+    (item) => item.primary && canAct(order, item.value),
+  );
+  return action ? { ...action, details: false } : null;
+}
+function runCardAction(order: any) {
+  const action = cardAction(order);
+  if (!action) return;
+  if (action.details) void openDetails(order);
+  else void requestAction(order, action.value);
 }
 function canAct(order: any, value: string) {
   if (!order) return false;
@@ -837,6 +904,7 @@ async function performAction(order: any, value: string, explanation = "") {
     savePrepRequests();
   }
   if (
+    !existingPrep &&
     [
       "reject",
       "approve_cancel",
@@ -846,7 +914,7 @@ async function performAction(order: any, value: string, explanation = "") {
     ].includes(value)
   )
     body.reason = explanation;
-  if (value === "complete") {
+  if (value === "complete" && !existingPrep) {
     const code = (pickupCodes[order.id] || "").trim();
     if (!/^\d{8}$/.test(code)) {
       notify(
@@ -856,6 +924,12 @@ async function performAction(order: any, value: string, explanation = "") {
       return;
     }
     body.pickup_code = code;
+  }
+  const isOrderMutation = orderMutations.includes(value);
+  if (isOrderMutation && !existingPrep) {
+    body.idempotency_key ||= newRequestKey("order-action");
+    pendingPrep[order.id] = body;
+    savePrepRequests();
   }
   busy.value = String(order.id);
   actionError.value = "";
@@ -913,7 +987,7 @@ async function performAction(order: any, value: string, explanation = "") {
         { code: "invalid_response", submitted: true },
       );
     }
-    if (isPrep) {
+    if (isOrderMutation) {
       delete pendingPrep[order.id];
       savePrepRequests();
     }
@@ -981,7 +1055,7 @@ async function performAction(order: any, value: string, explanation = "") {
   } catch (error) {
     if (generation !== actionGeneration) return;
     if (
-      isPrep &&
+      isOrderMutation &&
       error instanceof ApiError &&
       [400, 404, 409, 422].includes(error.status) &&
       error.data?.submitted !== false &&
@@ -990,6 +1064,10 @@ async function performAction(order: any, value: string, explanation = "") {
         "invalid_prep_update",
         "invalid_transition",
         "payment_in_progress",
+        "invalid_pickup_code",
+        "payment_requires_review",
+        "delivery_issue_unresolved",
+        "reason_required",
       ].includes(error.code || "")
     ) {
       delete pendingPrep[order.id];
@@ -1051,12 +1129,14 @@ function timeline(order: any) {
 watch(
   () => props.initialFilter,
   (value) => {
-    if (!["active", "pending", "preparing", "ready"].includes(value))
-      boardMode.value = "all";
     cancellationOnly.value = value === "cancellation";
-    filter.value = filters.some((item) => item.value === value)
+    filter.value = [...filters, ...primaryStages].some(
+      (item) => item.value === value,
+    )
       ? value
-      : "active";
+      : ["delivering", "arrived"].includes(value)
+        ? "ready"
+        : "pending";
   },
 );
 watch(
@@ -1066,6 +1146,11 @@ watch(
     for (const row of props.orders) delete updatedOrders[String(row.id)];
   },
 );
+watch(selectedOrder, (order) => {
+  // A completed order can leave the attention page while a response is lost.
+  // Keep its original request in the recovery queue without trapping an empty dialog.
+  if (!order && drawer.value?.open) closeDetails();
+});
 watch(
   () => `${session.user?.id}:${props.stall?.id}`,
   () => {
@@ -1114,90 +1199,101 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section
-    class="m-orders"
-    :class="{ 'm-kitchen-mode': boardMode === 'kitchen' }"
-    aria-labelledby="m-orders-heading"
-  >
-    <div
-      class="m-orders-heading"
-      :class="{ 'm-kitchen-heading': boardMode === 'kitchen' }"
-    >
-      <div>
-        <span class="m-orders-eyebrow">EVERY ORDER MATTERS</span>
-        <h2 id="m-orders-heading">认真对待，每一份期待<span>.</span></h2>
-        <p>自取与校园定点配送 · 按实际交付推进 · 每 10 秒同步订单</p>
-      </div>
+  <section class="m-orders m-simple-orders" aria-labelledby="m-orders-heading">
+    <h2 id="m-orders-heading" class="m-orders-accessible-heading">
+      接单与出餐
+    </h2>
+    <div class="m-primary-stages" role="group" aria-label="订单阶段">
       <button
-        class="m-orders-refresh"
-        :disabled="loading || !!busy"
-        @click="emit('refresh')"
+        v-for="item in primaryStages"
+        :key="item.value"
+        type="button"
+        :aria-pressed="filter === item.value && !cancellationOnly"
+        @click="selectStage(item.value)"
       >
-        <RefreshCw
-          :size="16"
-          :class="{ 'm-orders-spinning': loading }"
-        />刷新订单
+        <span>{{ item.label }}</span
+        ><strong>{{ ordersReady ? queueCount(item.value) : "—" }}</strong>
       </button>
     </div>
-    <div class="m-board-tabs" role="group" aria-label="订单工作方式">
+    <div
+      v-if="cancelCount || queueCount('followup') || pendingOperationCount"
+      class="m-urgent-queue"
+      aria-label="需要处理的订单"
+    >
+      <button
+        v-if="pendingOperationCount"
+        :aria-pressed="filter === 'recovery'"
+        @click="
+          selectStage('recovery');
+          fulfillment = 'all';
+        "
+      >
+        <RefreshCw :size="18" /><strong
+          >{{ pendingOperationCount }} 笔操作结果待确认</strong
+        ><ChevronRight :size="17" />
+      </button>
+      <button
+        v-if="cancelCount"
+        class="m-orders-cancel-filter"
+        :aria-pressed="cancellationOnly"
+        @click="
+          cancellationOnly = true;
+          query = '';
+          fulfillment = 'all';
+        "
+      >
+        <Clock3 :size="18" /><strong>{{ cancelCount }} 笔取消申请</strong
+        ><span>立即处理</span><ChevronRight :size="17" />
+      </button>
+      <button
+        v-if="queueCount('followup')"
+        :aria-pressed="filter === 'followup' && !cancellationOnly"
+        @click="
+          selectStage('followup');
+          fulfillment = 'all';
+        "
+      >
+        <span>款项 / 配送问题</span><strong>{{ queueCount("followup") }}</strong
+        ><ChevronRight :size="17" />
+      </button>
+    </div>
+    <div class="m-simple-tools">
       <button
         type="button"
-        :aria-pressed="boardMode === 'kitchen'"
-        @click="setBoard('kitchen')"
+        :aria-expanded="lookupOpen"
+        aria-controls="merchant-pickup-tool"
+        @click="lookupOpen = !lookupOpen"
       >
-        出餐台</button
-      ><button
+        <PackageCheck :size="17" />取餐码查单
+      </button>
+      <button
         type="button"
-        :aria-pressed="boardMode === 'all'"
-        @click="setBoard('all')"
+        :aria-expanded="toolsOpen"
+        aria-controls="merchant-secondary-tools"
+        @click="toolsOpen = !toolsOpen"
       >
-        全部订单</button
-      ><span>{{
-        boardMode === "kitchen"
-          ? "先接快到时限的新单，再按预计出餐安排制作"
-          : "查看历史、付款、配送与售后记录"
-      }}</span>
+        <Search :size="17" />查找 / 历史
+      </button>
     </div>
-    <button
-      v-if="boardMode === 'kitchen'"
-      class="m-kitchen-tools-toggle"
-      :aria-expanded="toolsOpen"
-      aria-controls="merchant-secondary-tools"
-      @click="toolsOpen = !toolsOpen"
-    >
-      <Search :size="16" />{{
-        toolsOpen ? "收起查单与筛选" : "查取餐码 · 搜索与筛选"
-      }}
-    </button>
-    <div
-      id="merchant-secondary-tools"
-      v-show="boardMode === 'all' || toolsOpen"
-    >
+    <div id="merchant-pickup-tool" v-if="lookupOpen">
       <MerchantPickupLookup
         :key="`${session.user?.id}:${stall.id}`"
         :stall-id="stall.id"
         @found="pickupFound"
       />
-      <div class="m-orders-toolbar">
-        <label class="m-orders-search"
-          ><Search :size="18" /><input
-            v-model="query"
-            type="search"
-            aria-label="搜索订单号"
-            placeholder="搜索订单号"
-        /></label>
-        <button
-          class="m-orders-cancel-filter"
-          :class="{ active: cancellationOnly }"
-          :aria-pressed="cancellationOnly"
-          @click="
-            cancellationOnly = !cancellationOnly;
-            if (cancellationOnly) filter = 'active';
-          "
-        >
-          取消申请<span>{{ ordersReady ? cancelCount : "—" }}</span>
-        </button>
-      </div>
+    </div>
+    <div
+      id="merchant-secondary-tools"
+      v-if="toolsOpen"
+      class="m-simple-search-panel"
+    >
+      <label class="m-orders-search"
+        ><Search :size="18" /><input
+          v-model="query"
+          type="search"
+          aria-label="搜索订单号"
+          placeholder="输入订单号后几位"
+      /></label>
       <div class="m-fulfillment-filters" role="group" aria-label="取餐方式筛选">
         <button
           v-for="item in [
@@ -1213,16 +1309,14 @@ onUnmounted(() => {
           {{ item.label }}
         </button>
       </div>
-      <div class="m-orders-tabs" role="group" aria-label="订单状态筛选">
+      <div class="m-orders-tabs" role="group" aria-label="其他订单记录">
         <button
           v-for="item in filters"
           :key="item.value"
           :class="{ active: filter === item.value }"
-          :aria-pressed="filter === item.value"
+          :aria-pressed="filter === item.value && !cancellationOnly"
           @click="
             filter = item.value;
-            if (!['active', ...kitchenStages].includes(item.value))
-              boardMode = 'all';
             cancellationOnly = false;
           "
         >
@@ -1231,47 +1325,34 @@ onUnmounted(() => {
         </button>
       </div>
     </div>
-    <p v-if="historyFilter" class="m-info-banner">
-      历史按页加载，搜索仅覆盖已加载记录；进行中与资金待处理订单持续同步。
+    <p v-if="syncError" class="m-orders-warning" role="status">
+      订单暂未同步，当前显示上次结果。请刷新后核对。
+    </p>
+    <p v-if="historyFilter && !cancellationOnly" class="m-orders-help">
+      历史按页加载，搜索仅覆盖已加载记录。
     </p>
     <p v-if="historyError" class="m-alert" role="alert">
       {{ historyError }} <button @click="loadHistory()">重试历史订单</button>
     </p>
     <p v-if="historyBusy" role="status">正在加载历史订单…</p>
-    <button
-      v-if="historyNext"
-      class="btn btn-secondary"
-      :disabled="historyBusy"
-      @click="loadHistory(true)"
-    >
-      加载更多历史订单
-    </button>
-    <div class="m-orders-list-caption">
-      <span>{{
-        !ordersReady
-          ? "订单尚未同步，当前数量待确认"
-          : syncError
-            ? "同步中断，当前显示上次同步的订单与数量"
-            : cancellationOnly
-              ? "优先处理顾客的取消申请"
-              : boardMode === "kitchen"
-                ? "先接快到时限的新单，再按预计出餐安排制作"
-                : filter === "active"
-                  ? "进行中订单按下单时间排列，先到先处理"
-                  : filter === "followup"
-                    ? "退款未完、付款待核对与配送异常集中跟进；一笔订单只计一次"
-                    : "订单费用与交付地点均保留下单时记录"
-      }}</span
-      ><span>{{ ordersReady ? shownOrders.length : "—" }} 笔订单</span>
+    <div class="m-simple-list-label">
+      <h3>{{ queueTitle }}</h3>
+      <span
+        >{{ ordersReady ? shownOrders.length : "—" }} 单<span
+          v-if="filter === 'ready'"
+        >
+          · 含配送交付</span
+        ></span
+      >
     </div>
     <div v-if="!ordersReady" class="m-orders-empty" role="status">
-      <RefreshCw :size="38" :class="{ 'm-orders-spinning': loading }" />
+      <RefreshCw :size="32" :class="{ 'm-orders-spinning': loading }" />
       <h3>{{ loading ? "正在同步订单" : "订单尚未同步" }}</h3>
       <p>
         {{
           syncError
-            ? "订单读取失败，暂时无法确认有没有待跟进事项。"
-            : "同步完成后才会显示订单与售后数量。"
+            ? "暂时无法确认有没有待处理订单，请重新同步。"
+            : "同步后显示待处理订单。"
         }}
       </p>
       <button
@@ -1279,351 +1360,217 @@ onUnmounted(() => {
         :disabled="loading || !!busy"
         @click="emit('refresh')"
       >
-        {{ loading ? "正在同步…" : "重新同步订单" }}
+        重新同步订单
       </button>
     </div>
     <div v-else-if="!shownOrders.length" class="m-orders-empty">
-      <ShoppingBag :size="38" />
+      <ShoppingBag :size="32" />
       <h3>
         {{
           query.trim()
             ? "没有找到这笔订单"
-            : cancellationOnly
-              ? "暂时没有取消申请"
-              : filter === "followup"
-                ? "当前筛选下没有待跟进的售后"
-                : "这个分类暂时没有订单"
+            : filter === "recovery"
+              ? "尚未找到原订单"
+              : cancellationOnly
+                ? "暂时没有取消申请"
+                : `暂无${queueTitle}`
         }}
       </h3>
       <p>
         {{
           query.trim()
-            ? "试试订单号的后几位，或切换到全部订单。"
-            : filter === "followup"
-              ? "退款确认完成、付款问题解决或配送异常解除后，会从这里移出。"
-              : "有新订单时会在这里显示，安心准备下一份好味道。"
+            ? "试试订单号后几位，或在历史中查找。"
+            : filter === "recovery"
+              ? "请加载更多历史记录。原操作仍然保留，请先核对结果。"
+              : filter === "pending"
+                ? "有新订单时会显示在这里。"
+                : "可点击上方分类查看其他订单。"
         }}
       </p>
       <button
-        v-if="query || filter !== 'active' || cancellationOnly"
-        class="m-orders-button secondary"
-        @click="
-          query = '';
-          filter = 'active';
-          cancellationOnly = false;
+        v-if="
+          query ||
+          cancellationOnly ||
+          !primaryStages.some((item) => item.value === filter)
         "
+        class="m-orders-button secondary"
+        @click="selectStage('pending')"
       >
-        查看进行中订单
+        查看新订单
       </button>
     </div>
     <div v-else class="m-orders-grid">
-      <template v-for="(order, index) in shownOrders" :key="order.id">
-        <h3
-          v-if="
-            boardMode === 'kitchen' &&
-            (!index || shownOrders[index - 1]?.status !== order.status)
-          "
-          class="m-kitchen-stage"
-          :data-stage="order.status"
-        >
-          {{ stageTitle(order) }}<span>{{ stageCount(order.status) }} 单</span
-          ><small v-if="order.status === 'pending_payment'"
-            >尚未付款，暂不制作</small
-          >
-        </h3>
-        <article
-          class="merchant-order m-orders-card"
-          :class="{
-            'm-orders-needs-attention':
-              order.cancel_requested || needsMerchantFollowUp(order),
-          }"
-        >
-          <div class="m-orders-card-top">
-            <div>
-              <span class="order-number">#{{ order.number }}</span>
-              <span
-                v-if="order.mode === 'simulation'"
-                class="m-simulation-badge"
-                >模拟订单 · 不扣款、不配送</span
-              >
-              <p>{{ formatTime(order.created_at) }} 下单</p>
-            </div>
-            <span class="merchant-order-status" :class="order.status">{{
-              statusText(order.status, order.fulfillment_type)
-            }}</span>
-          </div>
-          <div
-            v-if="needsMerchantFollowUp(order)"
-            class="m-order-followup"
-            aria-label="待跟进事项"
-          >
-            <span v-for="issue in followUpReasons(order)" :key="issue.kind"
-              ><Clock3 :size="13" />{{ issue.label }}</span
-            >
-            <p
-              v-if="
-                filter === 'followup' &&
-                ['cancelled', 'rejected', 'completed'].includes(order.status)
-              "
-            >
-              履约已结束，仍需跟进上述问题；查询进度不会恢复接单或配送。
+      <article
+        v-for="order in shownOrders"
+        :key="order.id"
+        class="merchant-order m-orders-card"
+        :class="{
+          'm-orders-needs-attention':
+            order.cancel_requested || needsMerchantFollowUp(order),
+        }"
+      >
+        <div class="m-orders-card-top">
+          <div>
+            <span class="order-number">#{{ order.number }}</span>
+            <p>
+              {{ formatTime(order.created_at) }} 下单 ·
+              {{ fulfillmentLabel(order) }}
             </p>
           </div>
+          <span class="merchant-order-status" :class="order.status">{{
+            statusText(order.status, order.fulfillment_type)
+          }}</span>
+        </div>
+        <span v-if="order.mode === 'simulation'" class="m-simulation-badge"
+          >模拟订单 · 不扣款、不配送</span
+        >
+        <div
+          v-if="
+            order.cancel_requested &&
+            cancellableDeliveryStatuses.includes(order.status)
+          "
+          class="m-orders-cancel-notice"
+        >
+          <strong>顾客申请取消，请先处理</strong>
+          <p>{{ order.cancel_reason || "顾客未填写原因。" }}</p>
+        </div>
+        <div class="m-orders-card-items">
           <div
-            class="m-order-fulfillment"
-            :class="{ delivery: isDelivery(order) }"
+            v-for="item in order.items"
+            :key="item.product_id"
+            class="m-simple-dish"
+          >
+            <div class="m-simple-dish-title">
+              <strong>{{ item.name }}</strong
+              ><b>{{ item.quantity }} 份</b>
+            </div>
+            <PortionSummary :portions="item.portions" />
+          </div>
+        </div>
+        <p v-if="order.note" class="m-orders-note">
+          <strong>整单备注</strong>{{ order.note }}
+        </p>
+        <p
+          v-if="order.status === 'pending'"
+          class="m-orders-countdown"
+          :class="{ urgent: (remainingSeconds(order) ?? 999) < 60 }"
+        >
+          <Clock3 :size="17" />{{ countdown(order) }}
+        </p>
+        <details
+          v-if="order.status === 'pending' && !pendingPrep[order.id]"
+          class="prep-accept"
+        >
+          <summary>
+            预计 {{ prepValue(order) }} 分钟做好<span>调整时间</span>
+          </summary>
+          <label :for="`prep-${order.id}`"
+            >接单后约需（分钟）<input
+              :id="`prep-${order.id}`"
+              :value="prepValue(order)"
+              type="number"
+              min="1"
+              max="180"
+              inputmode="numeric"
+              :disabled="!!busy"
+              @input="
+                prepMinutes[order.id] = Number(
+                  ($event.target as HTMLInputElement).value,
+                )
+              "
+          /></label>
+        </details>
+        <div
+          v-if="order.status === 'preparing'"
+          class="m-prep-status"
+          :class="{ overdue: Date.parse(order.estimated_ready_at) < now }"
+        >
+          <p><Clock3 :size="17" />{{ preparationText(order) }}</p>
+          <small v-if="order.prep_delay_reason">{{
+            order.prep_delay_reason
+          }}</small>
+        </div>
+        <p v-if="order.status === 'pending_payment'" class="m-orders-warning">
+          等待顾客付款，暂不制作。
+        </p>
+        <p v-if="pendingPrep[order.id]" class="m-orders-warning" role="status">
+          原操作结果待确认。已保留这次提交，再次确认不会重复执行。
+        </p>
+        <p
+          v-if="order.location_changed && !isDelivery(order)"
+          class="m-orders-warning"
+        >
+          取餐位置有变化，请在详情核对本单原地址。
+        </p>
+        <div v-if="isDelivery(order)" class="m-simple-destination">
+          <MapPin :size="17" /><span
+            ><strong>{{ order.delivery_point_name }}</strong
+            ><span>{{ order.delivery_point_address }}</span></span
+          ><a
+            v-if="order.contact_phone"
+            :href="`tel:${order.contact_phone}`"
+            aria-label="联系收餐人"
+            ><Phone :size="18"
+          /></a>
+        </div>
+        <div
+          v-if="needsMerchantFollowUp(order)"
+          class="m-order-followup"
+          aria-label="待跟进事项"
+        >
+          <span v-for="issue in followUpReasons(order)" :key="issue.kind">{{
+            issue.label
+          }}</span>
+          <p v-if="order.delivery_issue">{{ order.delivery_issue }}</p>
+        </div>
+        <div class="m-orders-card-summary">
+          <span
+            class="paid-tag"
+            :class="{
+              paid:
+                order.payment_status === 'paid' &&
+                !needsFinancialFollowUp(order),
+            }"
+            >{{ merchantPaymentLabel(order) }}</span
+          ><strong
+            ><small>{{ merchantPaymentAmountLabel(order) }}</small
+            >¥{{ money(order.total_cents) }}</strong
+          >
+        </div>
+        <div class="m-orders-actions">
+          <button
+            v-if="cardAction(order)"
+            class="m-orders-button primary m-simple-primary"
+            :disabled="!!busy"
+            @click="runCardAction(order)"
           >
             <component
-              :is="isDelivery(order) ? Bike : ShoppingBag"
-              :size="15"
-            /><strong>{{ fulfillmentLabel(order) }}</strong
-            ><span v-if="order.status === 'pending'"
-              >共 {{ totalQuantity(order) }} 份</span
-            ><span v-if="isDelivery(order)">{{
-              order.delivery_point_name
-            }}</span>
-          </div>
-          <div v-if="isDelivery(order)" class="m-delivery-destination">
-            <MapPin :size="16" />
-            <div>
-              <strong>{{ order.delivery_point_address }}</strong
-              ><small v-if="order.recipient_name"
-                >收餐人：{{ order.recipient_name }}</small
-              ><small
-                v-if="order.delivery_eta_min_at && order.delivery_eta_max_at"
-                >预计送达 {{ formatTime(order.delivery_eta_min_at) }} —
-                {{ formatTime(order.delivery_eta_max_at) }}</small
-              >
-            </div>
-          </div>
-          <p
-            v-if="order.status === 'pending'"
-            class="m-orders-countdown"
-            :class="{ urgent: (remainingSeconds(order) ?? 999) < 60 }"
-          >
-            <Clock3 :size="14" />{{ countdown(order) }}
-          </p>
-          <div
-            v-if="order.status === 'pending' && mainActions(order).length"
-            class="m-orders-actions m-pending-actions"
-          >
-            <button
-              v-for="item in mainActions(order)"
-              :key="item.value"
-              class="m-orders-button"
-              :class="item.primary ? 'primary' : 'secondary'"
-              :disabled="!!busy || !canAct(order, item.value)"
-              @click="requestAction(order, item.value)"
-            >
-              <component
-                :is="actionIcon(item.value)"
-                v-if="actionIcon(item.value)"
-                :size="17"
-              />{{ busy === String(order.id) ? "正在处理…" : item.label }}
-            </button>
-          </div>
-          <div class="m-orders-card-items">
-            <div
-              v-for="item in order.items"
-              :key="item.product_id"
-              class="m-orders-item"
-            >
-              <img :src="item.image" :alt="item.name" loading="lazy" />
-              <div>
-                <strong>{{ item.name }}</strong
-                ><span>¥{{ money(item.unit_price_cents) }} / 份</span>
-                <PortionSummary :portions="item.portions" />
-              </div>
-              <span class="m-orders-item-quantity">× {{ item.quantity }}</span
-              ><strong
-                >¥{{ money(item.unit_price_cents * item.quantity) }}</strong
-              >
-            </div>
-          </div>
-          <p v-if="order.note" class="m-orders-note">
-            <strong>顾客备注</strong>{{ order.note }}
-          </p>
-          <div
-            v-if="order.status === 'preparing' || order.estimated_ready_at"
-            class="m-prep-status"
-            :class="{
-              overdue:
-                order.status === 'preparing' &&
-                Date.parse(order.estimated_ready_at) < now,
-            }"
-          >
-            <p><Clock3 :size="16" />{{ preparationText(order) }}</p>
-            <small v-if="order.prep_delay_reason"
-              >调整说明：{{ order.prep_delay_reason }}</small
-            >
-            <button
-              v-if="canAct(order, 'update_prep') && !pendingPrep[order.id]"
-              class="m-orders-button secondary"
-              :disabled="!!busy"
-              @click="requestAction(order, 'update_prep')"
-            >
-              还要等一会，更新预估
-            </button>
-          </div>
-          <details
-            v-if="order.status === 'pending' && !pendingPrep[order.id]"
-            class="prep-accept"
-          >
-            <summary>
-              预计约 {{ prepValue(order) }} 分钟出餐<span
-                >可按当前忙闲调整</span
-              >
-            </summary>
-            <label :for="`prep-${order.id}`"
-              >接单后约需（分钟）<input
-                :id="`prep-${order.id}`"
-                :value="prepValue(order)"
-                type="number"
-                min="1"
-                max="180"
-                inputmode="numeric"
-                :disabled="!!busy"
-                @input="
-                  prepMinutes[order.id] = Number(
-                    ($event.target as HTMLInputElement).value,
-                  )
-                "
-            /></label>
-          </details>
-          <p
-            v-if="pendingPrep[order.id]"
-            class="m-orders-warning"
-            role="status"
-          >
-            原操作结果待确认。已保留当时的
-            {{ pendingPrep[order.id]!.prep_minutes }}
-            分钟预估，再次确认不会重复顺延。
-          </p>
-          <p
-            v-if="order.location_changed && !isDelivery(order)"
-            class="m-orders-warning"
-          >
-            <MapPin :size="15" />取餐位置已发生变化，请按本单原地址与顾客确认。
-          </p>
-          <p v-if="order.delivery_issue" class="m-orders-warning">
-            <Clock3 :size="15" /><span
-              ><strong>配送异常：</strong>{{ order.delivery_issue }}</span
-            >
-          </p>
-          <div class="m-orders-card-summary">
-            <span
-              >共 {{ totalQuantity(order) }} 件
-              <span
-                class="paid-tag"
-                :class="{
-                  paid:
-                    order.payment_status === 'paid' &&
-                    !needsFinancialFollowUp(order),
-                }"
-                >{{ merchantPaymentLabel(order) }}</span
-              ></span
-            ><strong
-              ><small>{{ merchantPaymentAmountLabel(order) }}</small
-              >¥{{ money(order.total_cents) }}</strong
-            >
-          </div>
-          <MerchantPaymentInfo
-            v-if="
-              order.payment_method === 'wechat' || order.payment || order.refund
-            "
-            :order="order"
-            compact
-          />
-          <div
-            v-if="
-              order.cancel_requested &&
-              cancellableDeliveryStatuses.includes(order.status)
-            "
-            class="m-orders-cancel-notice"
-          >
-            <strong>顾客申请取消</strong>
-            <p>{{ order.cancel_reason || "顾客未填写原因，请及时处理。" }}</p>
-          </div>
-          <div
-            v-if="order.status !== 'pending' && mainActions(order).length"
-            class="m-orders-actions"
-          >
-            <button
-              v-for="item in mainActions(order)"
-              :key="item.value"
-              class="m-orders-button"
-              :class="item.primary ? 'primary' : 'secondary'"
-              :disabled="!!busy || !canAct(order, item.value)"
-              @click="requestAction(order, item.value)"
-            >
-              <component
-                :is="actionIcon(item.value)"
-                v-if="actionIcon(item.value)"
-                :size="17"
-              />{{ busy === String(order.id) ? "正在处理…" : item.label }}
-            </button>
-          </div>
-          <details v-if="moreActions(order).length" class="m-order-more">
-            <summary>更多操作<span>取消、退款与配送问题</span></summary>
-            <div class="m-order-more-actions">
-              <button
-                v-for="item in moreActions(order)"
-                :key="item.value"
-                class="m-orders-button secondary"
-                :disabled="!!busy || !canAct(order, item.value)"
-                @click="requestAction(order, item.value)"
-              >
-                {{ item.label }}
-              </button>
-            </div>
-          </details>
-          <form
-            v-if="canAct(order, 'complete')"
-            class="m-orders-pickup"
-            @submit.prevent="performAction(order, 'complete')"
-          >
-            <label :for="`pickup-${order.id}`"
-              >核验顾客的 8 位{{
-                isDelivery(order) ? "收餐码" : "取餐码"
-              }}</label
-            >
-            <div>
-              <input
-                :id="`pickup-${order.id}`"
-                v-model="pickupCodes[order.id]"
-                class="pickup-code-input"
-                inputmode="numeric"
-                pattern="[0-9]{8}"
-                maxlength="8"
-                minlength="8"
-                :placeholder="isDelivery(order) ? '输入收餐码' : '输入取餐码'"
-                required
-                autocomplete="off"
-                :disabled="!!busy"
-              /><button class="m-orders-button primary" :disabled="!!busy">
-                <CheckCircle2 :size="17" />核销并完成
-              </button>
-            </div>
-          </form>
-          <p
-            v-if="
-              ['cancelled', 'rejected'].includes(order.status) &&
-              order.cancel_reason
-            "
-            class="m-orders-history-reason"
-          >
-            {{ order.cancel_reason }}
-          </p>
+              :is="actionIcon(cardAction(order)!.value)"
+              v-if="actionIcon(cardAction(order)!.value)"
+              :size="20"
+            />{{
+              busy === String(order.id) ? "正在处理…" : cardAction(order)!.label
+            }}
+          </button>
           <button
+            v-if="!cardAction(order)?.details"
             class="m-orders-detail-link"
             @click="openDetails(order)"
             :aria-label="`查看订单 ${order.number} 详情`"
           >
-            查看订单详情<ArrowUpRight :size="16" />
+            详情<ChevronRight :size="16" />
           </button>
-        </article>
-      </template>
+        </div>
+      </article>
     </div>
+    <button
+      v-if="historyNext && !cancellationOnly"
+      class="m-orders-button secondary m-history-more"
+      :disabled="historyBusy"
+      @click="loadHistory(true)"
+    >
+      加载更多历史订单
+    </button>
 
     <Teleport to="body">
       <dialog
@@ -1636,8 +1583,8 @@ onUnmounted(() => {
         <div v-if="selectedOrder" class="m-orders-drawer-content">
           <header class="m-orders-drawer-header">
             <div>
-              <span class="m-orders-eyebrow">ORDER DETAILS</span>
               <h2 id="m-orders-detail-heading">订单详情</h2>
+              <p class="m-drawer-order-number">#{{ selectedOrder.number }}</p>
               <span
                 v-if="selectedOrder.mode === 'simulation'"
                 class="m-simulation-badge"
@@ -1663,7 +1610,7 @@ onUnmounted(() => {
                     selectedOrder.fulfillment_type,
                   )
                 }}</span
-              ><strong>#{{ selectedOrder.number }}</strong>
+              >
               <p>
                 {{ formatTime(selectedOrder.created_at) }} 下单 ·
                 {{ fulfillmentLabel(selectedOrder) }}
@@ -1686,33 +1633,61 @@ onUnmounted(() => {
                 ><Clock3 :size="13" />{{ issue.label }}</span
               >
             </div>
-            <ol
-              class="m-orders-timeline"
-              :class="{ delivery: isDelivery(selectedOrder) }"
-              aria-label="订单进度"
+            <div
+              v-if="selectedOrder.cancel_requested"
+              class="m-orders-cancel-notice"
             >
-              <li
-                v-for="(step, index) in timeline(selectedOrder)"
-                :key="step.label"
-                :class="{ done: step.done }"
-              >
-                <span
-                  ><Check v-if="step.done" :size="13" /><template v-else>{{
-                    index + 1
-                  }}</template></span
-                ><strong>{{ step.label }}</strong
-                ><small>{{
-                  step.date ? formatTime(step.date) : "待完成"
-                }}</small>
-              </li>
-            </ol>
+              <strong>顾客申请取消</strong>
+              <p>{{ selectedOrder.cancel_reason || "未填写原因" }}</p>
+            </div>
             <p
               v-if="['cancelled', 'rejected'].includes(selectedOrder.status)"
               class="m-orders-warning"
             >
               {{ selectedOrder.cancel_reason || "订单已结束" }}
             </p>
-            <section class="m-orders-detail-section">
+            <section class="m-order-meal-check" aria-label="核对餐点">
+              <h3>
+                <ShoppingBag :size="17" />商品明细<span
+                  >{{ totalQuantity(selectedOrder) }} 件</span
+                >
+              </h3>
+              <div class="m-orders-card-items">
+                <div
+                  v-for="item in selectedOrder.items"
+                  :key="item.product_id"
+                  class="m-orders-item"
+                >
+                  <div>
+                    <strong>{{ item.name }}</strong
+                    ><span>¥{{ money(item.unit_price_cents) }} / 份</span>
+                    <PortionSummary :portions="item.portions" />
+                  </div>
+                  <span class="m-orders-item-quantity"
+                    >× {{ item.quantity }}</span
+                  ><strong
+                    >¥{{ money(item.unit_price_cents * item.quantity) }}</strong
+                  >
+                </div>
+              </div>
+              <p v-if="selectedOrder.note" class="m-orders-note">
+                <strong>顾客备注</strong>{{ selectedOrder.note }}
+              </p>
+            </section>
+            <div class="m-order-payment-check" aria-label="核对款项">
+              <div class="m-order-total">
+                <span>{{ merchantPaymentAmountLabel(selectedOrder) }}金额</span
+                ><strong>¥{{ money(selectedOrder.total_cents) }}</strong>
+              </div>
+              <MerchantPaymentInfo
+                :order="selectedOrder"
+                :compact="!needsMerchantFollowUp(selectedOrder)"
+              />
+            </div>
+            <section
+              v-if="isDelivery(selectedOrder) || selectedOrder.location_changed"
+              class="m-orders-detail-section m-order-handoff-location"
+            >
               <h3>
                 <MapPin :size="17" />{{
                   isDelivery(selectedOrder) ? "本单配送交接点" : "本单取餐位置"
@@ -1760,34 +1735,130 @@ onUnmounted(() => {
               /></a>
               <p v-else class="m-orders-help">顾客未留下联系电话。</p>
             </section>
-            <section class="m-orders-detail-section">
-              <h3>
-                <ShoppingBag :size="17" />商品明细<span
-                  >{{ totalQuantity(selectedOrder) }} 件</span
+            <footer
+              class="m-orders-drawer-footer"
+              v-if="
+                mainActions(selectedOrder).length ||
+                moreActions(selectedOrder).length ||
+                canAct(selectedOrder, 'complete')
+              "
+            >
+              <div
+                v-if="mainActions(selectedOrder).length"
+                class="m-orders-actions"
+              >
+                <button
+                  v-for="item in mainActions(selectedOrder)"
+                  :key="item.value"
+                  class="m-orders-button"
+                  :class="item.primary ? 'primary' : 'secondary'"
+                  :disabled="!!busy || !canAct(selectedOrder, item.value)"
+                  @click="requestAction(selectedOrder, item.value)"
                 >
-              </h3>
-              <div class="m-orders-card-items">
-                <div
-                  v-for="item in selectedOrder.items"
-                  :key="item.product_id"
-                  class="m-orders-item"
-                >
-                  <img :src="item.image" :alt="item.name" />
-                  <div>
-                    <strong>{{ item.name }}</strong
-                    ><span>¥{{ money(item.unit_price_cents) }} / 份</span>
-                    <PortionSummary :portions="item.portions" />
-                  </div>
-                  <span class="m-orders-item-quantity"
-                    >× {{ item.quantity }}</span
-                  ><strong
-                    >¥{{ money(item.unit_price_cents * item.quantity) }}</strong
-                  >
-                </div>
+                  <component
+                    :is="actionIcon(item.value)"
+                    v-if="actionIcon(item.value)"
+                    :size="17"
+                  />{{
+                    busy === String(selectedOrder.id) ? "正在处理…" : item.label
+                  }}
+                </button>
               </div>
-              <p v-if="selectedOrder.note" class="m-orders-note">
-                <strong>顾客备注</strong>{{ selectedOrder.note }}
-              </p>
+              <form
+                v-if="canAct(selectedOrder, 'complete')"
+                class="m-orders-pickup"
+                @submit.prevent="performAction(selectedOrder, 'complete')"
+              >
+                <label for="detail-pickup-code"
+                  >核验顾客的 8 位{{
+                    isDelivery(selectedOrder) ? "收餐码" : "取餐码"
+                  }}</label
+                >
+                <div>
+                  <input
+                    id="detail-pickup-code"
+                    v-model="pickupCodes[selectedOrder.id]"
+                    class="pickup-code-input"
+                    inputmode="numeric"
+                    pattern="[0-9]{8}"
+                    maxlength="8"
+                    minlength="8"
+                    :placeholder="
+                      isDelivery(selectedOrder) ? '输入收餐码' : '输入取餐码'
+                    "
+                    required
+                    autocomplete="off"
+                    :disabled="!!busy"
+                  /><button class="m-orders-button primary" :disabled="!!busy">
+                    <CheckCircle2 :size="17" />核销并完成
+                  </button>
+                </div>
+              </form>
+              <details
+                v-if="moreActions(selectedOrder).length"
+                class="m-order-more"
+              >
+                <summary>更多操作<span>取消、退款与配送问题</span></summary>
+                <div class="m-order-more-actions">
+                  <button
+                    v-for="item in moreActions(selectedOrder)"
+                    :key="item.value"
+                    class="m-orders-button secondary"
+                    :disabled="!!busy || !canAct(selectedOrder, item.value)"
+                    @click="requestAction(selectedOrder, item.value)"
+                  >
+                    {{ item.label }}
+                  </button>
+                </div>
+              </details>
+            </footer>
+            <details :key="selectedOrder.id" class="m-order-records">
+              <summary>订单记录与联系信息<ChevronRight :size="17" /></summary>
+              <section
+                v-if="
+                  !isDelivery(selectedOrder) && !selectedOrder.location_changed
+                "
+                class="m-orders-detail-section"
+              >
+                <h3><MapPin :size="17" />本单取餐位置</h3>
+                <strong class="m-orders-address">{{
+                  selectedOrder.pickup_address
+                }}</strong>
+                <p class="m-orders-help">
+                  使用下单时的交付地点，请按约定地点交付餐点。
+                </p>
+                <a
+                  v-if="selectedOrder.contact_phone"
+                  class="m-orders-phone"
+                  :href="`tel:${selectedOrder.contact_phone}`"
+                  ><Phone :size="17" /><span
+                    >联系顾客<strong>{{
+                      selectedOrder.contact_phone
+                    }}</strong></span
+                  ><ChevronRight :size="17"
+                /></a>
+                <p v-else class="m-orders-help">顾客未留下联系电话。</p>
+              </section>
+              <ol
+                class="m-orders-timeline"
+                :class="{ delivery: isDelivery(selectedOrder) }"
+                aria-label="订单进度"
+              >
+                <li
+                  v-for="(step, index) in timeline(selectedOrder)"
+                  :key="step.label"
+                  :class="{ done: step.done }"
+                >
+                  <span
+                    ><Check v-if="step.done" :size="13" /><template v-else>{{
+                      index + 1
+                    }}</template></span
+                  ><strong>{{ step.label }}</strong
+                  ><small>{{
+                    step.date ? formatTime(step.date) : "待完成"
+                  }}</small>
+                </li>
+              </ol>
               <dl class="m-orders-amount">
                 <div>
                   <dt>商品金额</dt>
@@ -1815,104 +1886,22 @@ onUnmounted(() => {
                   <dd>¥{{ money(selectedOrder.total_cents) }}</dd>
                 </div>
               </dl>
-              <MerchantPaymentInfo :order="selectedOrder" />
-            </section>
-            <section
-              v-if="selectedOrder.review"
-              class="m-orders-detail-section"
-            >
-              <h3>
-                顾客评价<span>{{ selectedOrder.review.rating }} / 5 星</span>
-              </h3>
-              <p class="m-orders-review">
-                {{ selectedOrder.review.content || "顾客留下了星级评价。" }}
+              <p v-if="selectedOrder.paid_at" class="m-orders-help">
+                付款确认：{{ formatTime(selectedOrder.paid_at) }}
               </p>
-            </section>
-          </div>
-          <footer
-            class="m-orders-drawer-footer"
-            v-if="
-              mainActions(selectedOrder).length ||
-              moreActions(selectedOrder).length ||
-              canAct(selectedOrder, 'complete')
-            "
-          >
-            <div
-              v-if="selectedOrder.cancel_requested"
-              class="m-orders-cancel-notice"
-            >
-              <strong>顾客申请取消</strong>
-              <p>{{ selectedOrder.cancel_reason || "未填写原因" }}</p>
-            </div>
-            <div
-              v-if="mainActions(selectedOrder).length"
-              class="m-orders-actions"
-            >
-              <button
-                v-for="item in mainActions(selectedOrder)"
-                :key="item.value"
-                class="m-orders-button"
-                :class="item.primary ? 'primary' : 'secondary'"
-                :disabled="!!busy || !canAct(selectedOrder, item.value)"
-                @click="requestAction(selectedOrder, item.value)"
+              <section
+                v-if="selectedOrder.review"
+                class="m-orders-detail-section"
               >
-                <component
-                  :is="actionIcon(item.value)"
-                  v-if="actionIcon(item.value)"
-                  :size="17"
-                />{{
-                  busy === String(selectedOrder.id) ? "正在处理…" : item.label
-                }}
-              </button>
-            </div>
-            <details
-              v-if="moreActions(selectedOrder).length"
-              class="m-order-more"
-            >
-              <summary>更多操作<span>取消、退款与配送问题</span></summary>
-              <div class="m-order-more-actions">
-                <button
-                  v-for="item in moreActions(selectedOrder)"
-                  :key="item.value"
-                  class="m-orders-button secondary"
-                  :disabled="!!busy || !canAct(selectedOrder, item.value)"
-                  @click="requestAction(selectedOrder, item.value)"
-                >
-                  {{ item.label }}
-                </button>
-              </div>
+                <h3>
+                  顾客评价<span>{{ selectedOrder.review.rating }} / 5 星</span>
+                </h3>
+                <p class="m-orders-review">
+                  {{ selectedOrder.review.content || "顾客留下了星级评价。" }}
+                </p>
+              </section>
             </details>
-            <form
-              v-if="canAct(selectedOrder, 'complete')"
-              class="m-orders-pickup"
-              @submit.prevent="performAction(selectedOrder, 'complete')"
-            >
-              <label for="detail-pickup-code"
-                >核验顾客的 8 位{{
-                  isDelivery(selectedOrder) ? "收餐码" : "取餐码"
-                }}</label
-              >
-              <div>
-                <input
-                  id="detail-pickup-code"
-                  v-model="pickupCodes[selectedOrder.id]"
-                  class="pickup-code-input"
-                  inputmode="numeric"
-                  pattern="[0-9]{8}"
-                  maxlength="8"
-                  minlength="8"
-                  :placeholder="
-                    isDelivery(selectedOrder) ? '输入收餐码' : '输入取餐码'
-                  "
-                  required
-                  autocomplete="off"
-                  :disabled="!!busy"
-                /><button class="m-orders-button primary" :disabled="!!busy">
-                  <CheckCircle2 :size="17" />核销并完成
-                </button>
-              </div>
-            </form>
-          </footer>
+          </div>
         </div>
       </dialog>
       <dialog
@@ -3097,6 +3086,120 @@ onUnmounted(() => {
   border-top: 1px solid #e9dac4;
   background: #fffcf6;
 }
+.m-orders-drawer .m-orders-drawer-header {
+  padding: 18px 22px;
+}
+.m-orders-drawer .m-orders-drawer-header h2 {
+  margin: 0;
+  font-size: 20px;
+}
+.m-orders-drawer .m-orders-drawer-body {
+  padding: 18px 22px 24px;
+}
+.m-orders-drawer .m-orders-detail-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  text-align: left;
+  margin-bottom: 18px;
+}
+.m-orders-drawer .m-orders-detail-status > p {
+  margin: 0;
+  font-size: 13px;
+  color: #75614e;
+}
+.m-order-meal-check h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  margin: 0;
+  color: #71533d;
+}
+.m-order-meal-check h3 > span {
+  margin-left: auto;
+}
+.m-order-meal-check .m-orders-card-items {
+  padding: 12px 0;
+}
+.m-order-meal-check .m-orders-item {
+  align-items: flex-start;
+}
+.m-order-meal-check .m-orders-item > div {
+  gap: 3px;
+}
+.m-order-meal-check .m-orders-item > div > strong {
+  font-size: 18px;
+  color: #473325;
+}
+.m-order-meal-check .m-orders-item > div > span,
+.m-order-meal-check .m-orders-item > strong {
+  font-size: 13px;
+  color: #765e4a;
+}
+.m-order-meal-check .m-orders-item-quantity {
+  font-size: 18px;
+  font-weight: 700;
+  color: #473325;
+}
+.m-order-meal-check :deep(.portion-order-summary) {
+  font-size: 14px;
+  margin-top: 3px;
+  line-height: 1.6;
+}
+.m-order-meal-check .m-orders-note,
+.m-order-meal-check .m-orders-note > strong {
+  font-size: 14px;
+}
+.m-order-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid #e9d9c5;
+  padding-top: 14px;
+  font-size: 15px;
+  color: #684b35;
+}
+.m-order-total strong {
+  font-size: 26px;
+  color: #a55022;
+}
+.m-order-payment-check :deep(.merchant-payment-info strong) {
+  font-size: 15px;
+}
+.m-order-payment-check :deep(.merchant-payment-info p) {
+  font-size: 13px;
+}
+.m-orders-drawer-body > .m-orders-drawer-footer {
+  padding: 0 0 16px;
+  margin: 0;
+  background: transparent;
+  border-top: 0;
+}
+.m-order-records > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 48px;
+  padding: 8px 0;
+  cursor: pointer;
+  font-size: 14px;
+  color: #72553e;
+  list-style: none;
+}
+.m-order-records > summary::-webkit-details-marker {
+  display: none;
+}
+.m-order-records[open] > summary > svg {
+  transform: rotate(90deg);
+}
+.m-order-records > summary:focus-visible {
+  outline: 3px solid #ae5a28;
+  outline-offset: 3px;
+}
 .m-orders-review {
   font-size: 13px;
   line-height: 1.9;
@@ -3337,6 +3440,412 @@ onUnmounted(() => {
 @media (prefers-reduced-motion: reduce) {
   .m-orders-spinning {
     animation: none;
+  }
+}
+
+/* The working queue stays readable on a phone; complex actions live in the drawer. */
+.m-orders-accessible-heading {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.m-simple-orders {
+  max-width: 1120px;
+  margin: 0 auto;
+}
+.m-simple-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+.m-simple-heading h2 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 750;
+  letter-spacing: -0.4px;
+}
+.m-simple-heading .m-orders-refresh {
+  font-size: 14px !important;
+  padding: 8px 12px;
+}
+.m-primary-stages {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.m-primary-stages button {
+  min-height: 56px;
+  border: 1px solid #e4d3bd;
+  border-radius: 14px;
+  padding: 10px 8px;
+  background: #fffaf2;
+  color: #654b37;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.m-primary-stages button span {
+  font-size: 17px;
+  font-weight: 700;
+}
+.m-primary-stages button strong {
+  font-size: 20px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  min-width: 24px;
+}
+.m-primary-stages button[aria-pressed="true"] {
+  background: #a94e20;
+  color: white;
+  border-color: #a94e20;
+  box-shadow: 0 3px 9px #9b461b1a;
+}
+.m-urgent-queue {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+}
+.m-urgent-queue button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid #ebbaa4;
+  padding: 10px 12px;
+  color: #8c351d;
+  background: #fff0e7;
+  border-radius: 10px;
+  text-align: left;
+  font-size: 14px !important;
+}
+.m-urgent-queue button > span:last-of-type {
+  margin-left: auto;
+}
+.m-urgent-queue button > svg:last-child {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.m-urgent-queue button[aria-pressed="true"] {
+  border: 2px solid #ae4923;
+}
+.m-simple-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+}
+.m-simple-tools button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 44px;
+  padding: 7px 0;
+  color: #72533d;
+  border: 0;
+  background: transparent;
+  font-size: 14px;
+}
+.m-simple-search-panel {
+  padding: 14px;
+  border: 1px solid #e7d7c3;
+  border-radius: 12px;
+  background: #fff8ee;
+  margin: 4px 0 12px;
+}
+.m-simple-search-panel .m-orders-search {
+  min-height: 46px;
+  margin-bottom: 12px;
+}
+.m-simple-search-panel .m-orders-tabs {
+  flex-wrap: wrap;
+  overflow: visible;
+}
+.m-simple-list-label {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  margin: 10px 0 12px;
+}
+.m-simple-list-label h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+}
+.m-simple-list-label > span {
+  color: #7a6250;
+  font-size: 13px;
+}
+.m-simple-orders .m-orders-grid {
+  gap: 16px;
+}
+.m-simple-orders .m-orders-card {
+  padding: 20px;
+  border-color: #e4d5c1;
+  border-radius: 16px;
+}
+.m-simple-orders .m-orders-needs-attention {
+  border-color: #d69670;
+}
+.m-simple-orders .order-number {
+  font-size: 14px;
+  color: #4f3829;
+}
+.m-simple-orders .m-orders-card-top p {
+  font-size: 13px;
+  color: #796451;
+  line-height: 1.5;
+}
+.m-simple-orders .merchant-order-status {
+  font-size: 13px;
+  font-weight: 600;
+}
+.m-simple-orders .m-orders-card-items {
+  padding: 14px 0 10px;
+  gap: 14px;
+}
+.m-simple-dish-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.m-simple-dish-title strong {
+  font-size: 20px;
+  font-weight: 750;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.m-simple-dish-title b {
+  flex-shrink: 0;
+  font-size: 19px;
+  color: #934316;
+}
+.m-simple-dish :deep(.portion-order-summary) {
+  font-size: 14px;
+  line-height: 1.7;
+  color: #664831;
+}
+.m-simple-orders .m-orders-note {
+  font-size: 14px;
+  padding: 9px 10px;
+  margin: 0 0 8px;
+}
+.m-simple-orders .m-orders-note > strong {
+  font-size: 12px;
+}
+.m-simple-orders .m-orders-countdown {
+  font-size: 14px;
+  color: #855022;
+  margin: 8px 0 0;
+}
+.m-simple-orders .m-orders-countdown.urgent {
+  color: #a6331c;
+  font-weight: 650;
+}
+.m-simple-orders .prep-accept {
+  margin-top: 4px;
+  padding-top: 0;
+  border: 0;
+}
+.m-simple-orders .prep-accept summary {
+  min-height: 40px;
+  font-size: 14px;
+  gap: 8px;
+}
+.m-simple-orders .prep-accept summary span {
+  font-size: 12px;
+}
+.m-simple-orders .m-prep-status {
+  margin: 8px 0;
+  padding: 10px;
+}
+.m-simple-orders .m-prep-status p {
+  font-size: 14px;
+}
+.m-simple-orders .m-orders-warning {
+  font-size: 14px;
+  padding: 10px;
+}
+.m-simple-orders .m-orders-card-summary {
+  padding: 8px 0 12px;
+}
+.m-simple-orders .paid-tag {
+  margin-left: 0;
+  color: #6b4b31;
+  font-size: 13px;
+}
+.m-simple-orders .paid-tag.paid {
+  color: #476032;
+}
+.m-simple-orders .m-orders-card-summary small {
+  font-size: 12px;
+  color: #705942;
+}
+.m-simple-orders .m-orders-card-summary > strong {
+  font-size: 21px;
+  color: #91481d;
+}
+.m-simple-orders .m-simple-primary {
+  min-height: 54px;
+  font-size: 19px !important;
+  font-weight: 750;
+  border-radius: 11px;
+  background: #b55523;
+  border-color: #b55523;
+}
+.m-simple-orders .m-simple-primary:hover:not(:disabled) {
+  background: #984419;
+}
+.m-simple-orders .m-orders-detail-link {
+  font-size: 14px !important;
+  min-height: 54px;
+  width: auto;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  color: #70513b;
+}
+.m-simple-orders .m-orders-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 10px;
+}
+.m-simple-orders .m-simple-primary {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+.m-simple-orders .m-orders-cancel-notice {
+  margin: 12px 0 0;
+  font-size: 15px;
+  color: #8c351d;
+  background: #ffeadc;
+}
+.m-simple-orders .m-orders-cancel-notice p {
+  font-size: 14px;
+}
+.m-simple-destination {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 0;
+  color: #72543a;
+  font-size: 14px;
+}
+.m-simple-destination > svg {
+  flex-shrink: 0;
+}
+.m-simple-destination > span {
+  flex: 1;
+  min-width: 0;
+}
+.m-simple-destination > span > span {
+  display: block;
+  margin-top: 3px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.m-simple-destination a {
+  display: grid;
+  place-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: 9px;
+  background: #f5e7d3;
+  color: #794f2b;
+}
+.m-simple-orders .m-order-followup {
+  margin-top: 7px;
+}
+.m-simple-orders .m-order-followup > span,
+.m-simple-orders .m-order-followup p {
+  font-size: 14px;
+}
+.m-history-more {
+  width: 100%;
+  margin-top: 18px;
+}
+.m-simple-orders :is(button, input):focus-visible,
+.m-orders-drawer :is(button, input, textarea):focus-visible,
+.m-orders-confirm :is(button, input, textarea):focus-visible {
+  outline: 3px solid #ae5a28;
+  outline-offset: 3px;
+}
+.m-drawer-order-number {
+  margin: 7px 0 0;
+  font-size: 14px;
+  color: #6f5642;
+  overflow-wrap: anywhere;
+}
+.m-orders-drawer-footer {
+  border-top: 0;
+  border-bottom: 1px solid #e9d9c5;
+  margin-top: 0;
+}
+.m-orders-drawer .m-orders-button,
+.m-orders-confirm .m-orders-button {
+  font-size: 15px !important;
+  min-height: 48px;
+}
+.m-orders-drawer .m-orders-pickup label {
+  font-size: 15px;
+  color: #654932;
+}
+.m-orders-drawer .m-order-more summary {
+  font-size: 14px;
+}
+.m-orders-drawer .m-order-more summary span {
+  font-size: 12px;
+}
+@media (max-width: 600px) {
+  .m-simple-heading h2 {
+    font-size: 20px;
+  }
+  .m-primary-stages button {
+    min-height: 52px;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 10px 5px;
+    border-radius: 10px;
+  }
+  .m-primary-stages button span {
+    font-size: 16px;
+  }
+  .m-primary-stages button strong {
+    font-size: 19px;
+  }
+  .m-simple-orders .m-orders-card {
+    padding: 16px;
+  }
+  .m-simple-dish-title strong {
+    font-size: 19px;
+  }
+  .m-simple-orders .m-orders-empty {
+    padding: 35px 15px;
+  }
+  .m-orders-drawer .m-orders-pickup > div {
+    flex-wrap: wrap;
+  }
+  .m-orders-drawer .m-orders-pickup .m-orders-button {
+    width: 100%;
+  }
+  .m-orders-drawer .m-order-more-actions {
+    grid-template-columns: 1fr;
   }
 }
 </style>
