@@ -228,7 +228,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssh-server 
     && usermod -p '*' yanhuo_backup && mkdir -p /home/backup/repository \\
     && chown root:root /home/backup && chmod 755 /home/backup \\
     && chown yanhuo_backup:yanhuo_backup /home/backup/repository
-CMD ["/usr/sbin/sshd", "-D", "-e", "-f", "/fixture/sshd_config"]
+CMD ["/bin/sh", "-ec", "install -o root -g root -m 0644 /fixture/client.pub /etc/ssh/authorized_keys/yanhuo_backup && exec /usr/sbin/sshd -D -e -f /fixture/sshd_config"]
 '''
 
 
@@ -256,7 +256,7 @@ PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin no
 UsePAM no
-AuthorizedKeysFile /fixture/client.pub
+AuthorizedKeysFile /etc/ssh/authorized_keys/%u
 StrictModes yes
 AllowUsers yanhuo_backup
 Subsystem sftp internal-sftp
@@ -266,8 +266,10 @@ Match User yanhuo_backup
     AllowTcpForwarding no
     X11Forwarding no
 ''')
-    # OpenSSH reads authorized_keys after changing to the target user. Only the
-    # public key needs to be readable; private host/client keys remain 0600.
+    # The host UID is unrelated to the SFTP account (notably on GitHub runners).
+    # The container installs this public key as root-owned before starting sshd,
+    # so StrictModes stays enabled without changing host ownership or permissions.
+    # Private host/client keys remain 0600 on the read-only fixture mount.
     files.chmod(0o755)
     (files / 'client.pub').chmod(0o644)
     volume = 'yanhuo-backup-sftp-' + run_id
