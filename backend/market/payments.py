@@ -9,6 +9,7 @@ import secrets
 from datetime import timedelta
 
 from django.db import transaction
+from django.db.models import Sum
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -28,11 +29,12 @@ def readiness(merchant):
     return get_merchant_payment_readiness(merchant)
 
 
-def _order(order_id, user=None, merchant=False):
+def _order(order_id, user=None, merchant=False, permission=None):
     query = Order.objects.select_for_update(of=('self',)).select_related('stall__merchant')
     if user is not None:
         if merchant:
-            if not user.is_staff: query = query.filter(stall__merchant__user=user)
+            from .permissions import owned_or_permitted
+            query = owned_or_permitted(query, user, permission or 'market.add_paymentrefund')
         else: query = query.filter(user=user)
     try: return query.get(pk=order_id)
     except Order.DoesNotExist: raise BusinessError('订单不存在。', 'not_found', status=404)
@@ -103,7 +105,10 @@ def _apply_payment(order, payment, data):
         if (payment.transaction_id and payment.transaction_id != provider_id
                 or PaymentAttempt.objects.filter(transaction_id=provider_id).exclude(pk=payment.pk).exists()):
             raise _invalid()
-        if payment.status == 'paid': return
+        if payment.status == 'paid':
+            payment.error_code = payment.error_message = ''
+            payment.save(update_fields=['last_checked_at', 'error_code', 'error_message'])
+            return
         expected_status = 'pending_payment' if order.fulfillment_type == 'delivery' else 'ready'
         contradictory = (payment.status == 'closed' or order.status != expected_status
             or order.payment_status != 'unpaid' or order.cancel_requested
@@ -147,7 +152,8 @@ def _apply_payment(order, payment, data):
         payment.status, payment.error_code, payment.error_message = 'closed', '', ''
         payment.code_url = payment.h5_url = ''
         payment.save()
-        if order.payment_status == 'unpaid' and not order.payment_review_required:
+        if (order.payment_status == 'unpaid' and not order.payment_review_required
+                and not order.payments.exclude(pk=payment.pk).filter(status__in=PaymentAttempt.ACTIVE_STATUSES + ('paid',)).exists()):
             order.payment_method = 'wechat' if order.fulfillment_type == 'delivery' else 'offline'
             order.save(update_fields=['payment_method'])
     elif state in ('NOTPAY', 'USERPAYING', 'ACCEPT'):
@@ -156,23 +162,39 @@ def _apply_payment(order, payment, data):
         payment.save()
     elif state == 'REFUND':
         # Refund totals are established by the separate refund API, not this coarse trade state.
-        if not PaymentRefund.objects.filter(payment=payment).exists():
+        if payment.status != 'paid':
+            # A lost original callback can be recovered from the signed original
+            # capture facts included in a REFUND response. The refund itself still
+            # needs a separate full-amount query; never treat REFUND as refunded.
+            facts = {**data, 'trade_state': 'SUCCESS'}
+            _payment_identity(payment, facts)
+            provider_id = data.get('transaction_id')
+            if (not isinstance(provider_id, str) or not 1 <= len(provider_id) <= 64
+                    or payment.transaction_id and payment.transaction_id != provider_id
+                    or PaymentAttempt.objects.filter(transaction_id=provider_id).exclude(pk=payment.pk).exists()):
+                raise _invalid()
+            payment.status, payment.transaction_id, payment.paid_at = 'paid', provider_id, _timestamp(data.get('success_time'))
+            payment.code_url = payment.h5_url = ''
+            payment.save()
+        if not PaymentRefund.objects.filter(payment=payment, status__in=PaymentRefund.ACTIVE_STATUSES + ('success',)).exists():
             order.payment_review_required = True
             order.save(update_fields=['payment_review_required'])
             payment.error_code = 'EXTERNAL_REFUND_REQUIRES_REVIEW'
             payment.error_message = '检测到商户平台退款，请联系运营核对退款记录。'
             payment.save()
+        else:
+            payment.save(update_fields=['last_checked_at'])
     else:
         raise _invalid('微信支付状态暂未确认，请稍后重新查询。')
 
 
-def _drive_payment(order_id, user=None, *, operation='query', payer_client_ip=None):
+def _drive_payment(order_id, user=None, *, operation='query', payer_client_ip=None, payment_id=None):
     """Lease a stable intent, perform bounded HTTP outside SQL, then apply facts."""
     with transaction.atomic():
         order = _order(order_id, user)
         if operation == 'close' and order.payment_review_required:
             raise BusinessError('此订单存在支付异常，请联系商家与运营核对。', 'payment_requires_review')
-        payment = order.payments.exclude(status='closed').first()
+        payment = order.payments.filter(pk=payment_id).first() if payment_id else order.payments.exclude(status='closed').first()
         if not payment: return order
         if operation == 'create' and (payment.status != 'creating' or payment.last_checked_at is not None): return order
         if payment.request_in_flight_until and payment.request_in_flight_until > timezone.now(): return order
@@ -293,9 +315,9 @@ def close_payment(order_id, user):
     return _drive_payment(order_id, user, operation='close')
 
 
-def _apply_refund(order, refund, data, *, notification=False):
+def _validate_refund(order, refund, data, *, notification=False):
     payment = refund.payment
-    if refund.mode != payment.mode or payment.mode != order.mode:
+    if refund.mode != payment.mode or payment.mode != order.mode or refund.mchid and refund.mchid != payment.mchid:
         raise _invalid('退款、付款与订单模式不一致，请联系运营核对。')
     amount = data.get('amount') if isinstance(data, dict) else None
     # Query responses do not include mchid/appid; they are signed under the snapshotted client.
@@ -316,8 +338,62 @@ def _apply_refund(order, refund, data, *, notification=False):
         raise _invalid()
     state = data.get('refund_status' if notification else 'status')
     if state not in ('SUCCESS', 'PROCESSING', 'CLOSED', 'ABNORMAL'): raise _invalid()
+    if state == 'SUCCESS':
+        _timestamp(data.get('success_time'))
+        refunded = PaymentRefund.objects.filter(payment=payment, status='success').exclude(pk=refund.pk).aggregate(
+            total=Sum('amount_cents'))['total'] or 0
+        if refunded + refund.amount_cents > payment.amount_cents:
+            raise _invalid('已确认退款金额将超过原付款，必须核对所有退款流水。')
+    return state, provider_id
+
+
+def _refresh_money_status(order):
+    """Derive money from every captured payment, never just the newest attempt."""
+    payments = list(order.payments.filter(status='paid'))
+    refunded = {row['payment_id']: row['total'] for row in PaymentRefund.objects.filter(order=order, status='success').values('payment_id').annotate(total=Sum('amount_cents'))}
+    outstanding = sum(max(0, p.amount_cents - refunded.get(p.pk, 0)) for p in payments)
+    active = PaymentRefund.objects.filter(order=order, status__in=PaymentRefund.ACTIVE_STATUSES).exists()
+    if order.payment_method == 'offline' and order.paid_at:
+        # An anomalous extra online charge must not erase the original cash receipt.
+        order.payment_status = 'refunding' if active else 'paid'
+    elif payments:
+        order.payment_status = 'refunding' if active else 'paid' if outstanding else 'refunded'
+    return outstanding
+
+
+def _resolve_closed_refunds(order, payment):
+    """Full verified success resolves CLOSED even if that closure arrived later."""
+    from .financial import evidence
+    successes = list(PaymentRefund.objects.filter(payment=payment, status='success'))
+    if sum(refund.amount_cents for refund in successes) != payment.amount_cents:
+        return
+    for previous in PaymentRefund.objects.filter(payment=payment, status='closed', resolved_at__isnull=True):
+        previous.resolved_at = timezone.now()
+        previous.save(update_fields=['resolved_at'])
+        evidence(order, 'refund_superseded', 'resolved', '同付款已核验全额退款成功', payment=payment,
+            refund=previous, facts={'successful_refund_ids': [str(refund.pk) for refund in successes],
+                'amount_cents': payment.amount_cents})
+
+
+def _cancel_fully_refunded(order):
+    if order.payment_status == 'refunded' and order.status not in ('completed', 'cancelled', 'rejected'):
+        if order.status in ('pending', 'pending_payment'):
+            from .services import release_inventory
+            release_inventory(order)
+        order.status, order.cancel_requested = 'cancelled', False
+        order.cancel_reason = '商家已全额原路退款'
+
+
+def _apply_refund(order, refund, data, *, notification=False):
+    from .financial import evidence, invalidate_financial_cache, refund_facts
+    previous_observation = (refund.status, refund.refund_id, refund.error_code, refund.resolved_at)
+    state, provider_id = _validate_refund(order, refund, data, notification=notification)
     if refund.status == 'success':
         if state != 'SUCCESS': raise _invalid()
+        refund.last_checked_at = timezone.now()
+        refund.save(update_fields=['last_checked_at'])
+        _resolve_closed_refunds(order, refund.payment)
+        invalidate_financial_cache(order)
         return
     if (refund.status == 'closed' and state in ('PROCESSING', 'ABNORMAL')
             or refund.status == 'abnormal' and state == 'PROCESSING'):
@@ -328,35 +404,51 @@ def _apply_refund(order, refund, data, *, notification=False):
     refund.error_code = refund.error_message = ''
     if state == 'SUCCESS':
         refund.status, refund.completed_at = 'success', _timestamp(data.get('success_time'))
-        order.payment_status = 'refunded'
-        if order.status == 'ready':
-            order.status, order.cancel_requested = 'cancelled', False
-            order.cancel_reason = '商家已全额原路退款'
+        refund.resolved_at = timezone.now()
+        refund.save()
+        # Keep closed provider records intact. A verified full replacement resolves
+        # their local follow-up obligation without rewriting CLOSED as SUCCESS.
+        _resolve_closed_refunds(order, refund.payment)
+        _refresh_money_status(order)
+        _cancel_fully_refunded(order)
         # Prepared food is not restocked; completed pickups remain completed.
-        order.save(update_fields=['payment_status', 'status', 'cancel_requested', 'cancel_reason'])
+        order.save(update_fields=['payment_status', 'status', 'cancel_requested', 'cancel_reason', 'inventory_released'])
         audit(None, 'wechat_refund_succeeded', order.pk, mode=order.mode, refund_id=str(refund.pk))
     elif state == 'PROCESSING':
         refund.status, order.payment_status = 'processing', 'refunding'
         order.save(update_fields=['payment_status'])
     elif state == 'CLOSED':
-        refund.status, order.payment_status = 'closed', 'paid'
+        refund.status = 'closed'
+        refund.save()
+        _resolve_closed_refunds(order, refund.payment)
+        refund.refresh_from_db()
+        _refresh_money_status(order)
+        _cancel_fully_refunded(order)
         refund.error_message = '微信已关闭该退款申请，请联系商家核对。'
-        order.save(update_fields=['payment_status'])
+        order.save(update_fields=['payment_status', 'status', 'cancel_requested', 'cancel_reason', 'inventory_released'])
     else:
         refund.status, order.payment_status = 'abnormal', 'refunding'
         refund.error_message = ('模拟退款处理异常，可继续演练退款成功；不会调用微信。' if refund.mode == 'simulation'
             else '微信退款异常，请商家在微信商户平台处理并重新查询。')
         order.save(update_fields=['payment_status'])
     refund.save()
+    if previous_observation != (refund.status, refund.refund_id, refund.error_code, refund.resolved_at):
+        evidence(order, 'refund_observed', 'verified', '已核验支付服务方退款结果', payment=refund.payment,
+            refund=refund, facts=refund_facts(refund.payment, data))
+    invalidate_financial_cache(order)
 
 
 def queue_refund(order, actor, reason):
     """Called with Order locked: commit compensation even if gateway config is down."""
-    existing = PaymentRefund.objects.filter(order=order).first()
-    if existing: return existing
-    payment = order.payments.filter(status='paid').first()
+    successful = {row['payment_id']: row['total'] for row in PaymentRefund.objects.filter(order=order, status='success').values('payment_id').annotate(total=Sum('amount_cents'))}
+    outstanding = [p for p in order.payments.filter(status='paid') if successful.get(p.pk, 0) < p.amount_cents]
+    if len(outstanding) > 1:
+        raise BusinessError('存在多笔未结清付款，须由运营逐笔核验补偿。', 'payment_requires_review')
+    payment = outstanding[0] if outstanding else None
     if not payment or not payment.transaction_id:
         raise BusinessError('找不到可退款的微信支付记录，请联系运营核对。', 'refund_unavailable')
+    existing = PaymentRefund.objects.filter(payment=payment).first()
+    if existing: return existing
     refund = PaymentRefund.objects.create(payment=payment, order=order, requested_by=actor,
         mode=payment.mode,
         out_refund_no='YHR' + secrets.token_hex(20).upper(), amount_cents=payment.amount_cents, reason=reason)
@@ -364,16 +456,19 @@ def queue_refund(order, actor, reason):
     order.save(update_fields=['payment_status'])
     audit(actor, 'wechat_refund_requested', order.pk, mode=order.mode, refund_id=str(refund.pk), amount_cents=refund.amount_cents,
         initiator='user' if actor else 'system')
+    from .financial import invalidate_financial_cache
+    invalidate_financial_cache(order)
     return refund
 
 
-def process_refund(order_id):
+def process_refund(order_id, refund_id=None):
     # Lease only the external operation. No database lock is held across HTTP.
     # A crash keeps a stable refund number; the worker queries it after lease expiry.
     with transaction.atomic():
         order = _order(order_id)
-        refund = PaymentRefund.objects.select_related('payment').filter(order=order).first()
-        if not refund or refund.status == 'success': return order
+        query = PaymentRefund.objects.select_related('payment').filter(order=order)
+        refund = query.filter(pk=refund_id).first() if refund_id else query.filter(resolved_at__isnull=True).first() or query.first()
+        if not refund or refund.status == 'success' or refund.resolved_at is not None: return order
         if refund.request_in_flight_until and refund.request_in_flight_until > timezone.now(): return order
         lease = timezone.now()+timedelta(seconds=60)
         refund.request_in_flight_until = lease
@@ -413,10 +508,20 @@ def process_refund(order_id):
 def sync_payment(order_id, user=None):
     with transaction.atomic():
         order = _order(order_id, user)
-        refund = PaymentRefund.objects.filter(order=order).first()
-    if refund:
-        return process_refund(order_id) if refund.status != 'success' else order
-    return _drive_payment(order_id, user)
+        refunds = list(PaymentRefund.objects.filter(order=order, resolved_at__isnull=True).exclude(status='success').values_list('pk', flat=True))
+        payment_query = order.payments.filter(status__in=PaymentAttempt.ACTIVE_STATUSES)
+        if order.payment_review_required:
+            payment_query = order.payments.exclude(status='closed')
+        payments = list(payment_query.values_list('pk', flat=True))
+    for refund_id in refunds:
+        order = process_refund(order_id, refund_id)
+    for payment_id in payments:
+        order = _drive_payment(order_id, user, payment_id=payment_id)
+    if not refunds and not payments:
+        # Paid orders can reveal an external refund; only a verified operator
+        # resolution can then clear the financial-review hold.
+        order = _drive_payment(order_id, user)
+    return order
 
 
 def request_refund(order_id, user, reason, simulation_outcome=None):
@@ -432,7 +537,9 @@ def request_refund(order_id, user, reason, simulation_outcome=None):
             require(order.stall)
             if order.mode != 'simulation':
                 raise BusinessError('此订单不是模拟订单。', 'simulation_unavailable')
-        existing = PaymentRefund.objects.filter(order=order).select_related('payment').first()
+        existing = PaymentRefund.objects.filter(order=order, resolved_at__isnull=True).exclude(status='success').select_related('payment').first()
+        if not existing and order.payment_status == 'refunded':
+            existing = PaymentRefund.objects.filter(order=order, status='success').first()
         if not existing:
             refundable = ('pending', 'preparing', 'ready', 'delivering', 'arrived', 'completed') if order.fulfillment_type == 'delivery' else ('ready', 'completed')
             if (order.status not in refundable or order.payment_method != 'wechat'
@@ -448,7 +555,7 @@ def request_refund(order_id, user, reason, simulation_outcome=None):
                     release_inventory(order)
                 order.status, order.cancel_requested, order.cancel_reason = 'cancelled', False, reason
                 order.save()
-    return process_refund(order_id)
+    return process_refund(order_id, existing.pk if existing else refund.pk)
 
 
 def handle_notification(account_key, headers, body):
@@ -468,7 +575,7 @@ def handle_notification(account_key, headers, body):
             _apply_payment(order, payment, resource)
     elif event_type in ('REFUND.SUCCESS', 'REFUND.ABNORMAL', 'REFUND.CLOSED'):
         candidate = PaymentRefund.objects.filter(mode='live', order__mode='live', payment__mode='live', payment__account_key=account_key,
-            out_refund_no=resource.get('out_refund_no')).select_related('payment').first()
+            mchid=client.mchid, out_refund_no=resource.get('out_refund_no')).select_related('payment').first()
         if not candidate: raise _invalid('退款通知找不到对应订单。')
         with transaction.atomic():
             order = _order(candidate.order_id)

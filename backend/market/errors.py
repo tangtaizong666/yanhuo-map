@@ -1,4 +1,5 @@
 import logging
+from django.core.exceptions import RequestDataTooBig
 from rest_framework.exceptions import APIException, NotAuthenticated
 from rest_framework.views import exception_handler as default_handler
 from rest_framework.response import Response
@@ -14,6 +15,8 @@ class BusinessError(APIException):
         self.detail = {'detail': detail, 'code': code, **extra}
 
 def exception_handler(exc, context):
+    if isinstance(exc, RequestDataTooBig):
+        return Response({'detail': '请求内容过大，请减少提交内容。', 'code': 'request_too_large'}, status=413)
     response = default_handler(exc, context)
     if response is not None:
         if not isinstance(response.data, dict) or 'detail' not in response.data:

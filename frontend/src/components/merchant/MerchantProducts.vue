@@ -12,10 +12,12 @@ import {
   Upload,
   X,
 } from "lucide-vue-next";
-import { api, money } from "../../lib/api";
+import { api, ApiError, money } from "../../lib/api";
 import { notify } from "../../lib/notify";
 import MerchantRestock from "./MerchantRestock.vue";
 import MerchantInventoryCorrection from "./MerchantInventoryCorrection.vue";
+import { readStorage, writeStorage, removeStorage } from "../../lib/storage";
+import { newRequestKey } from "../../lib/engagement";
 import { useSession } from "../../stores/session";
 const session = useSession();
 
@@ -142,6 +144,16 @@ const blank = (): Draft => ({
   is_active: true,
   taste_options: [],
 });
+type Creation = { body: Record<string, any>; draft: Draft };
+const creationKey = `merchant-product-create:${session.user?.id}:${props.stall.id}`;
+const pendingCreation = ref<Creation | null>(null);
+try {
+  const saved = JSON.parse(readStorage(creationKey, "session") || "null");
+  if (saved?.body?.idempotency_key && saved?.draft?.name)
+    pendingCreation.value = saved;
+} catch {
+  /* Ignore corrupt non-business drafts. */
+}
 const form = reactive<Draft>(blank());
 let original = blank();
 watch(
@@ -171,7 +183,7 @@ function startEditor(product?: Product) {
             choices: group.choices.join("、"),
           })),
         }
-      : blank(),
+      : pendingCreation.value?.draft || blank(),
   );
   original = JSON.parse(JSON.stringify(form));
   formError.value = "";
@@ -304,6 +316,7 @@ async function uploadImage(event: Event) {
 async function saveEditor(continueAdding = false) {
   if (saving.value || uploading.value) return;
   formError.value = "";
+  const recovering = editingId.value == null && !!pendingCreation.value;
   try {
     if (!form.name.trim()) throw new Error("请填写商品名称。");
     const tasteOptions = tasteValues(form.taste_options);
@@ -340,13 +353,39 @@ async function saveEditor(continueAdding = false) {
       closeEditor();
       return;
     }
+    if (editingId.value == null && !pendingCreation.value) {
+      const record = {
+        body: { ...data, idempotency_key: newRequestKey("product") },
+        draft: JSON.parse(JSON.stringify(form)),
+      };
+      if (!writeStorage(creationKey, JSON.stringify(record), "session"))
+        throw new Error(
+          "浏览器无法保存新增重试记录，暂未提交。请允许本站保存数据后重试。",
+        );
+      pendingCreation.value = record;
+    }
     saving.value = true;
-    await api(
+    const result = await api<Product>(
       editingId.value == null
         ? `/merchant/stalls/${props.stall.id}/products`
         : `/merchant/products/${editingId.value}`,
-      { method: editingId.value == null ? "POST" : "PATCH", body: data },
+      {
+        method: editingId.value == null ? "POST" : "PATCH",
+        body: editingId.value == null ? pendingCreation.value!.body : data,
+      },
     );
+    if (
+      editingId.value == null &&
+      (!result ||
+        !Number.isSafeInteger(result.id) ||
+        result.name !== pendingCreation.value!.body.name ||
+        result.price_cents !== pendingCreation.value!.body.price_cents)
+    )
+      throw new Error("新增响应无法核对，请重试确认原结果。");
+    if (editingId.value == null) {
+      pendingCreation.value = null;
+      removeStorage(creationKey, "session");
+    }
     notify(
       editingId.value != null
         ? "商品资料已保存，线上可卖份数与供应状态未改变"
@@ -365,7 +404,18 @@ async function saveEditor(continueAdding = false) {
       nameInput.value?.focus();
     } else closeEditor(true);
   } catch (error) {
-    formError.value = (error as Error).message;
+    if (
+      !recovering &&
+      error instanceof ApiError &&
+      (error.data?.submitted === false ||
+        [400, 403, 404, 422].includes(error.status))
+    ) {
+      pendingCreation.value = null;
+      removeStorage(creationKey, "session");
+    }
+    formError.value = pendingCreation.value
+      ? "新增结果尚未确认。请确认原请求结果；将使用相同标识和内容重试，不会重复新增。"
+      : (error as Error).message;
   } finally {
     saving.value = false;
   }
@@ -420,6 +470,14 @@ function tasteValues(groups: Draft["taste_options"]) {
         </button>
       </div>
     </div>
+    <p v-if="pendingCreation" class="m-info-banner" role="status">
+      上一笔新增商品结果待确认。<button
+        class="btn btn-secondary"
+        @click="startEditor()"
+      >
+        确认上一笔新增
+      </button>
+    </p>
     <MerchantRestock
       v-if="products.length"
       :key="`${session.user?.id}:${stall.id}`"
@@ -631,7 +689,13 @@ function tasteValues(groups: Draft["taste_options"]) {
           </button>
         </header>
         <form class="product-editor" @submit.prevent="saveEditor(false)">
-          <div class="editor-body">
+          <p v-if="pendingCreation && editingId == null" class="m-info-banner">
+            原请求已保留，请先确认新增结果，再修改商品资料。
+          </p>
+          <fieldset
+            class="editor-body"
+            :disabled="saving || (editingId == null && !!pendingCreation)"
+          >
             <label class="editor-field"
               >商品名称 <span>*</span
               ><input
@@ -799,10 +863,10 @@ function tasteValues(groups: Draft["taste_options"]) {
                 aria-label="上架销售" /><span class="switch-track"
                 ><span /></span
             ></label>
-            <p v-if="formError" class="editor-error" role="alert">
-              {{ formError }}
-            </p>
-          </div>
+          </fieldset>
+          <p v-if="formError" class="editor-error" role="alert">
+            {{ formError }}
+          </p>
           <footer>
             <button
               type="button"
@@ -812,7 +876,7 @@ function tasteValues(groups: Draft["taste_options"]) {
             >
               取消</button
             ><button
-              v-if="editingId == null"
+              v-if="editingId == null && !pendingCreation"
               type="button"
               class="catalog-outline"
               :disabled="saving || uploading"
@@ -825,7 +889,13 @@ function tasteValues(groups: Draft["taste_options"]) {
               :disabled="saving || uploading"
             >
               <Check :size="17" />{{
-                saving ? "保存中…" : editingId == null ? "添加商品" : "保存修改"
+                saving
+                  ? "保存中…"
+                  : pendingCreation && editingId == null
+                    ? "确认原新增结果"
+                    : editingId == null
+                      ? "添加商品"
+                      : "保存修改"
               }}
             </button>
           </footer>
@@ -1571,5 +1641,13 @@ function tasteValues(groups: Draft["taste_options"]) {
   .catalog-grid {
     gap: 13px;
   }
+}
+</style>
+
+<style scoped>
+fieldset.editor-body {
+  border: 0;
+  margin: 0;
+  min-width: 0;
 }
 </style>

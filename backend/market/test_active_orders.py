@@ -5,7 +5,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from .models import Order
-from .services import cancel_order, create_order, merchant_action
+from .services import cancel_order, create_order, expire_pending_orders, merchant_action
 from .tests import fixtures, payload
 
 
@@ -61,9 +61,12 @@ class ActiveOrderSummaryTests(TestCase):
         self.assertEqual(self.summary()['counts']['total'], 0)
         self.assertIsNone(self.summary()['order'])
 
-    def test_expired_pending_is_cancelled_and_releases_inventory_once(self):
+    def test_read_is_passive_and_worker_releases_expired_inventory_once(self):
         order = self.create()
         Order.objects.filter(pk=order.pk).update(expires_at=timezone.now()-timedelta(seconds=1))
+        self.assertEqual(self.summary()['order']['id'], str(order.pk))
+        self.assertEqual(expire_pending_orders(), 1)
+        self.assertEqual(expire_pending_orders(), 0)
         for _ in range(2):
             self.assertIsNone(self.summary()['order'])
         order.refresh_from_db()

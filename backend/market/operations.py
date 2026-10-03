@@ -20,6 +20,8 @@ from .models import Area, Feedback, MerchantApplication, MerchantProfile, Order,
 from .serializers import OrderSerializer, ProductSerializer
 from .services import audit
 from .views import csrf, merchant_stall, order_query, visible_stalls
+from .auth_limits import client_ip
+from .permissions import can_operate_all
 
 
 def fingerprint(value):
@@ -105,7 +107,7 @@ def submit_application(request):
 
 def review_application(application_id, actor, decision):
     """Admin-only approval creates a hidden, unverified shell, never trading access."""
-    if not actor.is_staff or not actor.has_perm('market.change_merchantapplication'):
+    if not can_operate_all(actor, 'market.change_merchantapplication'):
         raise BusinessError('没有审核权限。', 'forbidden', status=403)
     if decision not in ('approved', 'needs_changes', 'rejected'):
         raise BusinessError('审核操作无效。', status=400)
@@ -158,7 +160,7 @@ def restock(request, stall_id):
     digest = fingerprint(data['items'])
     with transaction.atomic():
         # Same stall -> ordered products lock order as checkout/product editing.
-        stall = merchant_stall(stall_id, request.user, locked=True)
+        stall = merchant_stall(stall_id, request.user, locked=True, permission='market.change_product')
         prior = RestockBatch.objects.filter(stall=stall, idempotency_key=data['idempotency_key']).first()
         if prior and prior.request_hash != digest:
             raise BusinessError('补货标识已用于不同内容，请重新确认。', 'idempotency_conflict')
@@ -218,7 +220,7 @@ class FeedbackThrottle(SimpleRateThrottle):
     scope = 'location_feedback'
     rate = '20/hour'
     def get_cache_key(self, request, view):
-        ident = f'user:{request.user.pk}' if request.user.is_authenticated else f'ip:{self.get_ident(request)}'
+        ident = f'user:{request.user.pk}' if request.user.is_authenticated else f'ip:{client_ip(request)}'
         return self.cache_format % {'scope': self.scope, 'ident': ident}
 
 
@@ -265,7 +267,7 @@ def feedback(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def location_reports(request, stall_id):
-    stall = merchant_stall(stall_id, request.user)
+    stall = merchant_stall(stall_id, request.user, permission='market.view_feedback')
     reports = Feedback.objects.filter(stall=stall).exclude(kind='general')
     # Free text is user-controlled and can itself contain contact details. Only
     # the structured issue and the displayed location snapshot go to merchants.
@@ -301,4 +303,4 @@ class EventInput(StrictInput):
 @permission_classes([IsAuthenticated])
 def recent_completed(request):
     rows = order_query().filter(user=request.user, status='completed').order_by('-completed_at', '-created_at')[:3]
-    return Response(OrderSerializer(rows, many=True).data)
+    return Response(OrderSerializer(rows, many=True, context={'request': request}).data)

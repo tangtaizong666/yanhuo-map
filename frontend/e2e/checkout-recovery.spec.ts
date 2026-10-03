@@ -159,7 +159,7 @@ async function fixture(page: Page) {
   await page.evaluate(
     (item) =>
       localStorage.setItem(
-        "yanhuo-cart-v1",
+        "yanhuo-cart-v2:user:989",
         JSON.stringify({ 989: [{ product: item, quantity: 1 }] }),
       ),
     product,
@@ -231,7 +231,7 @@ test("reload and a changed cart preserve the original recovery request and newer
   await page.evaluate(
     (item) =>
       localStorage.setItem(
-        "yanhuo-cart-v1",
+        "yanhuo-cart-v2:user:989",
         JSON.stringify({ 989: [{ product: item, quantity: 2 }] }),
       ),
     product,
@@ -251,7 +251,8 @@ test("reload and a changed cart preserve the original recovery request and newer
   expect(
     await page.evaluate(
       () =>
-        JSON.parse(localStorage.getItem("yanhuo-cart-v1")!)[989][0].quantity,
+        JSON.parse(localStorage.getItem("yanhuo-cart-v2:user:989")!)[989][0]
+          .quantity,
     ),
   ).toBe(2);
 });
@@ -261,7 +262,9 @@ test("an empty cart and unavailable stall do not hide recovery of an existing or
 }) => {
   const state = await fixture(page);
   await submit(page);
-  await page.evaluate(() => localStorage.setItem("yanhuo-cart-v1", "{}"));
+  await page.evaluate(() =>
+    localStorage.setItem("yanhuo-cart-v2:user:989", "{}"),
+  );
   state.stallUnavailable = true;
   state.behavior = "success";
   await page.reload();
@@ -326,9 +329,10 @@ test("recovery is account scoped and returns when the original account signs bac
   await submit(page);
   state.user = { ...state.user, id: 990, username: "recovery_b" };
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-  await expect(page.getByPlaceholder(note)).toBeEnabled();
-  await expect(page.getByPlaceholder(note)).toHaveValue("");
   await expect(page.locator(".submission-recovery")).toHaveCount(0);
+  await expect(page.getByText("少辣，保留原备注", { exact: true })).toHaveCount(
+    0,
+  );
   state.user = { ...state.user, id: 989, username: "recovery_a" };
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect(page.getByPlaceholder(note)).toBeDisabled();
@@ -345,6 +349,13 @@ test("leaving while the server response is pending retains the original request 
   page,
 }) => {
   const state = await fixture(page);
+  // B has an independent draft; switching accounts must never inherit A's bag.
+  await page.evaluate(() =>
+    localStorage.setItem(
+      "yanhuo-cart-v2:user:990",
+      localStorage.getItem("yanhuo-cart-v2:user:989")!,
+    ),
+  );
   state.behavior = "hold";
   await page.getByRole("button", { name: "提交自取订单", exact: true }).click();
   await expect.poll(() => state.writes.length).toBe(1);
@@ -396,7 +407,7 @@ test("legacy delivery retry snapshots retain the original fee despite a changed 
     ({ item, key, record }) => {
       sessionStorage.setItem(key, JSON.stringify(record));
       localStorage.setItem(
-        "yanhuo-cart-v1",
+        "yanhuo-cart-v2:user:989",
         JSON.stringify({ 989: [{ product: item, quantity: 2 }] }),
       );
     },
@@ -424,7 +435,8 @@ test("legacy delivery retry snapshots retain the original fee despite a changed 
   expect(
     await page.evaluate(
       () =>
-        JSON.parse(localStorage.getItem("yanhuo-cart-v1")!)[989][0].quantity,
+        JSON.parse(localStorage.getItem("yanhuo-cart-v2:user:989")!)[989][0]
+          .quantity,
     ),
   ).toBe(2);
 });
@@ -433,6 +445,13 @@ test("an old account response cannot clear the new account's pending checkout", 
   page,
 }) => {
   const state = await fixture(page);
+  // B has an independent draft; switching accounts must never inherit A's bag.
+  await page.evaluate(() =>
+    localStorage.setItem(
+      "yanhuo-cart-v2:user:990",
+      localStorage.getItem("yanhuo-cart-v2:user:989")!,
+    ),
+  );
   state.behavior = "hold";
   await page.getByRole("button", { name: "提交自取订单", exact: true }).click();
   await expect.poll(() => state.writes.length).toBe(1);

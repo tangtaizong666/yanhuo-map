@@ -7,4 +7,4 @@ COPY backend/ ./
 RUN python manage.py collectstatic --noinput && mkdir -p /app/media && useradd --create-home app && chown -R app:app /app
 USER app
 EXPOSE 8000
-CMD ["waitress-serve", "--host=0.0.0.0", "--port=8000", "--threads=8", "config.wsgi:application"]
+CMD ["waitress-serve", "--host=0.0.0.0", "--port=8000", "--threads=8", "--max-request-body-size=6291456", "config.wsgi:application"]

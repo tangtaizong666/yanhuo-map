@@ -1,6 +1,9 @@
 <script lang="ts">
 import { needsFinancialFollowUp } from "../../lib/orderFollowUp";
+import { allows } from "../../lib/orderActions";
 export function canConfirmOfflinePayment(order: any) {
+  if (Array.isArray(order?.allowed_actions))
+    return allows(order, "confirm_payment");
   return (
     order.fulfillment_type !== "delivery" &&
     (order.payment_method || "offline") === "offline" &&
@@ -15,6 +18,11 @@ export function merchantPaymentLabel(order: any) {
   return order.mode === "simulation" ? `模拟 · ${label}` : label;
 }
 function paymentLabel(order: any) {
+  if (order.financial_hold_reason) return "款项待处理";
+  if (order.refund?.resolved_at)
+    return order.payment_status === "paid"
+      ? "已收款 · 原退款已结案"
+      : "原退款已核对结案";
   if (order.payment_review_required || order.payment?.status === "review")
     return "付款需人工核对";
   if (order.refund?.status === "closed") return "退款未完成 · 申请已关闭";
@@ -39,7 +47,11 @@ function paymentLabel(order: any) {
 export function merchantPaymentAmountLabel(order: any) {
   if (order.payment_review_required || order.payment?.status === "review")
     return "订单";
-  if (["closed", "abnormal"].includes(order.refund?.status)) return "待退";
+  if (
+    !order.refund?.resolved_at &&
+    ["closed", "abnormal"].includes(order.refund?.status)
+  )
+    return "待退";
   if (order.payment_status === "refunded") return "已退";
   if (order.payment_status === "refunding") return "退款中";
   return order.payment_status === "paid" ? "已收" : "应收";
@@ -65,6 +77,9 @@ const hasOnlinePayment = computed(
 );
 const description = computed(() => {
   const order = props.order;
+  if (order.financial_hold_reason) return order.financial_hold_reason;
+  if (order.refund?.resolved_at)
+    return "原退款记录已核对结案，当前付款与可执行操作以最新记录为准。";
   if (order.payment_review_required || order.payment?.status === "review")
     return order.mode === "simulation"
       ? "模拟付款出现待核对情况，请联系运营核对，并提供订单号。商家不能手动标记核对完成；此订单不涉及真实资金。"

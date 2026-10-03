@@ -260,9 +260,19 @@ class Order(models.Model):
     inventory_released = models.BooleanField(default=False)
     idempotency_key = models.CharField(max_length=128)
     request_hash = models.CharField(max_length=64)
+    @property
+    def payment_refund(self):
+        """Compatibility summary; the complete immutable-number history is refunds."""
+        from .financial import current_refund
+        refund = current_refund(self)
+        if refund is None:
+            raise AttributeError('This order has no refund.')
+        return refund
     class Meta:
         verbose_name = verbose_name_plural = '订单'
         ordering = ['-created_at']
+        indexes = [models.Index(fields=['user', '-created_at', '-id'], name='order_user_history_idx'),
+            models.Index(fields=['stall', '-created_at', '-id'], name='order_stall_history_idx')]
         constraints = [models.UniqueConstraint(fields=['user', 'idempotency_key'], name='unique_order_request'),
             models.CheckConstraint(condition=Q(total_cents__gte=1), name='order_positive_amount')]
 
@@ -325,17 +335,19 @@ class PaymentAttempt(models.Model):
 
 
 class PaymentRefund(models.Model):
+    ACTIVE_STATUSES = ('creating', 'processing', 'reconcile', 'abnormal')
     mode = models.CharField(max_length=10, default='live', choices=[('live', '正式'), ('simulation', '模拟')])
     simulation_state = models.CharField(max_length=16, default='SUCCESS')
     simulation_settled_at = models.DateTimeField(null=True, blank=True)
     STATUSES = [('creating', '正在申请'), ('processing', '退款处理中'), ('success', '已退款'),
         ('closed', '退款关闭'), ('abnormal', '退款异常'), ('reconcile', '结果待确认')]
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    payment = models.OneToOneField(PaymentAttempt, on_delete=models.PROTECT, related_name='refund')
-    order = models.OneToOneField(Order, on_delete=models.PROTECT, related_name='payment_refund')
+    payment = models.ForeignKey(PaymentAttempt, on_delete=models.PROTECT, related_name='refunds')
+    order = models.ForeignKey(Order, on_delete=models.PROTECT, related_name='refunds')
     requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT)
     request_in_flight_until = models.DateTimeField(null=True, blank=True)
-    out_refund_no = models.CharField(max_length=64, unique=True)
+    mchid = models.CharField('原收款商户号', max_length=32)
+    out_refund_no = models.CharField(max_length=64)
     refund_id = models.CharField(max_length=64, null=True, blank=True, unique=True)
     amount_cents = models.PositiveIntegerField()
     reason = models.CharField(max_length=80)
@@ -343,11 +355,25 @@ class PaymentRefund(models.Model):
     created_at = models.DateTimeField(default=timezone.now)
     completed_at = models.DateTimeField(null=True, blank=True)
     last_checked_at = models.DateTimeField(null=True, blank=True)
+    resolved_at = models.DateTimeField('核验结案时间', null=True, blank=True)
+    replaces = models.ForeignKey('self', null=True, blank=True, on_delete=models.PROTECT, related_name='retries')
+    source = models.CharField(max_length=16, default='application', choices=[('application', '订单申请'), ('retry', '运营重试'), ('external', '外部退款核验'), ('compensation', '异常付款补偿')])
+    operation_key = models.CharField(max_length=128, null=True, blank=True, unique=True)
+    operation_hash = models.CharField(max_length=64, blank=True)
     error_code = models.CharField(max_length=80, blank=True)
     error_message = models.CharField(max_length=200, blank=True)
+    def save(self, *args, **kwargs):
+        if self._state.adding:
+            if self.mchid and self.mchid != self.payment.mchid:
+                raise ValidationError('退款收款主体必须与原付款相同。')
+            self.mchid = self.payment.mchid
+        return super().save(*args, **kwargs)
     class Meta:
         verbose_name = verbose_name_plural = '微信退款记录'
-        constraints = [models.CheckConstraint(condition=Q(amount_cents__gte=1), name='refund_positive_amount')]
+        ordering = ['-created_at', '-id']
+        constraints = [models.CheckConstraint(condition=Q(amount_cents__gte=1), name='refund_positive_amount'),
+            models.UniqueConstraint(fields=['mchid', 'out_refund_no'], name='unique_merchant_refund_number'),
+            models.UniqueConstraint(fields=['payment'], condition=Q(status__in=['creating', 'processing', 'reconcile', 'abnormal']), name='one_active_refund_per_payment')]
 
 
 class Review(models.Model):
@@ -449,3 +475,6 @@ class AuditLog(models.Model):
 
 
 from .recovery_models import AccountRecovery  # noqa: E402,F401
+from .security_models import AuthenticationFailureBucket, ProductCreation  # noqa: E402,F401
+from .operational_models import WorkerHeartbeat  # noqa: E402,F401
+from .financial_models import FinancialEvidence  # noqa: E402,F401

@@ -386,7 +386,7 @@ test("UI contract: mobile external browser offers H5 while WeChat webview explai
         const url = new URL((await entry.getAttribute("href"))!);
         expect(url.hostname).toBe("wx.tenpay.com");
         expect(url.searchParams.get("redirect_url")).toBe(
-          `http://127.0.0.1:5183/orders/${state.id}`,
+          `${new URL(page.url()).origin}/orders/${state.id}`,
         );
         await expect(
           page.getByText("微信支付已确认", { exact: true }),

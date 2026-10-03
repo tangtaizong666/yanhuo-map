@@ -1,3 +1,4 @@
+import { allows } from "../../lib/orderActions";
 export const activeOrderStatuses = [
   "pending_payment",
   "pending",
@@ -24,6 +25,7 @@ export function verifiedOnlinePayment(order: any) {
   );
 }
 export function acceptReady(order: any) {
+  if (Array.isArray(order?.allowed_actions)) return allows(order, "accept");
   return (
     order.status === "pending" &&
     (!isDelivery(order) || verifiedOnlinePayment(order))

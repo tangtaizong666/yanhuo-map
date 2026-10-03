@@ -1,3 +1,5 @@
+import { sessionEpoch } from "./sessionEpoch";
+
 export class ApiError extends Error {
   status: number;
   data: any;
@@ -76,12 +78,21 @@ export async function api<T = any>(
   path: string,
   options: Omit<RequestInit, "body"> & { body?: any } = {},
 ): Promise<T> {
+  const requestEpoch = sessionEpoch();
   const method = (options.method || "GET").toUpperCase();
   const mutating = !["GET", "HEAD", "OPTIONS"].includes(method);
   const controller = new AbortController();
   const abort = () => controller.abort();
   let timedOut = false;
   let submitted = false;
+  const requireCurrentIdentity = () => {
+    if (requestEpoch !== sessionEpoch())
+      throw new ApiError(
+        "账号已变化，已忽略上一账号的响应。请在原账号核对已提交操作的结果。",
+        0,
+        { code: "stale_session_response", submitted },
+      );
+  };
   const timer = setTimeout(() => {
     timedOut = true;
     controller.abort();
@@ -92,6 +103,12 @@ export async function api<T = any>(
     controller.signal.throwIfAborted();
     if (mutating && !csrf()) await waitFor(ensureCsrf(), controller.signal);
     controller.signal.throwIfAborted();
+    if (mutating && requestEpoch !== sessionEpoch())
+      throw new ApiError(
+        "账号已变化，本次操作未提交，请在当前账号重新确认。",
+        0,
+        { code: "request_aborted", submitted: false },
+      );
     const headers = new Headers(options.headers);
     headers.set("Accept", "application/json");
     const multipart = options.body instanceof FormData;
@@ -113,6 +130,9 @@ export async function api<T = any>(
             ? options.body
             : JSON.stringify(options.body),
     });
+    // Include no-content responses: an old successful mutation must not clear
+    // recovery state or report completion in a newer identity.
+    requireCurrentIdentity();
     if (response.status === 204 || (method === "HEAD" && response.ok))
       return null as T;
     let data: any;
@@ -129,9 +149,15 @@ export async function api<T = any>(
         },
       );
     }
+    // Identity can also change while a slow response body is being consumed.
+    requireCurrentIdentity();
     if (!response.ok) {
-      if (data?.code === "not_authenticated")
-        window.dispatchEvent(new Event("session-expired"));
+      if (data?.code === "not_authenticated" && requestEpoch === sessionEpoch())
+        window.dispatchEvent(
+          new CustomEvent("session-expired", {
+            detail: { epoch: requestEpoch },
+          }),
+        );
       throw new ApiError(
         data?.detail ||
           (response.status === 403

@@ -244,7 +244,7 @@ test("paused product remains readable but cannot be added in detail, menu or sav
   await page.addInitScript(
     (p) =>
       localStorage.setItem(
-        "yanhuo-cart-v1",
+        "yanhuo-cart-v2:guest",
         JSON.stringify({ "1": [{ product: p, quantity: 1 }] }),
       ),
     state.stalls[0].products[2],

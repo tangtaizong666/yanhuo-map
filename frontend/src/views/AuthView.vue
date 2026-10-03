@@ -70,6 +70,7 @@ async function submit() {
     return;
   }
   busy.value = true;
+  session.beginIdentityChange();
   try {
     await api(`/auth/${mode.value}`, {
       method: "POST",

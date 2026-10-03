@@ -1,0 +1,4 @@
+{% extends "admin/change_list.html" %}
+{% block object-tools-items %}{{ block.super }}
+{% if perms.market.export_financial_reconciliation %}<li><a href="{% url 'admin:market_payment_reconciliation_export' %}">导出商户资金对账</a></li>{% endif %}
+{% endblock %}

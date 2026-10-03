@@ -146,9 +146,9 @@ def simulate_refund(order_id, user, refund_id, outcome):
             raise BusinessError('模拟退款记录不存在，请刷新订单。', 'simulation_intent_changed')
         if refund.status == 'success': return order
         if refund.simulation_state == 'SUCCESS':
-            return process_refund(order_id)
+            return process_refund(order_id, refund.pk)
         refund.simulation_state = {'success': 'SUCCESS', 'failure': 'ABNORMAL', 'pending': 'PROCESSING'}[outcome]
         refund.simulation_settled_at = timezone.now() if outcome == 'success' else None
         refund.save(update_fields=['simulation_state', 'simulation_settled_at'])
         audit(user, 'simulation_refund_outcome', order.pk, refund_id=str(refund.pk), outcome=outcome)
-    return process_refund(order_id)
+    return process_refund(order_id, refund.pk)

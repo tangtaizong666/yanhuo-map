@@ -10,6 +10,7 @@ type FollowUpOrder = Partial<
     | "payment"
     | "refund"
     | "delivery_issue"
+    | "financial_hold_reason"
   >
 >;
 
@@ -29,6 +30,7 @@ const refundLabels: Record<string, string> = {
 // Fulfilment can end while money is still unresolved. In particular, a closed
 // refund restores payment_status=paid and must remain discoverable.
 export function refundNeedsFollowUp(order: FollowUpOrder) {
+  if (order.refund?.resolved_at) return false;
   return order.refund
     ? Object.hasOwn(refundLabels, order.refund.status)
     : order.payment_status === "refunding";
@@ -50,6 +52,8 @@ export function deliveryNeedsFollowUp(order: FollowUpOrder) {
 }
 
 export function needsFinancialFollowUp(order: FollowUpOrder) {
+  if (typeof order.financial_hold_reason === "string")
+    return !!order.financial_hold_reason;
   return refundNeedsFollowUp(order) || paymentNeedsFollowUp(order);
 }
 
@@ -72,6 +76,8 @@ export function followUpReasons(order: FollowUpOrder): FollowUpReason[] {
       kind: "refund",
       label: refundLabels[order.refund?.status || ""] || "退款状态待确认",
     });
+  if (order.financial_hold_reason && !reasons.length)
+    reasons.push({ kind: "payment", label: order.financial_hold_reason });
   if (deliveryNeedsFollowUp(order))
     reasons.push({ kind: "delivery", label: "配送异常待处理" });
   return reasons;

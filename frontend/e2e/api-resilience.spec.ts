@@ -286,7 +286,9 @@ test("orders recover after timeout and never show an empty-order claim for a fai
     path: testInfo.outputPath("orders-timeout-mobile.png"),
   });
   await held?.abort().catch(() => {});
-  await page.route("**/api/v1/orders", (route) => route.fulfill({ json: [] }));
+  await page.route("**/api/v1/orders?*", (route) =>
+    route.fulfill({ json: [] }),
+  );
   await page.getByRole("button", { name: "重新加载" }).click();
   await expect(page.getByRole("alert")).toHaveCount(0);
   await expect(

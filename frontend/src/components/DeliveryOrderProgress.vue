@@ -12,6 +12,7 @@ import {
 import type { Order } from "../lib/types";
 import { formatTime, routeUrl } from "../lib/api";
 import { needsFinancialFollowUp } from "../lib/orderFollowUp";
+import { allows } from "../lib/orderActions";
 const props = defineProps<{ order: Order; busy: boolean }>();
 const emit = defineEmits<{ confirm: [] }>();
 const confirming = ref(false);
@@ -47,6 +48,7 @@ const nav = computed(() =>
 );
 const canReceive = computed(
   () =>
+    allows(props.order, "confirm_receipt", true) &&
     props.order.status === "arrived" &&
     props.order.payment_status === "paid" &&
     !needsFinancialFollowUp(props.order) &&

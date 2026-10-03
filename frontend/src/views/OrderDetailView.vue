@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   ArrowLeft,
@@ -31,6 +31,7 @@ import OrderPreparation from "../components/OrderPreparation.vue";
 import PickupCard from "../components/PickupCard.vue";
 import OrderContactHelp from "../components/OrderContactHelp.vue";
 import type { Order } from "../lib/types";
+import { allows } from "../lib/orderActions";
 import {
   needsFinancialFollowUp,
   refundNeedsFollowUp,
@@ -48,6 +49,43 @@ const merchantPhone = computed(() =>
   (order.value?.merchant_contact_phone || "").replace(/[^\d+]/g, ""),
 );
 const cancelOpen = ref(false);
+const cancelDialog = ref<HTMLDialogElement>();
+let cancelTrigger: HTMLElement | null = null;
+watch(cancelOpen, async (open) => {
+  if (open) {
+    cancelTrigger = document.activeElement as HTMLElement;
+    await nextTick();
+    cancelDialog.value?.showModal();
+  } else {
+    cancelDialog.value?.close();
+    cancelTrigger?.focus();
+  }
+});
+function dismissCancel() {
+  if (!busy.value) cancelOpen.value = false;
+}
+function trapCancelFocus(event: KeyboardEvent) {
+  if (event.key !== "Tab") return;
+  const targets = Array.from(
+    cancelDialog.value?.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), textarea:not(:disabled), input:not(:disabled), [tabindex="0"]',
+    ) || [],
+  );
+  const first = targets[0],
+    last = targets[targets.length - 1];
+  if (!first) {
+    event.preventDefault();
+    return;
+  }
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last?.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
 const cancelReason = ref("");
 const rating = ref(5);
 const reviewContent = ref("");
@@ -70,6 +108,7 @@ const readyPickup = computed(
     !isDelivery.value &&
     order.value.status === "ready" &&
     !order.value.cancel_requested &&
+    !!order.value.pickup_code &&
     !financialFollowUp.value &&
     !paymentPending.value &&
     !["refunding", "refunded"].includes(order.value.payment_status) &&
@@ -121,6 +160,8 @@ const cancelled = computed(() =>
   ["cancelled", "rejected"].includes(order.value?.status),
 );
 const heading = computed(() => {
+  if (order.value?.financial_hold_reason)
+    return "款项需要核对，请先确认处理结果";
   if (order.value && paymentNeedsFollowUp(order.value))
     return "这笔款项，正在核对";
   if (refundProblem.value) return "退款未完成，请联系商家";
@@ -161,39 +202,43 @@ const heading = computed(() => {
     )[order.value?.status] || "订单详情"
   );
 });
-const subtitle = computed(() =>
-  order.value && paymentNeedsFollowUp(order.value)
-    ? "请联系商家核对，暂时不要重复付款或核销取餐码。"
-    : refundProblem.value
-      ? isSimulation.value
-        ? "这笔模拟退款尚未完成，可请商家继续演练处理，没有真实资金变动。"
-        : "款项尚未确认退回，请联系商家处理。订单结束不代表退款成功。"
-      : refundFollowUp.value
-        ? "退款尚未确认成功，款项与取餐状态分别记录。"
-        : order.value?.cancel_requested
-          ? "商家处理前请继续留意状态，暂不出示取餐凭证。"
-          : paymentPending.value
-            ? "暂时不要重复付款或核销取餐码，先确认这一笔付款结果。"
-            : order.value?.status === "ready" &&
-                order.value?.payment_status === "refunded"
-              ? "本单暂不提供取餐凭证，请联系商家确认处理结果。"
-              : isDelivery.value
-                ? "商家自配送至指定交接点。收到餐点后再确认收餐，不会自动签收。"
-                : order.value?.status === "ready" &&
-                    order.value?.payment_status === "paid"
-                  ? "款项已确认，请出示取餐码领取餐点。"
-                  : (
-                      {
-                        pending: "商家接单后开始制作，5 分钟未接单将自动取消。",
-                        preparing: "请留意订单状态，出餐后会在这里显示取餐码。",
-                        ready: "确认付款后，向商家出示取餐码领取餐点。",
-                        completed:
-                          "把这份好味道记下来，也把你的感受分享给大家。",
-                        cancelled: "期待下一次，与你在校园转角相遇。",
-                        rejected:
-                          "这份订单已结束，去附近看看其他正在出摊的好味道吧。",
-                      } as Record<string, string>
-                    )[order.value?.status],
+const subtitle = computed(
+  () =>
+    order.value?.financial_hold_reason ||
+    (order.value && paymentNeedsFollowUp(order.value)
+      ? "请联系商家核对，暂时不要重复付款或核销取餐码。"
+      : refundProblem.value
+        ? isSimulation.value
+          ? "这笔模拟退款尚未完成，可请商家继续演练处理，没有真实资金变动。"
+          : "款项尚未确认退回，请联系商家处理。订单结束不代表退款成功。"
+        : refundFollowUp.value
+          ? "退款尚未确认成功，款项与取餐状态分别记录。"
+          : order.value?.cancel_requested
+            ? "商家处理前请继续留意状态，暂不出示取餐凭证。"
+            : paymentPending.value
+              ? "暂时不要重复付款或核销取餐码，先确认这一笔付款结果。"
+              : order.value?.status === "ready" &&
+                  order.value?.payment_status === "refunded"
+                ? "本单暂不提供取餐凭证，请联系商家确认处理结果。"
+                : isDelivery.value
+                  ? "商家自配送至指定交接点。收到餐点后再确认收餐，不会自动签收。"
+                  : order.value?.status === "ready" &&
+                      order.value?.payment_status === "paid"
+                    ? "款项已确认，请出示取餐码领取餐点。"
+                    : (
+                        {
+                          pending:
+                            "商家接单后开始制作，5 分钟未接单将自动取消。",
+                          preparing:
+                            "请留意订单状态，出餐后会在这里显示取餐码。",
+                          ready: "确认付款后，向商家出示取餐码领取餐点。",
+                          completed:
+                            "把这份好味道记下来，也把你的感受分享给大家。",
+                          cancelled: "期待下一次，与你在校园转角相遇。",
+                          rejected:
+                            "这份订单已结束，去附近看看其他正在出摊的好味道吧。",
+                        } as Record<string, string>
+                      )[order.value?.status]),
 );
 const navigationUrl = computed(() =>
   order.value?.pickup_latitude != null && order.value?.pickup_longitude != null
@@ -256,6 +301,7 @@ onUnmounted(() => {
   document.removeEventListener("visibilitychange", refreshVisible);
 });
 async function cancelOrder() {
+  if (!allows(order.value, "cancel", true)) return;
   if (busy.value || paymentWorking.value || !current()) return;
   busy.value = true;
   ++version;
@@ -284,6 +330,7 @@ async function cancelOrder() {
   }
 }
 async function confirmReceipt() {
+  if (!allows(order.value, "confirm_receipt", true)) return;
   if (busy.value || paymentWorking.value || !current()) return;
   busy.value = true;
   paymentChanging();
@@ -459,6 +506,7 @@ async function submitReview() {
               ><button
                 v-if="
                   !terminal &&
+                  allows(order, 'cancel', true) &&
                   !order.cancel_requested &&
                   (order.payment_status === 'unpaid' ||
                     (isDelivery && order.payment_status === 'paid')) &&
@@ -671,17 +719,16 @@ async function submitReview() {
       :order="order"
       @close="reorderOpen = false"
     />
-    <div
-      v-if="cancelOpen"
-      class="modal-overlay"
-      @click.self="!busy && (cancelOpen = false)"
+    <dialog
+      ref="cancelDialog"
+      class="cancel-modal"
+      aria-labelledby="cancel-title"
+      @cancel="busy ? $event.preventDefault() : dismissCancel()"
+      @close="cancelOpen = false"
+      @click.self="dismissCancel"
+      @keydown="trapCancelFocus"
     >
-      <section
-        class="card cancel-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="cancel-title"
-      >
+      <section class="card cancel-dialog" v-if="order">
         <button
           class="close-dialog"
           @click="cancelOpen = false"
@@ -740,7 +787,7 @@ async function submitReview() {
           </button>
         </div>
       </section>
-    </div>
+    </dialog>
   </div>
 </template>
 
@@ -1223,15 +1270,16 @@ async function submitReview() {
 .static-stars {
   gap: 6px;
 }
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  display: grid;
-  place-items: center;
+.cancel-modal {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  max-width: min(450px, calc(100vw - 32px));
+  width: 100%;
+}
+.cancel-modal::backdrop {
   background: #28211670;
   backdrop-filter: blur(4px);
-  padding: 20px;
 }
 .cancel-dialog {
   position: relative;

@@ -91,7 +91,7 @@ async function fixture(page: Page, quantity = 0, initialPortions?: any[]) {
       ({ product, quantity, initialPortions }) => {
         if (!sessionStorage.getItem("taste-fixture-seeded")) {
           localStorage.setItem(
-            "yanhuo-cart-v1",
+            "yanhuo-cart-v2:user:996",
             JSON.stringify({
               996: [
                 {
@@ -161,7 +161,7 @@ async function fixture(page: Page, quantity = 0, initialPortions?: any[]) {
 }
 async function cartData(page: Page) {
   return page.evaluate(() =>
-    JSON.parse(localStorage.getItem("yanhuo-cart-v1") || "{}"),
+    JSON.parse(localStorage.getItem("yanhuo-cart-v2:user:996") || "{}"),
   );
 }
 async function edit(page: Page) {
@@ -296,9 +296,9 @@ test("unknown checkout retry keeps original tastes even after newer local cart c
     page.getByRole("button", { name: "设置双份烤冷面每份口味与备注" }),
   ).toBeDisabled();
   await page.evaluate(() => {
-    const data = JSON.parse(localStorage.getItem("yanhuo-cart-v1")!);
+    const data = JSON.parse(localStorage.getItem("yanhuo-cart-v2:user:996")!);
     data[996][0].portions[0].note = "后来选的，不应清除";
-    localStorage.setItem("yanhuo-cart-v1", JSON.stringify(data));
+    localStorage.setItem("yanhuo-cart-v2:user:996", JSON.stringify(data));
   });
   await page.reload();
   state.behavior = "success";
@@ -388,8 +388,7 @@ for (const kind of ["estimated", "missing", "overdue", "ready", "delivery"]) {
       await expect(card).toContainText(state.order.prep_delay_reason);
       await expect(page.locator(".pickup-code")).toHaveCount(0);
     }
-    if (kind === "ready")
-      await expect(card).toContainText("餐点已做好");
+    if (kind === "ready") await expect(card).toContainText("餐点已做好");
     if (kind === "delivery")
       await expect(card).toContainText("出餐时间不等于送达时间");
     if (kind === "estimated") await expect(card).toContainText("商家预计");

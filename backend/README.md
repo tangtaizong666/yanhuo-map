@@ -13,7 +13,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe manage.py runserver 127.0.0.1:8087
 ```
 
-另一个终端运行 `.\.venv\Scripts\python.exe manage.py expire_orders --loop`。默认每 15 秒处理待接单超时、记录过期摊位和超过一小时未领取的订单；读取订单时也会执行超时清理。不会把未领取订单自动完成。
+另一个终端运行 `.\.venv\Scripts\python.exe manage.py expire_orders --loop`。默认每 15 秒分批处理待接单超时、记录过期摊位和超过一小时未领取的订单；读取接口不清理订单，下单仅清理目标摊位相关到期预约。不会把未领取订单自动完成。支付环境另需 `reconcile_payments --loop`；两者通过 `check_operations` 监测心跳。
 
 本地后端使用 8087 端口，前端使用 5183；8087 用于避开电脑上其他项目已有的 8000 端口服务。优先使用项目根目录的启动脚本同时启动前端、后端和超时处理进程。Docker 容器内部仍使用 8000 端口。
 
@@ -27,7 +27,19 @@ python -m venv .venv
 
 ## 接口约定
 
-所有路径前缀 `/api/v1`，无末尾斜杠。列表直接返回数组。金额为整数分；时间为带时区 ISO 8601；订单 ID 为 UUID。
+### 试点安全与分页接口（2026-10-03）
+
+订单响应新增 `financial_hold_reason`（无资金限制时空字符串）和 `allowed_actions`。动作列表同时结合当前状态与请求用户权限，供页面控制按钮；每次服务端写操作仍独立检查操作者、状态、款项、库存与模式。只读运营不会拿到写入或退款能力。款项未核清时隐藏取餐码并禁止核销，退款 CLOSED 不再能恢复正常履约。原 `refund` 提供当前未结案尝试或最新摘要；`refunds` 保留尝试历史及 `resolved_at`。原付款、退款编号和模式快照不覆盖。
+
+`GET /orders` 与 `/merchant/orders?stall=<id>` 可加 `pagination=cursor`，返回 `{results,next,counts}`。`filter` 为 `all|active|followup|attention|completed|cancelled`，`page_size` 默认 30、范围 1–100。`next` 是签名的不透明游标或 null，下一次以 `cursor=<next>` 传回；游标绑定当前账号、摊位与筛选，失效返回 400 `invalid_cursor`。顺序为创建时间及 UUID 倒序。`counts` 包含上述六项及 `reviewed`，按当前授权账号/摊位完整范围统计，不随游标截断。
+
+`attention` 包括活动履约订单及任何资金待处理记录，商家端另含履约中的配送异常；已取消、已完成但退款关闭未结案的旧订单仍会返回。新前端只轮询此集合并读取全部活动分页；历史列表显式翻页。未加 `pagination=cursor` 的旧客户端暂时继续收到原数组，兼容入口不代表推荐全量轮询。只读接口不再执行全站过期清理。
+
+新增商品 `POST /merchant/stalls/:id/products` 接受 `idempotency_key`（8–128 字符）：首次 201，同摊位同键同内容重放 200 并返回已有商品；同键不同内容 409 `idempotency_conflict`，原商品已删除 409 `idempotency_resource_gone`。旧无键请求暂保留。前端把结果未知的原键与原内容保存在当前账号草稿中，未核实前不换键创建。
+
+权限策略、迁移顺序、worker 监测、备份恢复、异常核验和逐商户真实开通见[试点运维指南](../docs/pilot-operations.md)。后台和 API 登录共用数据库原子失败额度；所有游客限流统一可信客户端 IP 边界。HTTP 请求体上限 6 MiB、累计上传图片 5 MiB，图片仅解析 JPEG/PNG/WebP。
+
+所有路径前缀 `/api/v1`，无末尾斜杠。普通列表和旧版订单调用返回数组；新订单分页结构见上文。金额为整数分；时间为带时区 ISO 8601；订单 ID 为 UUID。
 
 - `GET /config` 返回品牌、演示标志、区域列表、当前用户和地图配置。`GET /auth/me` 返回用户对象或 `null`。
 - 首次写操作前 `GET /auth/csrf`；使用同源 session cookie，并把 `csrftoken` cookie 放入 `X-CSRFToken` 请求头。登录会轮换 CSRF token，后续写请求应重新读取 cookie。
@@ -115,7 +127,7 @@ prep_minutes 为 1–180 的整数，reason 不超过 200 字，idempotency_key 
 
 `AUTH_TRUST_PROXY_CLIENT_IP` 默认为 `false`：认证接口只用连接的 REMOTE_ADDR 作为限流标识，不采信客户端自行提供的 X-Forwarded-For 或 X-Real-IP。仅在后端不能被外部绕过、可信代理覆盖 X-Real-IP 为真实直连客户端地址时设置为 `true`；此时读取并校验 X-Real-IP，缺失或非有效 IP 时退回 REMOTE_ADDR，仍不使用 X-Forwarded-For。
 
-根目录 `compose.yaml` 的后端无公开端口，`deploy/Caddyfile` 覆盖 X-Real-IP，因此该受控部署开启了此开关。若改成后端直接公开、增加代理层或允许不可信容器访问后端，必须重新配置边界，不能仅复制开关。它与用于 HTTPS 协议识别的 `TRUST_PROXY`、微信付款客户端 IP 的开关相互独立。多进程环境仍需共享限流缓存及边缘限速；该开关只决定取哪个地址，不替代这些部署要求。
+根目录 `compose.yaml` 的后端无公开端口，`deploy/Caddyfile` 覆盖 X-Real-IP，因此该受控部署开启了此开关。若改成后端直接公开、增加代理层或允许不可信容器访问后端，必须重新配置边界，不能仅复制开关。它与用于 HTTPS 协议识别的 `TRUST_PROXY`、微信付款客户端 IP 的开关相互独立。后台与 API 登录失败已通过数据库原子计数跨进程共享；其他使用缓存的 API 限流仍需生产共享缓存或边缘限速，客户端 IP 开关不替代这些部署要求。
 
 ## 一人摊出餐与线上余量（2026-09-30）
 

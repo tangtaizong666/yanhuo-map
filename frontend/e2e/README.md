@@ -26,3 +26,22 @@ For simultaneous **fully intercepted fixture suites**, give each runner a separa
 The reliability suites `api-resilience.spec.ts`, `checkout-recovery.spec.ts`, and `merchant-delivery-drafts.spec.ts` intercept all business API requests. They exercise hung/invalid responses, CSRF cancellation, recovery of the original uncertain checkout, and multi-device delivery drafts without writing the demo database. See `docs/reliability-verification-20260929.md` for this iteration's exact scope and results.
 
 Additional workflow scenarios cover the multi-stall cart hub (separate checkout, undo, changed prices, stock, inactive/missing stalls and network recovery), reorder review against the live menu without creating an order, merchant reminders across pages and opt-in sound, and student ready-for-pickup reminders with stale-response/account-switch isolation. Run mutating suites serially (`workers: 1`); do not run separate copies against the same demo server at once. Test-specific products are deactivated afterwards, and each fixture cleans up its own orders. A deliberately completed test order remains a real historical test record.
+
+## Pilot reliability fixtures (2026-10-03)
+
+`pilot-reliability.spec.ts` intercepts all business APIs. It covers identity epochs, account/guest cart isolation and explicit merging, storage denial, product creation recovery with the same idempotency key, mutation/read races, cancel-dialog keyboard focus, cursor history pagination, all-page merchant attention, server financial holds, and terminal payment-entry suppression. Four viewport cases capture five key screens at 360/390/768/1440 px. These are Chromium simulations, not real-device or payment-gateway certification.
+
+Cart fixtures now seed `yanhuo-cart-v2:user:<id>` for signed-in users or `yanhuo-cart-v2:guest` for anonymous users. The old unowned `yanhuo-cart-v1` is archived without automatically assigning it to an account. Account-switch checkout tests give each user their own draft explicitly.
+
+Run the startup storage-denial case against a **production build** preview separately:
+
+```powershell
+npm run build
+# In another terminal, start only this dedicated preview:
+npm run preview -- --host 127.0.0.1 --port 5194 --strictPort
+$env:E2E_BASE_URL = 'http://127.0.0.1:5194'
+$env:E2E_PRODUCTION = '1'
+npx playwright test pilot-reliability.spec.ts -g 'production startup'
+```
+
+This case makes both storage property getters throw before any app code loads. It passes for the production bundle. Vite development builds include a Pinia devtools dependency whose module initialization reads `localStorage` before application setup; the development fixture therefore checks denied app-key reads/writes and a denied getter after dependencies load. This development-only limitation is not represented as a production pass. The startup case skips unless `E2E_PRODUCTION=1` is explicitly set.

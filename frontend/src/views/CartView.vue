@@ -313,6 +313,23 @@ function acceptPrice(id: string, item: CartItem) {
       </div>
     </header>
 
+    <section
+      v-if="cart.guestCount"
+      class="card guest-cart-choice"
+      aria-label="登录前的餐袋"
+    >
+      <h2>登录前还有 {{ cart.guestCount }} 份餐点</h2>
+      <p>
+        可由你确认后加入当前账号，再核对价格、库存与逐份备注。同款合并最多 99
+        份。
+      </p>
+      <button class="btn btn-primary" @click="cart.mergeGuest()">
+        加入当前账号餐袋
+      </button>
+      <button class="btn btn-secondary" @click="cart.dismissGuest()">
+        清除登录前餐袋
+      </button>
+    </section>
     <div v-if="undo" class="cart-undo" role="status">
       <span><Check :size="16" />{{ undo.message }}</span
       ><button type="button" @click="restore"><Undo2 :size="16" /> 撤销</button>
@@ -598,6 +615,21 @@ function acceptPrice(id: string, item: CartItem) {
 </template>
 
 <style scoped>
+.guest-cart-choice {
+  padding: 24px;
+  margin-bottom: 24px;
+}
+.guest-cart-choice h2 {
+  font-size: 20px;
+  margin: 0 0 12px;
+}
+.guest-cart-choice p {
+  margin: 0 0 16px;
+  line-height: 1.7;
+}
+.guest-cart-choice .btn {
+  margin: 0 12px 8px 0;
+}
 .cart-page {
   padding-top: 24px;
   padding-bottom: 46px;

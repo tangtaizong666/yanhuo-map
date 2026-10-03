@@ -1,0 +1,5 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<p>每次导出一个商户最多31天的正式付款、退款及到摊收款确认，按实际交易时间筛选。未解决差异另行列出该商户全部历史未结案记录，不受开始日期限制。付款与退款分行保留原交易号；这是本站记录，须与同一商户的支付服务方账单逐笔核对，不代表银行卡到账。</p>
+<form method="post">{% csrf_token %}{{ form.as_p }}<div class="submit-row"><input type="submit" value="导出 CSV"></div></form>
+{% endblock %}

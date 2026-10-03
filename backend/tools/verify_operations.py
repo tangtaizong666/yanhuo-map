@@ -4,6 +4,8 @@ The supplied directory is read-only runtime input. A fresh temporary data direct
 is created, bound only to loopback, and always stopped. Artifacts remain for review.
 """
 import argparse
+import hashlib
+import json
 import os
 from pathlib import Path
 import secrets
@@ -11,6 +13,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import tarfile
 from urllib.parse import quote
 
 
@@ -19,6 +22,7 @@ def main():
     parser.add_argument('--bin', required=True, type=Path)
     parser.add_argument('--port', type=int, default=55432)
     parser.add_argument('--report', type=Path, help='Optional report filename; existing reports are preserved when a new name is used.')
+    parser.add_argument('--restore', action='store_true', help='Also verify a disposable DB/media/encrypted payment-config backup round trip.')
     parser.add_argument('labels', nargs='+')
     args = parser.parse_args()
     runtime = args.bin.resolve(strict=True)
@@ -34,7 +38,8 @@ def main():
     env = os.environ.copy()
     env.update(PGHOST='127.0.0.1', PGPORT=str(args.port), PGUSER='postgres', PGPASSWORD=password,
         PGSSLMODE='disable', DB_SSLMODE='disable', DJANGO_ENV='development', DEMO_MODE='true',
-        SERVICES_SIMULATION_ENABLED='false', PYTHONIOENCODING='utf-8', AMAP_KEY='', AMAP_SECURITY_CODE='',
+        SERVICES_SIMULATION_ENABLED='false', WECHAT_PAY_ENABLED='false', WECHAT_PAY_CONFIG_FILE='',
+        PYTHONIOENCODING='utf-8', AMAP_KEY='', AMAP_SECURITY_CODE='',
         DATABASE_URL=f'postgresql://postgres:{quote(password)}@127.0.0.1:{args.port}/yanhuo_operations_check')
     flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
     report = args.report or workspace / 'test-results' / 'operations-20260929-postgres.txt'
@@ -44,7 +49,7 @@ def main():
             output.write(message + '\n')
             output.flush()
             print(message, flush=True)
-        def run(command, timeout=240):
+        def run(command, timeout=1200):
             # File output does not leave pipe handles inherited by the server.
             with tempfile.TemporaryFile() as capture:
                 result = subprocess.run([str(value) for value in command], env=env, cwd=workspace,
@@ -67,6 +72,48 @@ def main():
                  '-o', f'-h 127.0.0.1 -p {args.port}', '-w', 'start'])
             run([runtime/'createdb.exe', 'yanhuo_operations_check'])
             run([sys.executable, 'manage.py', 'test', *args.labels, '--verbosity', '2', '--noinput'])
+            if args.restore:
+                # Only the database just created by this script is seeded.
+                run([sys.executable, 'manage.py', 'migrate', '--noinput'])
+                run([sys.executable, 'manage.py', 'seed_demo'])
+                run([sys.executable, 'manage.py', 'shell', '-c', 'from tools.backup_fixture import seed_restore_fixture; seed_restore_fixture()'])
+                dump = temporary / 'database.dump'
+                run([runtime/'pg_dump.exe', '--format=custom', '--file', dump, 'yanhuo_operations_check'])
+                run([runtime/'createdb.exe', 'yanhuo_restore_check'])
+                run([runtime/'pg_restore.exe', '--exit-on-error', '--no-owner', '--dbname=yanhuo_restore_check', dump])
+                import psycopg
+                def snapshot(database):
+                    with psycopg.connect(host='127.0.0.1', port=args.port, user='postgres', password=password, dbname=database) as conn:
+                        with conn.cursor() as cursor:
+                            cursor.execute("SELECT tablename FROM pg_tables WHERE schemaname='public' AND (tablename LIKE 'market_%' OR tablename LIKE 'auth_%' OR tablename = 'django_migrations') ORDER BY tablename")
+                            names = [row[0] for row in cursor.fetchall()]
+                            result = {}
+                            for name in names:
+                                cursor.execute(psycopg.sql.SQL('SELECT to_jsonb(t)::text FROM {} t ORDER BY to_jsonb(t)::text').format(psycopg.sql.Identifier(name)))
+                                result[name] = hashlib.sha256(json.dumps(cursor.fetchall()).encode()).hexdigest()
+                            return result
+                if snapshot('yanhuo_operations_check') != snapshot('yanhuo_restore_check'):
+                    raise RuntimeError('Database restore differs from the original snapshot')
+                media = temporary / 'fixture-media'
+                media.mkdir()
+                (media/'merchant-photo.bin').write_bytes(b'isolated-media-backup-fixture')
+                archive_path = temporary / 'media.tar.gz'
+                with tarfile.open(archive_path, 'w:gz') as archive:
+                    archive.add(media, arcname='media')
+                restored = temporary / 'restored-media'
+                restored.mkdir()
+                with tarfile.open(archive_path) as archive:
+                    archive.extractall(restored, filter='data')
+                if (restored/'media/merchant-photo.bin').read_bytes() != (media/'merchant-photo.bin').read_bytes():
+                    raise RuntimeError('Media restore mismatch')
+                from cryptography.fernet import Fernet
+                cipher = Fernet(Fernet.generate_key())
+                config_fixture = b'{"fixture_only":true,"accounts":[]}'
+                protected = temporary/'payment-config.enc'
+                protected.write_bytes(cipher.encrypt(config_fixture))
+                if cipher.decrypt(protected.read_bytes()) != config_fixture:
+                    raise RuntimeError('Encrypted payment-config restore mismatch')
+                log('PASS: pg_dump/pg_restore table-content hashes match; media bytes and encrypted dummy payment-config round trip match. No real payment keys used.')
             log('PASS: isolated PostgreSQL tests. No live database migration, seed or reset.')
         finally:
             if started:

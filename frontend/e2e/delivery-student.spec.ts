@@ -221,7 +221,7 @@ async function checkout(page: Page) {
   await page.addInitScript(
     (item) =>
       localStorage.setItem(
-        "yanhuo-cart-v1",
+        "yanhuo-cart-v2:user:997",
         JSON.stringify({ 997: [{ product: item, quantity: 1 }] }),
       ),
     product,

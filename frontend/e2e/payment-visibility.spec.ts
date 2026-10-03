@@ -177,7 +177,7 @@ for (const available of [false, true]) {
     const f = await fixture(page, [], available);
     await page.addInitScript((item) => {
       localStorage.setItem(
-        "yanhuo-cart-v1",
+        "yanhuo-cart-v2:user:993",
         JSON.stringify({ 993: [{ product: item, quantity: 1 }] }),
       );
     }, product);

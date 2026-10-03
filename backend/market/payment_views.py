@@ -11,8 +11,8 @@ from .views import csrf, order_query
 from .wechatpay import GatewayError
 
 
-def _response(order, *, merchant=False):
-    return Response(OrderSerializer(order_query().get(pk=order.pk), context={'merchant': merchant}).data)
+def _response(order, request, *, merchant=False):
+    return Response(OrderSerializer(order_query().get(pk=order.pk), context={'merchant': merchant, 'request': request}).data)
 
 
 @api_view(['POST'])
@@ -20,24 +20,23 @@ def _response(order, *, merchant=False):
 def start(request, order_id):
     csrf(request)
     channel = serializers.ChoiceField(choices=['native', 'h5', 'simulation']).run_validation(request.data.get('channel'))
-    peer = request.META.get('REMOTE_ADDR', '')
-    if settings.WECHAT_PAY_TRUST_PROXY_CLIENT_IP:
-        peer = request.META.get('HTTP_X_REAL_IP', '')
-    return _response(payments.start_payment(order_id, request.user, channel, peer))
+    from .auth_limits import client_ip
+    peer = client_ip(request, trust_proxy=settings.WECHAT_PAY_TRUST_PROXY_CLIENT_IP)
+    return _response(payments.start_payment(order_id, request.user, channel, peer), request)
 
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def sync(request, order_id):
     csrf(request)
-    return _response(payments.sync_payment(order_id, request.user))
+    return _response(payments.sync_payment(order_id, request.user), request)
 
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def close(request, order_id):
     csrf(request)
-    return _response(payments.close_payment(order_id, request.user))
+    return _response(payments.close_payment(order_id, request.user), request)
 
 
 @api_view(['POST'])
@@ -48,7 +47,7 @@ def refund(request, order_id):
     if len(reason.encode('utf-8')) > 80:
         raise BusinessError('退款原因最多约 26 个汉字，请简要填写。', 'invalid_reason', status=400)
     outcome = serializers.ChoiceField(choices=['success', 'failure', 'pending']).run_validation(request.data['simulation_outcome']) if 'simulation_outcome' in request.data else None
-    return _response(payments.request_refund(order_id, request.user, reason, outcome), merchant=True)
+    return _response(payments.request_refund(order_id, request.user, reason, outcome), request, merchant=True)
 
 
 @api_view(['POST'])
@@ -58,7 +57,7 @@ def simulate(request, order_id):
     csrf(request)
     payment_id = serializers.UUIDField().run_validation(request.data.get('payment_id'))
     outcome = serializers.ChoiceField(choices=['success', 'failure', 'pending']).run_validation(request.data.get('outcome'))
-    return _response(simulate_payment(order_id, request.user, payment_id, outcome))
+    return _response(simulate_payment(order_id, request.user, payment_id, outcome), request)
 
 
 @api_view(['POST'])
@@ -68,7 +67,7 @@ def simulate_refund(request, order_id):
     csrf(request)
     refund_id = serializers.UUIDField().run_validation(request.data.get('refund_id'))
     outcome = serializers.ChoiceField(choices=['success', 'failure', 'pending']).run_validation(request.data.get('outcome'))
-    return _response(apply(order_id, request.user, refund_id, outcome), merchant=True)
+    return _response(apply(order_id, request.user, refund_id, outcome), request, merchant=True)
 
 
 @api_view(['POST'])

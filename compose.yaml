@@ -20,7 +20,7 @@ services:
     restart: unless-stopped
     # The backend has no public port; only self-controlled containers share this network.
     # Preserve Caddy's HTTPS scheme while still stripping other proxy headers.
-    command: ["sh", "-c", "python manage.py migrate --noinput && python manage.py collectstatic --noinput && waitress-serve --host=0.0.0.0 --port=8000 --threads=8 --trusted-proxy='*' --trusted-proxy-headers=x-forwarded-proto config.wsgi:application"]
+    command: ["sh", "-c", "python manage.py migrate --noinput && python manage.py collectstatic --noinput && waitress-serve --host=0.0.0.0 --port=8000 --threads=8 --max-request-body-size=6291456 --trusted-proxy='*' --trusted-proxy-headers=x-forwarded-proto config.wsgi:application"]
     environment: &backend_environment
       DJANGO_ENV: production
       DEMO_MODE: "false"
@@ -31,6 +31,9 @@ services:
       DB_SSLMODE: disable
       TRUST_PROXY: "true"
       AUTH_TRUST_PROXY_CLIENT_IP: "true"
+      AUTH_FAILURE_WINDOW_SECONDS: ${AUTH_FAILURE_WINDOW_SECONDS:-900}
+      AUTH_FAILURE_ACCOUNT_LIMIT: ${AUTH_FAILURE_ACCOUNT_LIMIT:-10}
+      AUTH_FAILURE_IP_LIMIT: ${AUTH_FAILURE_IP_LIMIT:-60}
       PUBLIC_BASE_URL: https://${PUBLIC_DOMAIN}
       # New payment creation remains disabled unless explicitly configured.
       WECHAT_PAY_ENABLED: ${WECHAT_PAY_ENABLED:-false}
@@ -60,6 +63,12 @@ services:
     restart: unless-stopped
     command: ["python", "manage.py", "expire_orders", "--loop"]
     environment: *backend_environment
+    healthcheck:
+      test: ["CMD", "python", "manage.py", "check_operations", "--worker", "expire_orders"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     depends_on:
       backend:
         condition: service_healthy
@@ -70,6 +79,12 @@ services:
     restart: unless-stopped
     command: ["python", "manage.py", "reconcile_payments", "--loop", "--interval", "30", "--limit", "100"]
     environment: *backend_environment
+    healthcheck:
+      test: ["CMD", "python", "manage.py", "check_operations", "--worker", "reconcile_payments"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     depends_on:
       backend:
         condition: service_healthy

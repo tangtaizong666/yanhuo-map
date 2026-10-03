@@ -58,6 +58,7 @@ class MarketTests(TestCase):
         self.action(order, 'ready')
         with self.assertRaises(BusinessError): self.action(order, 'complete', code=order['pickup_code'])
         self.action(order, 'confirm_payment')
+        order = self.client.get(f"/api/v1/orders/{order['id']}").data
         with self.assertRaises(BusinessError): self.action(order, 'complete', code='00000000')
         completed = self.action(order, 'complete', code=order['pickup_code'])
         self.assertEqual(completed.status, 'completed')

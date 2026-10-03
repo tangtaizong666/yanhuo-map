@@ -21,6 +21,7 @@ import { api, statusText } from "../lib/api";
 import { useSession } from "../stores/session";
 import { notify } from "../lib/notify";
 import { useFollowState } from "../lib/discovery";
+import { orderPage, type OrderCounts } from "../lib/orderPages";
 import type { Stall } from "../lib/types";
 
 const router = useRouter();
@@ -37,7 +38,7 @@ watch(
     follows.value = [];
   },
 );
-const orders = ref<any[]>([]);
+const orderCounts = ref<OrderCounts>({ all: 0, reviewed: 0 });
 const loading = ref(true);
 const error = ref("");
 const busy = ref(false);
@@ -50,9 +51,7 @@ const feedbackContact = ref("");
 const deletionOpen = ref(false);
 const deletionConfirmation = ref("");
 const deletionPassword = ref("");
-const reviews = computed(
-  () => orders.value.filter((order) => order.review).length,
-);
+const reviews = computed(() => orderCounts.value.reviewed || 0);
 const sections = [
   { id: "follows", title: "我的关注", icon: Heart },
   { id: "settings", title: "账号设置", icon: Settings2 },
@@ -72,13 +71,13 @@ onMounted(async () => {
     displayName.value = session.user.display_name;
     const results = await Promise.all([
       api<Stall[]>("/follows"),
-      api<any[]>("/orders"),
+      orderPage("/orders", "all", null, undefined, 1),
     ]);
     if (followState.isCurrent(read)) {
       follows.value = results[0]
         .map((stall) => followState.reconcile(stall, read))
         .filter((stall) => stall.is_followed);
-      orders.value = results[1];
+      orderCounts.value = results[1].counts;
     }
   } catch (e) {
     if (followState.isCurrent(read)) error.value = (e as Error).message;
@@ -200,7 +199,7 @@ async function deleteAccount() {
               <strong>{{ follows.length }}</strong
               ><span>关注</span></button
             ><RouterLink to="/orders"
-              ><strong>{{ orders.length }}</strong
+              ><strong>{{ orderCounts.all }}</strong
               ><span>订单</span></RouterLink
             ><RouterLink to="/orders"
               ><strong>{{ reviews }}</strong

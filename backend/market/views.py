@@ -1,6 +1,5 @@
 import math
 import secrets
-import ipaddress
 from django.conf import settings
 from django.contrib.auth import authenticate, login, logout, update_session_auth_hash
 from django.contrib.auth.models import User
@@ -19,19 +18,21 @@ from rest_framework.decorators import api_view, permission_classes, throttle_cla
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
+from rest_framework.exceptions import Throttled
 from .errors import BusinessError
 from .models import Area, BusinessSession, Event, Feedback, Follow, Order, Review, SiteConfiguration, Stall, StallLocation
 from .serializers import AreaSerializer, OrderInput, OrderSerializer, RegistrationInput, StallCutoffInput, StallSerializer, StallStatusInput, user_data
 from .services import audit, cancel_order, confirm_receipt, create_order, expire_pending_orders, merchant_action
+from .auth_limits import client_ip, login_attempt, LoginRateLimited
+from .permissions import get_merchant_stall, owned_or_permitted
+from .discovery_queries import filter_status, visible_stall_query
+from .list_api import order_list_response
 
 
 class AuthThrottle(AnonRateThrottle):
     scope = 'auth'
     def get_ident(self, request):
-        if settings.AUTH_TRUST_PROXY_CLIENT_IP:
-            try: return str(ipaddress.ip_address(request.META.get('HTTP_X_REAL_IP', '')))
-            except ValueError: pass
-        return request.META.get('REMOTE_ADDR', '')
+        return client_ip(request)
     def get_cache_key(self, request, view):
         return self.cache_format % {'scope': self.scope, 'ident': self.get_ident(request)}
 
@@ -46,11 +47,7 @@ def check_password(password, user):
 
 
 def visible_stalls():
-    query = Stall.objects.filter(is_visible=True)
-    if not settings.DEMO_MODE: query = query.filter(is_demo=False)
-    return query.select_related('area', 'merchant', 'location', 'current_session').prefetch_related('products', 'reviews__user').annotate(
-        completed_count=Count('orders', filter=Q(orders__status='completed'), distinct=True),
-        prep_active_count=Count('orders', filter=Q(orders__status__in=('pending_payment', 'pending', 'preparing')), distinct=True))
+    return visible_stall_query()
 
 
 def stall_context(request):
@@ -70,13 +67,11 @@ def serialize_stall(stall, request): return StallSerializer(stall, context=stall
 
 
 def order_query():
-    return Order.objects.select_related('stall__location', 'stall__merchant', 'review__user', 'payment_refund').prefetch_related('items', 'payments')
+    return Order.objects.select_related('stall__location', 'stall__merchant', 'review__user').prefetch_related('items', 'payments', 'refunds')
 
 
-def merchant_stall(stall_id, user, locked=False):
-    query = Stall.objects.select_for_update(no_key=True) if locked else Stall.objects.all()
-    if not user.is_staff: query = query.filter(merchant__user=user)
-    return get_object_or_404(query, pk=stall_id)
+def merchant_stall(stall_id, user, locked=False, permission='market.view_stall'):
+    return get_merchant_stall(stall_id, user, permission, locked)
 
 
 @api_view(['GET'])
@@ -100,13 +95,16 @@ def csrf_token(request): return Response({'csrfToken': get_token(request)})
 
 
 @api_view(['POST'])
-@throttle_classes([AuthThrottle])
+@throttle_classes([])
 def login_view(request):
     csrf(request)
     username, password = request.data.get('username', ''), request.data.get('password', '')
     if not isinstance(username, str) or not isinstance(password, str) or len(username) > 150 or len(password) > 128:
         raise BusinessError('账号或密码格式不正确。', status=400)
-    user = authenticate(request, username=username, password=password)
+    try:
+        user = login_attempt(request, username, lambda: authenticate(request, username=username, password=password))
+    except LoginRateLimited as exc:
+        raise Throttled(wait=exc.retry_after, detail='登录失败次数过多，请稍后再试。')
     if not user: raise BusinessError('账号或密码不正确。', 'invalid_credentials', status=400)
     login(request, user)
     return Response(user_data(user))
@@ -165,14 +163,16 @@ def password(request):
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated])
 def account(request):
-    expire_pending_orders()
+    from .models import PaymentAttempt, PaymentRefund
+    expire_pending_orders(user_id=request.user.pk)
     with transaction.atomic():
         user = User.objects.select_for_update().get(pk=request.user.pk)
         if user.is_staff or hasattr(user, 'merchant_profile'):
             raise BusinessError('商家与运营账号请联系平台处理注销。', 'managed_account')
-        if user.orders.filter(Q(status__in=['pending_payment', 'pending', 'preparing', 'ready', 'delivering', 'arrived'])
-                | Q(payment_status='refunding') | Q(payment_review_required=True)
-                | (Q(payment_refund__isnull=False) & ~Q(payment_refund__status='success'))).exists():
+        if (user.orders.filter(Q(status__in=['pending_payment', 'pending', 'preparing', 'ready', 'delivering', 'arrived'])
+                | Q(payment_status='refunding') | Q(payment_review_required=True)).exists()
+                or PaymentAttempt.objects.filter(order__user=user, status__in=PaymentAttempt.ACTIVE_STATUSES).exists()
+                or PaymentRefund.objects.filter(order__user=user, resolved_at__isnull=True).exclude(status='success').exists()):
             raise BusinessError('还有进行中的订单，请处理完成后再注销。', 'active_orders')
         supplied = serializers.CharField(max_length=128).run_validation(request.data.get('password'))
         if not user.check_password(supplied): raise BusinessError('请输入正确密码确认注销。', 'invalid_password', status=400)
@@ -206,15 +206,19 @@ def stalls(request):
     category = request.query_params.get('category')
     if category and category != 'all': query = query.filter(category=category)
     context = stall_context(request)
+    status_filter = request.query_params.get('status')
+    query = filter_status(query, status_filter, context['config'])
     if context.get('point') and connection.vendor == 'postgresql':
         lat, lng = context['point']
         query = query.annotate(distance_m_db=RawSQL(
             '(SELECT ST_Distance(coordinates, ST_SetSRID(ST_MakePoint(%s, %s),4326)::geography) '
             'FROM market_stalllocation WHERE stall_id = market_stall.id)', (lng, lat)))
-    data = list(StallSerializer(query.order_by('id'), many=True, context=context).data)
-    status_filter = request.query_params.get('status')
-    if status_filter == 'orderable': data = [s for s in data if s['can_order']]
-    elif status_filter and status_filter != 'all': data = [s for s in data if s['status'] == status_filter]
+    candidates = list(query.order_by('id'))
+    if status_filter == 'orderable':
+        candidates = [stall for stall in candidates if stall.can_order(context['config'])]
+    elif status_filter and status_filter != 'all':
+        candidates = [stall for stall in candidates if stall.effective_status(context['config']) == status_filter]
+    data = list(StallSerializer(candidates, many=True, context=context).data)
     sort = request.query_params.get('sort')
     if sort == 'distance' and context.get('point'):
         data.sort(key=lambda x: x['distance_m'] if x['distance_m'] is not None else float('inf'))
@@ -264,18 +268,16 @@ def event(request):
 @permission_classes([IsAuthenticated])
 def orders(request):
     if request.method == 'GET':
-        expire_pending_orders()
-        return Response(OrderSerializer(order_query().filter(user=request.user), many=True).data)
+        return order_list_response(order_query().filter(user=request.user), request)
     form = OrderInput(data=request.data)
     form.is_valid(raise_exception=True)
     order, created = create_order(request.user, form.validated_data)
-    return Response(OrderSerializer(order).data, status=201 if created else 200)
+    return Response(OrderSerializer(order, context={'request': request}).data, status=201 if created else 200)
 
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def active_order_summary(request):
-    expire_pending_orders()
     active = Order.objects.filter(user=request.user, status__in=['pending_payment', 'pending', 'preparing', 'ready', 'delivering', 'arrived'])
     counts = active.aggregate(**{status: Count('id', filter=Q(status=status))
         for status in ['pending_payment', 'pending', 'preparing', 'ready', 'delivering', 'arrived']})
@@ -299,21 +301,20 @@ def active_order_summary(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def order_detail(request, order_id):
-    expire_pending_orders()
-    return Response(OrderSerializer(get_object_or_404(order_query(), pk=order_id, user=request.user)).data)
+    return Response(OrderSerializer(get_object_or_404(order_query(), pk=order_id, user=request.user), context={'request': request}).data)
 
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def cancel(request, order_id):
     reason = serializers.CharField(max_length=200, allow_blank=True).run_validation(request.data.get('reason', ''))
-    return Response(OrderSerializer(cancel_order(order_id, request.user, reason)).data)
+    return Response(OrderSerializer(cancel_order(order_id, request.user, reason), context={'request': request}).data)
 
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def receive_delivery(request, order_id):
-    return Response(OrderSerializer(confirm_receipt(order_id, request.user)).data)
+    return Response(OrderSerializer(confirm_receipt(order_id, request.user), context={'request': request}).data)
 
 
 @api_view(['POST'])
@@ -326,19 +327,17 @@ def review(request, order_id):
         if order.status != 'completed': raise BusinessError('完成取餐后才能评价。', 'not_completed')
         if Review.objects.filter(order=order).exists(): raise BusinessError('此订单已评价。', 'already_reviewed')
         Review.objects.create(order=order, user=request.user, stall=order.stall, rating=rating, content=content)
-    return Response(OrderSerializer(order).data, status=201)
+    return Response(OrderSerializer(order, context={'request': request}).data, status=201)
 
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def merchant_orders(request):
-    expire_pending_orders()
-    query = order_query()
-    if not request.user.is_staff: query = query.filter(stall__merchant__user=request.user)
+    query = owned_or_permitted(order_query(), request.user, 'market.view_order')
     if request.query_params.get('stall'):
         stall_id = serializers.IntegerField(min_value=1).run_validation(request.query_params['stall'])
         query = query.filter(stall_id=stall_id)
-    return Response(OrderSerializer(query, many=True, context={'merchant': True}).data)
+    return order_list_response(query, request, merchant=True)
 
 
 @api_view(['POST'])
@@ -349,7 +348,7 @@ def merchant_status(request, stall_id):
     form.is_valid(raise_exception=True)
     data = form.validated_data
     with transaction.atomic():
-        stall = merchant_stall(stall_id, request.user, locked=True)
+        stall = merchant_stall(stall_id, request.user, locked=True, permission='market.change_stall')
         if cutoff_only:
             # The stall lock serializes this check with closing/reopening on other
             # devices. Never replay stale status or position fields from the page.
@@ -419,10 +418,11 @@ def merchant_order_action(request, order_id):
             options['prep_minutes'] = serializers.IntegerField(min_value=1, max_value=180).run_validation(request.data['prep_minutes'])
         if 'idempotency_key' in request.data:
             options['idempotency_key'] = serializers.CharField(min_length=8, max_length=128).run_validation(request.data['idempotency_key'])
-    return Response(OrderSerializer(merchant_action(order_id, request.user, action, code, reason, **options), context={'merchant': True}).data)
+    return Response(OrderSerializer(merchant_action(order_id, request.user, action, code, reason, **options), context={'merchant': True, 'request': request}).data)
 
 
 @api_view(['GET'])
+@throttle_classes([])
 def health(request):
     try:
         with connection.cursor() as cursor: cursor.execute('SELECT 1')

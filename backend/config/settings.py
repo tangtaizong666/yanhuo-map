@@ -34,6 +34,11 @@ WECHAT_PAY_PUBLIC_ORIGIN = os.getenv('WECHAT_PAY_PUBLIC_ORIGIN', '')
 WECHAT_PAY_TRUST_PROXY_CLIENT_IP = os.getenv('WECHAT_PAY_TRUST_PROXY_CLIENT_IP', 'false').lower() == 'true'
 # Enable only when the backend is isolated behind a proxy overwriting X-Real-IP.
 AUTH_TRUST_PROXY_CLIENT_IP = os.getenv('AUTH_TRUST_PROXY_CLIENT_IP', 'false').lower() == 'true'
+AUTH_FAILURE_WINDOW_SECONDS = int(os.getenv('AUTH_FAILURE_WINDOW_SECONDS', '900'))
+AUTH_FAILURE_ACCOUNT_LIMIT = int(os.getenv('AUTH_FAILURE_ACCOUNT_LIMIT', '10'))
+AUTH_FAILURE_IP_LIMIT = int(os.getenv('AUTH_FAILURE_IP_LIMIT', '60'))
+if min(AUTH_FAILURE_WINDOW_SECONDS, AUTH_FAILURE_ACCOUNT_LIMIT, AUTH_FAILURE_IP_LIMIT) < 1:
+    raise ImproperlyConfigured('Authentication failure limits must be positive.')
 if PRODUCTION:
     if SECRET_KEY.startswith('local-') or len(SECRET_KEY) < 40:
         raise ImproperlyConfigured('Production requires a random DJANGO_SECRET_KEY with at least 40 characters.')
@@ -51,6 +56,7 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware', 'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware', 'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware', 'django.contrib.messages.middleware.MessageMiddleware',
+    'market.auth_limits.AdminLoginLimitStatusMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 ROOT_URLCONF = 'config.urls'
@@ -83,7 +89,9 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': ['rest_framework.authentication.SessionAuthentication'],
     'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.AllowAny'],
     'DEFAULT_RENDERER_CLASSES': ['rest_framework.renderers.JSONRenderer'],
-    'DEFAULT_THROTTLE_CLASSES': ['rest_framework.throttling.AnonRateThrottle', 'rest_framework.throttling.UserRateThrottle'],
+    'DEFAULT_PARSER_CLASSES': ['market.request_parsers.BoundedJSONParser',
+        'market.request_parsers.BoundedFormParser', 'rest_framework.parsers.MultiPartParser'],
+    'DEFAULT_THROTTLE_CLASSES': ['market.auth_limits.TrustedAnonRateThrottle', 'market.auth_limits.TrustedUserRateThrottle'],
     'DEFAULT_THROTTLE_RATES': {'anon': '1200/hour', 'user': '6000/hour', 'auth': '300/hour' if DEMO_MODE and not PRODUCTION else '30/hour'},
     'EXCEPTION_HANDLER': 'market.errors.exception_handler',
 }
@@ -97,6 +105,9 @@ MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 FILE_UPLOAD_MAX_MEMORY_SIZE = 1024 * 1024
 DATA_UPLOAD_MAX_MEMORY_SIZE = 6 * 1024 * 1024
+IMAGE_UPLOAD_MAX_BYTES = 5 * 1024 * 1024
+FILE_UPLOAD_HANDLERS = ['market.upload_handlers.BoundedImageUploadHandler',
+    'django.core.files.uploadhandler.MemoryFileUploadHandler', 'django.core.files.uploadhandler.TemporaryFileUploadHandler']
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 APPEND_SLASH = False
 SESSION_COOKIE_HTTPONLY = True

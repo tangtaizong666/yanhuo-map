@@ -170,6 +170,7 @@ export interface WechatPayment {
   error_message: string;
 }
 export interface PaymentRefund {
+  resolved_at?: string | null;
   mode?: "simulation" | "live";
   id: string;
   status:
@@ -181,6 +182,9 @@ export interface PaymentRefund {
   error_message: string;
 }
 export interface Order {
+  allowed_actions?: string[];
+  financial_hold_reason?: string;
+  refunds?: PaymentRefund[];
   mode?: "simulation" | "live";
   fulfillment_type?: "pickup" | "delivery";
   items_total_cents?: number;

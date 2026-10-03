@@ -18,6 +18,7 @@ from .models import Product, StockCorrection
 from .serializers import OrderSerializer, ProductSerializer
 from .services import audit
 from .views import merchant_stall, order_query
+from .auth_limits import client_ip
 
 
 class StockCorrectionInput(StrictInput):
@@ -36,9 +37,7 @@ def correct_stock(product_id, actor, values):
         sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     with transaction.atomic():
         original = get_object_or_404(Product, pk=product_id)
-        if actor.is_staff and not actor.has_perm('market.change_product'):
-            raise BusinessError('没有更正库存的权限。', 'forbidden', status=403)
-        merchant_stall(original.stall_id, actor, locked=True)
+        merchant_stall(original.stall_id, actor, locked=True, permission='market.change_product')
         product = Product.objects.select_for_update().get(pk=product_id)
         previous = StockCorrection.objects.filter(product=product, idempotency_key=data['idempotency_key']).first()
         if previous:
@@ -75,7 +74,7 @@ def receiving_heartbeat(request, stall_id):
     form = StrictInput(data=request.data)
     form.is_valid(raise_exception=True)
     with transaction.atomic():
-        stall = merchant_stall(stall_id, request.user, locked=True)
+        stall = merchant_stall(stall_id, request.user, locked=True, permission='market.change_stall')
         now = timezone.now()
         if not stall.receiving_seen_at or now > stall.receiving_seen_at:
             stall.receiving_seen_at = now
@@ -94,7 +93,7 @@ class PickupLookupThrottle(SimpleRateThrottle):
     scope = 'pickup_lookup'
     def get_cache_key(self, request, view):
         return self.cache_format % {'scope': self.scope,
-            'ident': f'user:{request.user.pk}' if request.user.is_authenticated else f'ip:{self.get_ident(request)}'}
+            'ident': f'user:{request.user.pk}' if request.user.is_authenticated else f'ip:{client_ip(request)}'}
 
 
 @sensitive_post_parameters('pickup_code')
@@ -102,7 +101,7 @@ class PickupLookupThrottle(SimpleRateThrottle):
 @permission_classes([IsAuthenticated])
 @throttle_classes([PickupLookupThrottle])
 def pickup_lookup(request, stall_id):
-    stall = merchant_stall(stall_id, request.user)
+    stall = merchant_stall(stall_id, request.user, permission='market.view_order')
     form = PickupLookupInput(data=request.data)
     form.is_valid(raise_exception=True)
     data = form.validated_data
@@ -115,5 +114,5 @@ def pickup_lookup(request, stall_id):
         raise BusinessError('该取餐码对应多笔待取订单，请补充完整订单号后查询。', 'pickup_code_ambiguous')
     # Deliberately omit entered codes from all audit details and merchant responses.
     audit(request.user, 'pickup_order_looked_up', matches[0].pk, stall_id=stall.pk)
-    return Response(OrderSerializer(matches[0], context={'merchant': True}).data,
+    return Response(OrderSerializer(matches[0], context={'merchant': True, 'request': request}).data,
         headers={'Cache-Control': 'no-store, private'})

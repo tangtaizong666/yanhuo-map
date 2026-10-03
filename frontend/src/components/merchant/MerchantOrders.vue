@@ -34,6 +34,9 @@ import {
 } from "./delivery";
 import { api, ApiError, formatTime, money, statusText } from "../../lib/api";
 import { notify } from "../../lib/notify";
+import { orderPage, mergeOrders, type OrderCounts } from "../../lib/orderPages";
+import type { Order } from "../../lib/types";
+import { allows } from "../../lib/orderActions";
 import { useSession } from "../../stores/session";
 import { newRequestKey } from "../../lib/engagement";
 import PortionSummary from "../PortionSummary.vue";
@@ -59,6 +62,7 @@ const props = withDefaults(
     syncError?: string;
     loading?: boolean;
     initialFilter?: string;
+    counts?: OrderCounts;
   }>(),
   { loading: false, initialFilter: "active", syncError: "" },
 );
@@ -123,6 +127,70 @@ const boardMode = ref(
     ? "kitchen"
     : "all",
 );
+const history = ref<Order[]>([]);
+const historyNext = ref<string | null>(null);
+const historyBusy = ref(false);
+const historyError = ref("");
+const historyPages = new Map<string, { rows: Order[]; next: string | null }>();
+let historyGeneration = 0;
+let historyController: AbortController | undefined;
+const historyFilter = computed(() =>
+  ["all", "completed", "cancelled"].includes(filter.value)
+    ? filter.value
+    : null,
+);
+async function loadHistory(more = false) {
+  if (
+    !historyFilter.value ||
+    (more && (historyBusy.value || !historyNext.value))
+  )
+    return;
+  const selected = historyFilter.value;
+  const generation = ++historyGeneration;
+  historyController?.abort();
+  historyController = new AbortController();
+  historyBusy.value = true;
+  historyError.value = "";
+  try {
+    const page = await orderPage(
+      `/merchant/orders?stall=${props.stall.id}`,
+      selected,
+      more ? historyNext.value : null,
+      historyController.signal,
+    );
+    if (generation !== historyGeneration) return;
+    history.value = more
+      ? mergeOrders(history.value, page.results)
+      : page.results;
+    historyNext.value = page.next;
+    historyPages.set(selected, { rows: history.value, next: page.next });
+  } catch (e) {
+    if (generation === historyGeneration)
+      historyError.value = (e as Error).message;
+  } finally {
+    if (generation === historyGeneration) historyBusy.value = false;
+  }
+}
+watch(
+  historyFilter,
+  (selected) => {
+    historyGeneration++;
+    historyController?.abort();
+    const cached = selected ? historyPages.get(selected) : undefined;
+    history.value = cached?.rows || [];
+    historyNext.value = cached?.next || null;
+    historyBusy.value = false;
+    historyError.value = "";
+    if (selected && !cached) void loadHistory();
+  },
+  { immediate: true },
+);
+function filterCount(value: string) {
+  return (
+    props.counts?.[value] ??
+    allOrders.value.filter((order) => matchesFilter(order, value)).length
+  );
+}
 const lookupOrder = ref<any>(null);
 const toolsOpen = ref(false);
 function setBoard(value: string) {
@@ -154,7 +222,7 @@ let actionGeneration = 0;
 let actionController: AbortController | undefined;
 
 const allOrders = computed(() => {
-  const values = props.orders.map(
+  const values = mergeOrders(history.value, props.orders).map(
     (order) => updatedOrders[String(order.id)] || order,
   );
   if (
@@ -294,7 +362,11 @@ function totalQuantity(order: any) {
   return order.items.reduce((sum: number, item: any) => sum + item.quantity, 0);
 }
 function actions(order: any) {
-  if (order.refund && order.refund.status !== "success")
+  if (
+    order.refund &&
+    !order.refund.resolved_at &&
+    order.refund.status !== "success"
+  )
     return [{ value: "refund_status", label: "查询退款进度", primary: false }];
   if (
     order.cancel_requested &&
@@ -436,7 +508,12 @@ function moreActions(order: any) {
 }
 function canAct(order: any, value: string) {
   if (!order) return false;
+  if (value === "refund_status" && !order.refund) return false;
   if (pendingPrep[order.id]) return value === pendingPrep[order.id]!.action;
+  if (Array.isArray(order.allowed_actions) && value !== "refresh_status") {
+    const action = value === "refund_status" ? "sync_payment" : value;
+    return allows(order, action);
+  }
   if (value === "update_prep")
     return (
       order.status === "preparing" &&
@@ -986,7 +1063,7 @@ watch(
   () => props.orders,
   () => {
     // Fresh parent data remains authoritative when another device advances an order.
-    for (const key of Object.keys(updatedOrders)) delete updatedOrders[key];
+    for (const row of props.orders) delete updatedOrders[String(row.id)];
   },
 );
 watch(
@@ -1026,6 +1103,8 @@ onMounted(() => {
   }, 1000);
 });
 onUnmounted(() => {
+  historyGeneration++;
+  historyController?.abort();
   actionGeneration++;
   actionController?.abort();
   clearInterval(ticker);
@@ -1148,15 +1227,25 @@ onUnmounted(() => {
           "
         >
           {{ item.label
-          }}<span>{{
-            ordersReady
-              ? allOrders.filter((order) => matchesFilter(order, item.value))
-                  .length
-              : "—"
-          }}</span>
+          }}<span>{{ ordersReady ? filterCount(item.value) : "—" }}</span>
         </button>
       </div>
     </div>
+    <p v-if="historyFilter" class="m-info-banner">
+      历史按页加载，搜索仅覆盖已加载记录；进行中与资金待处理订单持续同步。
+    </p>
+    <p v-if="historyError" class="m-alert" role="alert">
+      {{ historyError }} <button @click="loadHistory()">重试历史订单</button>
+    </p>
+    <p v-if="historyBusy" role="status">正在加载历史订单…</p>
+    <button
+      v-if="historyNext"
+      class="btn btn-secondary"
+      :disabled="historyBusy"
+      @click="loadHistory(true)"
+    >
+      加载更多历史订单
+    </button>
     <div class="m-orders-list-caption">
       <span>{{
         !ordersReady

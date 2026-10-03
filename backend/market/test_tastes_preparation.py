@@ -243,7 +243,7 @@ class TastesPreparationTests(TestCase):
         original_estimate = order.estimated_ready_at
         Order.objects.filter(pk=order.pk).update(payment_review_required=True)
         result = self.action(order, 'update_prep', prep_minutes=15, reason='等一锅', idempotency_key='payment-review-check')
-        self.assertEqual(result.data['code'], 'payment_in_progress')
+        self.assertEqual(result.data['code'], 'payment_requires_review')
         order.refresh_from_db()
         self.assertEqual((order.estimated_ready_at, order.total_cents, order.payment_status), (original_estimate, 1600, 'unpaid'))
         self.assertEqual(PreparationRequest.objects.count(), 0)

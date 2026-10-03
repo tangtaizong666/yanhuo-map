@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
+import { advanceSessionEpoch, sessionEpoch } from "../lib/sessionEpoch";
 import { api } from "../lib/api";
 import type { User, Config } from "../lib/types";
 export const useSession = defineStore("session", () => {
@@ -25,6 +26,22 @@ export const useSession = defineStore("session", () => {
   }
   let pending: Promise<void> | null = null;
   let identityRequest = 0;
+  function beginIdentityChange() {
+    identityRequest++;
+    advanceSessionEpoch();
+  }
+  watch(
+    () => user.value?.id ?? null,
+    () => beginIdentityChange(),
+    { flush: "sync" },
+  );
+  function expire(epoch: number) {
+    if (epoch !== sessionEpoch()) return false;
+    beginIdentityChange();
+    user.value = null;
+    setConsumerPreview(false);
+    return true;
+  }
   async function load() {
     if (loaded.value) return;
     if (pending) return pending;
@@ -47,12 +64,14 @@ export const useSession = defineStore("session", () => {
   }
   async function refreshUser() {
     const request = ++identityRequest;
+    const epoch = sessionEpoch();
     const next = await api<User | null>("/auth/me");
-    if (request !== identityRequest) return;
+    if (request !== identityRequest || epoch !== sessionEpoch()) return;
     if (next?.id !== user.value?.id) setConsumerPreview(false);
     user.value = next;
   }
   async function logout() {
+    beginIdentityChange();
     await api("/auth/logout", { method: "POST" });
     identityRequest++;
     user.value = null;
@@ -68,5 +87,7 @@ export const useSession = defineStore("session", () => {
     load,
     refreshUser,
     logout,
+    expire,
+    beginIdentityChange,
   };
 });

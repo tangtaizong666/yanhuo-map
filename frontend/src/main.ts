@@ -6,9 +6,9 @@ import { useSession } from "./stores/session";
 import { notify } from "./lib/notify";
 import "./style.css";
 createApp(App).use(createPinia()).use(router).mount("#app");
-window.addEventListener("session-expired", () => {
+window.addEventListener("session-expired", (event) => {
   const session = useSession();
-  session.user = null;
+  if (!session.expire((event as CustomEvent).detail?.epoch)) return;
   if (router.currentRoute.value.path !== "/login") {
     notify("登录已过期，请重新登录。", "info");
     router.push({

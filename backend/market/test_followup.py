@@ -7,7 +7,7 @@ import uuid
 from datetime import timedelta
 from unittest.mock import patch
 
-from django.contrib.auth.models import User
+from django.contrib.auth.models import Permission, User
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -126,8 +126,15 @@ class MerchantFollowupContractTests(TestCase):
         self.assertEqual(self.api.get('/api/v1/merchant/orders').status_code, 403)
         staff = User.objects.create_user(username='followup_operator', is_staff=True)
         self.api.force_authenticate(staff)
+        self.assertEqual(self.rows(), {})
+        staff.user_permissions.add(Permission.objects.get(codename='view_order'))
+        self.api.force_authenticate(User.objects.get(pk=staff.pk))
         self.assertEqual(len(self.rows()), 3)
         self.assertEqual(set(self.rows(stall=foreign_stall.pk)), {str(foreign.pk)})
+        denied = self.api.post(f'/api/v1/merchant/orders/{foreign.pk}/action', {'action': 'complete'}, format='json')
+        self.assertEqual(denied.status_code, 404)
+        foreign.refresh_from_db()
+        self.assertEqual(foreign.status, 'cancelled')
 
     def test_merchant_list_redacts_pickup_codes_payment_links_and_provider_identifiers(self):
         orders = []
@@ -145,7 +152,9 @@ class MerchantFollowupContractTests(TestCase):
         self.api.force_authenticate(self.student)
         student = self.api.get(f'/api/v1/orders/{orders[0].pk}')
         self.assertEqual(student.status_code, 200)
-        self.assertEqual(student.data['pickup_code'], orders[0].pickup_code)
+        self.assertEqual(student.data['pickup_code'], '')
+        self.assertTrue(student.data['financial_hold_reason'])
+        self.assertNotIn('complete', student.data['allowed_actions'])
         self.assertEqual(student.data['payment']['code_url'], 'weixin://wxpay/private-entry')
 
     def test_historical_simulation_and_live_modes_survive_current_simulation_switch(self):

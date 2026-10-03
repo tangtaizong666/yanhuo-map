@@ -1,0 +1,19 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<p>订单 {{ order.number }} · {{ order.get_status_display }} · {{ order.get_payment_status_display }}。核验会查询原收款商户；查询失败、金额不符或退款尚未完成时不能解除限制。</p>
+<h2>原付款</h2>
+<table><thead><tr><th>商户交易号</th><th>金额（分）</th><th>状态</th><th>交易身份</th></tr></thead><tbody>
+{% for payment in payments %}<tr><td>{{ payment.out_trade_no }}</td><td>{{ payment.amount_cents }}</td><td>{{ payment.get_status_display }}</td><td>{{ payment.transaction_id|default:"待核验" }}</td></tr>{% empty %}<tr><td>无微信付款记录</td></tr>{% endfor %}
+</tbody></table>
+<h2>退款历史</h2>
+<table><thead><tr><th>商户退款号</th><th>原付款</th><th>金额（分）</th><th>服务方状态</th><th>核验结案时间</th></tr></thead><tbody>
+{% for refund in refunds %}<tr><td>{{ refund.out_refund_no }}</td><td>{{ refund.payment.out_trade_no }}</td><td>{{ refund.amount_cents }}</td><td>{{ refund.get_status_display }}</td><td>{{ refund.resolved_at|default:"尚未结案" }}</td></tr>{% empty %}<tr><td>暂无退款</td></tr>{% endfor %}
+</tbody></table>
+<h2>核验与处理</h2>
+<p>关闭退款会保留原记录。新尝试使用新的退款号；结果不确定时只查询原尝试。外部退款仅在支付服务方确认全额退回后记录，随后查询全部流水结案。</p>
+<form method="post">{% csrf_token %}{{ form.as_p }}<div class="submit-row"><input type="submit" value="执行所选核验或退款申请"></div></form>
+<h2>最近核验证据</h2>
+<table><thead><tr><th>时间</th><th>操作</th><th>结果</th><th>处理人</th><th>原因</th><th>摘要校验值</th></tr></thead><tbody>
+{% for item in evidence %}<tr><td>{{ item.created_at }}</td><td>{{ item.operation }}</td><td>{{ item.outcome }}</td><td>{{ item.actor|default:"系统" }}</td><td>{{ item.reason }}</td><td>{{ item.facts_hash }}</td></tr>{% empty %}<tr><td>暂无核验证据</td></tr>{% endfor %}
+</tbody></table>
+{% endblock %}

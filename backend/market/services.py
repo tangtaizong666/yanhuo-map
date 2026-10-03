@@ -1,18 +1,20 @@
 import hashlib
 import json
 import secrets
+import logging
 from datetime import timedelta
 from django.conf import settings
-from django.db import IntegrityError, transaction
-from django.db.models import F
+from django.db import IntegrityError, connection, transaction
+from django.db.models import Exists, F, OuterRef, Q
 from django.utils import timezone
 from .errors import BusinessError
-from .models import AuditLog, Event, Order, OrderItem, PaymentAttempt, PreparationRequest, Product, Stall, SiteConfiguration
+from .models import AuditLog, Event, Order, OrderItem, PaymentAttempt, PaymentRefund, PreparationRequest, Product, Stall, SiteConfiguration
 from .tastes import canonical_item, validate_portions
 
 
 def payment_busy(order):
-    return order.payment_review_required or order.payments.filter(status__in=PaymentAttempt.ACTIVE_STATUSES).exists()
+    from .financial import hold_code
+    return bool(hold_code(order))
 
 
 def audit(actor, action, target, **details):
@@ -49,13 +51,38 @@ def expire_locked(order):
     return False
 
 
-def expire_pending_orders():
-    ids = list(Order.objects.filter(status__in=['pending', 'pending_payment'], expires_at__lte=timezone.now()).values_list('id', flat=True))
-    count = 0
-    for order_id in ids:
-        with transaction.atomic():
-            order = Order.objects.select_for_update().get(pk=order_id)
-            count += bool(expire_locked(order))
+def expire_pending_orders(*, limit=100, stall_id=None, user_id=None, on_error=None):
+    """Bounded maintenance; locked/financially held rows never block other orders."""
+    candidates = Order.objects.filter(status__in=['pending', 'pending_payment'], expires_at__lte=timezone.now(),
+        payment_review_required=False).filter(Q(payment_status='unpaid') | Q(fulfillment_type='delivery', payment_status='paid'))
+    candidates = candidates.annotate(_active_payment=Exists(PaymentAttempt.objects.filter(
+        order_id=OuterRef('pk'), status__in=PaymentAttempt.ACTIVE_STATUSES)),
+        _unresolved_refund=Exists(PaymentRefund.objects.filter(order_id=OuterRef('pk'), resolved_at__isnull=True).exclude(status='success'))
+    ).filter(_active_payment=False, _unresolved_refund=False)
+    if stall_id is not None: candidates = candidates.filter(stall_id=stall_id)
+    if user_id is not None: candidates = candidates.filter(user_id=user_id)
+    from .simulation import enabled
+    if not enabled():
+        basic_cash = Q(fulfillment_type='pickup', payment_method='offline', stall__is_demo=True)
+        if not settings.DEMO_MODE or settings.PRODUCTION: basic_cash = Q(pk__isnull=True)
+        candidates = candidates.exclude(Q(mode='simulation') & ~basic_cash)
+    count, seen = 0, []
+    for _ in range(max(1, min(int(limit), 1000))):
+        order_id = None
+        try:
+            with transaction.atomic():
+                locks = {'of': ('self',), 'skip_locked': True} if connection.features.has_select_for_update_skip_locked else {}
+                # Skip locked rows in the claiming query itself, before LIMIT.
+                # A locked oldest batch therefore cannot starve later work.
+                order = candidates.exclude(pk__in=seen).select_for_update(**locks).order_by('expires_at', 'pk').first()
+                if order is None: break
+                order_id = order.pk
+                seen.append(order_id)
+                count += bool(expire_locked(order))
+        except Exception as exc:
+            logging.getLogger('market').warning('order_expiry_failed order=%s type=%s', order_id, type(exc).__name__)
+            if on_error is not None: on_error(exc)
+            if order_id is None: break
     return count
 
 
@@ -68,7 +95,7 @@ def create_order(user, data):
         return existing, False
     existing = Order.objects.filter(user=user, idempotency_key=data['idempotency_key']).first()
     if existing: return check_duplicate(existing)
-    expire_pending_orders()
+    expire_pending_orders(stall_id=data['stall_id'])
     try:
         with transaction.atomic():
             # Lock the account to serialize checkout with account deletion.
@@ -175,8 +202,8 @@ def cancel_order(order_id, user, reason):
 
 def merchant_action(order_id, user, action, code='', reason='', *, prep_minutes=None, idempotency_key=''):
     with transaction.atomic():
-        query = Order.objects.select_for_update()
-        if not user.is_staff: query = query.filter(stall__merchant__user=user)
+        from .permissions import owned_or_permitted
+        query = owned_or_permitted(Order.objects.select_for_update(of=('self',)), user, 'market.change_order')
         try: order = query.get(pk=order_id)
         except Order.DoesNotExist: raise BusinessError('订单不存在。', 'not_found', status=404)
         if order.mode == 'simulation':
@@ -198,8 +225,9 @@ def merchant_action(order_id, user, action, code='', reason='', *, prep_minutes=
             raise BusinessError('请填写新的备餐预估、调整说明及提交标识。', 'invalid_prep_update', status=400)
         if expire_locked(order): return order
         delivery = order.fulfillment_type == 'delivery'
-        if action in ('accept', 'update_prep', 'ready', 'dispatch', 'arrive', 'confirm_payment', 'approve_cancel', 'complete', 'reject') and payment_busy(order):
-            raise BusinessError('微信支付结果尚未确认，当前不能线下收款、取消或核销。', 'payment_in_progress')
+        if action in ('accept', 'update_prep', 'ready', 'dispatch', 'arrive', 'confirm_payment', 'approve_cancel', 'complete', 'reject', 'deny_cancel'):
+            from .financial import require_no_financial_hold
+            require_no_financial_hold(order)
         if delivery and order.delivery_issue and action in ('dispatch', 'arrive', 'complete'):
             raise BusinessError('请先处理并记录配送异常的解决结果。', 'delivery_issue_unresolved')
         if action == 'accept' and order.status == 'pending' and (not delivery or order.payment_status == 'paid'):

@@ -101,15 +101,18 @@ class StallSerializer(serializers.ModelSerializer):
         return service_settings(obj)
     def get_delivery(self, obj):
         from .delivery import delivery_settings
-        return delivery_settings(obj)
+        return delivery_settings(obj, context=self.context)
     def get_wechat_payment(self, obj): return public_payment_readiness(obj, self.context)
     def get_status(self, obj): return obj.effective_status(self.context.get('config'))
     def get_transaction_enabled(self, obj): return obj.transaction_enabled and obj.merchant.is_verified
     def get_can_order(self, obj): return obj.can_order(self.context.get('config'))
     def get_rating(self, obj):
+        if hasattr(obj, 'rating_average'):
+            return round(obj.rating_average, 1) if obj.rating_average is not None else None
         ratings = [r.rating for r in obj.reviews.all()]
         return round(sum(ratings) / len(ratings), 1) if ratings else None
-    def get_review_count(self, obj): return len(obj.reviews.all())
+    def get_review_count(self, obj):
+        return obj.rating_count if hasattr(obj, 'rating_count') else len(obj.reviews.all())
     def get_order_count(self, obj): return getattr(obj, 'completed_count', 0)
     def get_distance_m(self, obj):
         if hasattr(obj, 'distance_m_db'):
@@ -122,7 +125,9 @@ class StallSerializer(serializers.ModelSerializer):
     def get_is_followed(self, obj): return obj.id in self.context.get('follow_ids', set())
     def get_products(self, obj):
         return ProductSerializer([p for p in obj.products.all() if p.is_active or self.context.get('merchant')], many=True).data
-    def get_reviews(self, obj): return ReviewSerializer(list(obj.reviews.all())[:20], many=True).data
+    def get_reviews(self, obj):
+        rows = obj._preview_reviews if hasattr(obj, '_preview_reviews') else list(obj.reviews.all())[:20]
+        return ReviewSerializer(rows, many=True).data
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
@@ -142,10 +147,14 @@ class OrderSerializer(serializers.ModelSerializer):
     payment = serializers.SerializerMethodField()
     payment_can_close = serializers.SerializerMethodField()
     refund = serializers.SerializerMethodField()
+    refunds = serializers.SerializerMethodField()
+    financial_hold_reason = serializers.SerializerMethodField()
+    allowed_actions = serializers.SerializerMethodField()
     class Meta:
         model = Order
         fields = ['id', 'mode', 'number', 'stall_id', 'stall_name', 'stall_image', 'status', 'payment_status',
             'payment_method', 'payment_review_required', 'wechat_payment', 'payment', 'payment_can_close', 'refund',
+            'refunds', 'financial_hold_reason', 'allowed_actions',
             'total_cents', 'created_at', 'accepted_at', 'ready_at', 'completed_at', 'paid_at', 'expires_at', 'pickup_code',
             'estimated_ready_at', 'prep_updated_at', 'prep_delay_reason',
             'pickup_address', 'pickup_latitude', 'pickup_longitude', 'current_address', 'location_changed',
@@ -168,24 +177,60 @@ class OrderSerializer(serializers.ModelSerializer):
     def get_payment(self, obj):
         payment = self._payment(obj)
         if payment is None: return None
-        show_entry = payment.status == 'pending' and payment.expires_at > timezone.now() and not self.context.get('merchant') and not obj.payment_review_required
+        show_entry = (payment.status == 'pending' and payment.expires_at > timezone.now()
+            and not self.context.get('merchant') and 'pay' in self.get_allowed_actions(obj))
         return {'id': str(payment.pk), 'mode': payment.mode, 'status': payment.status, 'channel': payment.channel,
             'code_url': payment.code_url if show_entry else '', 'h5_url': payment.h5_url if show_entry else '',
             'expires_at': payment.expires_at.isoformat(),
             'error_message': '订单存在支付异常，请联系商家与运营核对。' if obj.payment_review_required else payment.error_message}
     def get_payment_can_close(self, obj):
-        payment = self._payment(obj)
-        return bool(payment and payment.status in PaymentAttempt.ACTIVE_STATUSES and obj.payment_status == 'unpaid' and not obj.payment_review_required)
+        return 'close_payment' in self.get_allowed_actions(obj)
     def get_refund(self, obj):
         refund = getattr(obj, 'payment_refund', None)
         if refund is None: return None
+        return self._refund_data(refund)
+    @staticmethod
+    def _refund_data(refund):
         return {'id': str(refund.pk), 'mode': refund.mode, 'status': refund.status, 'reason': refund.reason,
             'amount_cents': refund.amount_cents, 'created_at': refund.created_at.isoformat(),
             'completed_at': refund.completed_at.isoformat() if refund.completed_at else None,
+            'resolved_at': refund.resolved_at.isoformat() if refund.resolved_at else None,
+            'source': refund.source, 'replaces_id': str(refund.replaces_id) if refund.replaces_id else None,
             'error_message': refund.error_message}
+    def get_refunds(self, obj):
+        return [self._refund_data(refund) for refund in obj.refunds.all()]
+    def get_financial_hold_reason(self, obj):
+        from .financial import hold_reason
+        return hold_reason(obj)
+    def get_allowed_actions(self, obj):
+        from .financial import allowed_actions
+        from .permissions import can_operate_all
+        merchant = bool(self.context.get('merchant'))
+        actions = allowed_actions(obj, merchant=merchant)
+        request = self.context.get('request')
+        if request is None:
+            return actions
+        actor = request.user
+        if not actor.is_authenticated or not actor.is_active:
+            return []
+        if not merchant:
+            return actions if obj.user_id == actor.pk else []
+        owns_stall = obj.stall.merchant.user_id == actor.pk
+        can_change = owns_stall or can_operate_all(actor, 'market.change_order')
+        can_refund = owns_stall or can_operate_all(actor, 'market.add_paymentrefund')
+        refund_actions = {'refund', 'simulate_refund_success', 'simulate_refund_failure', 'simulate_refund_pending'}
+        # The merchant's sync button calls the refund endpoint, which requires
+        # refund permission. Ordinary refresh remains a separate read-only GET.
+        return [action for action in actions if
+            (can_refund and bool(obj.refunds.all()) if action == 'sync_payment' else
+             can_refund if action in refund_actions else can_change)]
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        if self.context.get('merchant'): data['pickup_code'] = ''
+        request = self.context.get('request')
+        if (self.context.get('merchant') or (request is not None and request.user.pk != instance.user_id)
+                or data['financial_hold_reason'] or instance.cancel_requested
+                or instance.delivery_issue or instance.payment_status == 'refunded' or instance.status not in ('ready', 'arrived')):
+            data['pickup_code'] = ''
         return data
 
 

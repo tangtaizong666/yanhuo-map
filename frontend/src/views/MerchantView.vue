@@ -23,6 +23,7 @@ import {
 } from "lucide-vue-next";
 import { api, statusText, confirmedText } from "../lib/api";
 import { useSession } from "../stores/session";
+import { attentionOrders, type OrderCounts } from "../lib/orderPages";
 import { notify } from "../lib/notify";
 import MerchantDashboard from "../components/merchant/MerchantDashboard.vue";
 import MerchantAnalytics from "../components/merchant/MerchantAnalytics.vue";
@@ -64,6 +65,7 @@ const stalls = ref<any[]>([]),
   selectedId = ref<number | null>(null),
   orders = ref<any[]>([]),
   metrics = ref<any>(null);
+const orderCounts = ref<OrderCounts>({});
 const loading = ref(true),
   refreshing = ref(false),
   error = ref(""),
@@ -168,6 +170,15 @@ let timer: ReturnType<typeof setInterval> | undefined,
   refreshSeq = 0,
   orderSeq = 0,
   metricSeq = 0;
+let catalogVersion = 0;
+let refreshQueued = false;
+const lifetime = new AbortController();
+function mutationRefresh() {
+  catalogVersion++;
+  orderSeq++;
+  metricSeq++;
+  void refresh();
+}
 function currentContext(context: number) {
   return !disposed && allowed.value && context === contextSeq;
 }
@@ -215,7 +226,11 @@ async function loadOrders() {
     context = contextSeq,
     seq = ++orderSeq;
   try {
-    const result = await api<any[]>(`/merchant/orders?stall=${id}`);
+    const page = await attentionOrders(
+      `/merchant/orders?stall=${id}`,
+      lifetime.signal,
+    );
+    const result = page.results;
     if (!Array.isArray(result))
       throw new Error("订单数据未能读取，请重新同步；在线接单状态尚未更新。");
     if (
@@ -224,6 +239,7 @@ async function loadOrders() {
       seq === orderSeq
     ) {
       orders.value = result;
+      orderCounts.value = page.counts;
       ordersReady.value = true;
       void recordReceivingHeartbeat(id, context);
     }
@@ -234,7 +250,12 @@ async function loadOrders() {
   }
 }
 async function refresh() {
-  if (disposed || refreshing.value || !allowed.value) return;
+  if (disposed || !allowed.value) return;
+  if (refreshing.value) {
+    refreshQueued = true;
+    return;
+  }
+  const version = catalogVersion;
   const context = contextSeq,
     seq = ++refreshSeq;
   let requestedStall = selectedId.value,
@@ -247,7 +268,12 @@ async function refresh() {
   refreshing.value = true;
   try {
     const result = await api<any[]>("/merchant/stalls");
-    if (!currentContext(context) || seq !== refreshSeq) return;
+    if (
+      !currentContext(context) ||
+      seq !== refreshSeq ||
+      version !== catalogVersion
+    )
+      return;
     stalls.value = result;
     if (!stalls.value.some((s) => s.id === selectedId.value)) {
       let saved = 0;
@@ -275,6 +301,10 @@ async function refresh() {
     if (currentContext(context) && seq === refreshSeq) {
       refreshing.value = false;
       loading.value = false;
+      if (refreshQueued) {
+        refreshQueued = false;
+        void refresh();
+      }
     }
   }
 }
@@ -292,6 +322,7 @@ watch(selectedId, async (id, old) => {
     orderSeq++;
     metricSeq++;
     orders.value = [];
+    orderCounts.value = {};
     ordersReady.value = false;
     metrics.value = null;
     const context = contextSeq;
@@ -321,6 +352,7 @@ watch(
     stalls.value = [];
     selectedId.value = null;
     orders.value = [];
+    orderCounts.value = {};
     ordersReady.value = false;
     metrics.value = null;
     metricsLoading.value = false;
@@ -367,7 +399,7 @@ async function confirmLocation() {
         confirm_location: true,
       },
     });
-    await refresh();
+    mutationRefresh();
     notify("位置已确认", "success");
   } catch (e) {
     notify((e as Error).message, "error");
@@ -389,7 +421,7 @@ function orderChanged(updated?: any) {
     orderSeq++;
     orders.value = orders.value.map((o) => (o.id === updated.id ? updated : o));
   }
-  void refresh();
+  mutationRefresh();
 }
 function refreshOnReturn() {
   if (document.hidden) heartbeatController?.abort();
@@ -411,6 +443,7 @@ onMounted(async () => {
     }, 10000);
 });
 onUnmounted(() => {
+  lifetime.abort();
   heartbeatController?.abort();
   disposed = true;
   clearInterval(timer);
@@ -572,7 +605,7 @@ onUnmounted(() => {
               :stall="stall"
               :orders="orders"
               :ready="ordersReady"
-              @refresh="refresh"
+              @refresh="mutationRefresh"
               @location="router.push('/merchant/store#location')"
             />
             <MerchantAttention
@@ -586,7 +619,7 @@ onUnmounted(() => {
                 (section === '' && stall.status === 'open')
               "
               @expired="refresh"
-              @refresh="refresh"
+              @refresh="mutationRefresh"
             />
             <p
               v-if="
@@ -655,13 +688,14 @@ onUnmounted(() => {
               :sync-error="error"
               :loading="refreshing"
               :initial-filter="String(route.query.filter || 'active')"
+              :counts="orderCounts"
               @refresh="orderChanged"
             />
             <MerchantProducts
               v-else-if="section === 'products'"
               :key="stall.id"
               :stall="stall"
-              @refresh="refresh"
+              @refresh="mutationRefresh"
             />
             <MerchantAnalytics
               v-else-if="section === 'analytics'"
@@ -675,7 +709,7 @@ onUnmounted(() => {
               v-else-if="section === 'reviews'"
               :key="stall.id"
               :stall="stall"
-              @refresh="refresh"
+              @refresh="mutationRefresh"
             />
             <MerchantStore
               v-else-if="section === 'store'"
@@ -683,7 +717,7 @@ onUnmounted(() => {
               :stall="stall"
               :orders="orders"
               :orders-ready="ordersReady"
-              @refresh="refresh"
+              @refresh="mutationRefresh"
             /> </template
         ></template>
         <footer class="m-workspace-footer">

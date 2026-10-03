@@ -10,6 +10,7 @@ import {
 import { api, money } from "../lib/api";
 import type { Order } from "../lib/types";
 import { useSession } from "../stores/session";
+import { allows } from "../lib/orderActions";
 import SimulationCashier from "./SimulationCashier.vue";
 import {
   needsFinancialFollowUp,
@@ -97,6 +98,7 @@ const remaining = computed(
 );
 const canStart = computed(
   () =>
+    allows(props.order, "pay", true) &&
     payableStage.value &&
     !deliveryWindowClosing.value &&
     props.order.payment_status === "unpaid" &&
@@ -123,6 +125,7 @@ const browserSupported = computed(() =>
 );
 const canRetry = computed(
   () =>
+    allows(props.order, "pay", true) &&
     active.value &&
     !isSimulation.value &&
     !review.value &&
@@ -134,6 +137,7 @@ const canRetry = computed(
 );
 const canSimulate = computed(
   () =>
+    allows(props.order, "simulate_payment", true) &&
     isSimulation.value &&
     session.config?.services_simulation_enabled !== false &&
     payment.value?.mode === "simulation" &&
@@ -216,6 +220,12 @@ async function action(
   outcome?: "success" | "failure" | "pending",
 ) {
   if (busy.value || !current()) return;
+  if (
+    kind === "close" &&
+    !allows(props.order, "close_payment", !!props.order.payment_can_close)
+  )
+    return;
+  if (kind === "sync" && !allows(props.order, "sync_payment", true)) return;
   if (kind === "sync" && Date.now() - lastSync < 3000) return;
   if (kind === "simulate" && (!outcome || !canSimulate.value)) return;
   if (
@@ -315,6 +325,9 @@ onUnmounted(() => {
       </div>
       <strong>¥{{ money(order.total_cents) }}</strong>
     </header>
+    <p v-if="order.financial_hold_reason" class="error-message" role="status">
+      {{ order.financial_hold_reason }}
+    </p>
     <p v-if="isSimulation" class="simulation-label" role="note">
       模拟体验 · 不会扣款，也不会产生真实退款
     </p>
@@ -394,7 +407,9 @@ onUnmounted(() => {
                 ? "本次取餐已完成，感谢你的光顾。"
                 : isDelivery
                   ? "无需再次付款。请留意配送进度，实际收到餐点后再确认收餐。"
-                  : "无需再次付款，请向商家出示取餐码。"
+                  : financialFollowUp
+                    ? "无需再次付款，请先联系商家核对款项处理结果。"
+                    : "无需再次付款，请向商家出示取餐码。"
           }}
         </p>
       </div>
@@ -411,6 +426,8 @@ onUnmounted(() => {
       <div v-else class="payment-session">
         <template
           v-if="
+            allows(order, 'pay', true) &&
+            orderUnpaid() &&
             payment?.status === 'pending' &&
             remaining > 0 &&
             (payment.channel === 'native' ? payment.code_url : h5Link)
@@ -466,7 +483,7 @@ onUnmounted(() => {
       <div class="payment-actions">
         <button
           class="btn btn-secondary"
-          :disabled="!!busy"
+          :disabled="!!busy || !allows(order, 'sync_payment', true)"
           @click="action('sync')"
         >
           <RefreshCw :size="16" />{{
@@ -480,7 +497,7 @@ onUnmounted(() => {
         >
           {{ busy === "wechat" ? "正在恢复…" : "重试获取付款入口" }}</button
         ><button
-          v-if="order.payment_can_close"
+          v-if="allows(order, 'close_payment', !!order.payment_can_close)"
           class="btn btn-ghost"
           :disabled="!!busy"
           @click="action('close')"
@@ -612,6 +629,7 @@ onUnmounted(() => {
       v-if="
         !isDelivery &&
         order.payment_status === 'unpaid' &&
+        !financialFollowUp &&
         !active &&
         !uncertain &&
         !review &&

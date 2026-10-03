@@ -4,6 +4,8 @@ Order transitions remain in services.py; catalogue writes use the same stall ->
 product lock order as checkout so a price edit cannot restore reserved stock.
 """
 import io
+import hashlib
+import json
 import uuid
 import warnings
 from collections.abc import Mapping
@@ -14,7 +16,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.db import transaction
-from django.db.models import Count, Exists, F, IntegerField, OuterRef, Q, Sum
+from django.db.models import Count, Exists, F, IntegerField, OuterRef, Q, Sum, Subquery
 from django.db.models.functions import TruncDate
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -26,9 +28,11 @@ from rest_framework.response import Response
 from .errors import BusinessError
 from .models import DeliveryPoint, Event, Follow, MerchantProfile, Order, OrderItem, PaymentRefund, Product, Review, Stall
 from .serializers import ProductSerializer, ReviewSerializer, StallSerializer
-from .services import audit, expire_pending_orders
+from .services import audit
 from .views import merchant_stall, stall_context
 from .tastes import TasteOptionsField
+from .permissions import can_operate_all, owned_or_permitted, require_stall_permission
+from .security_models import ProductCreation
 
 
 class StrictInput(serializers.Serializer):
@@ -69,6 +73,10 @@ class ProductInput(StrictInput):
     price_cents = serializers.IntegerField(min_value=1, max_value=1000000)
     stock = serializers.IntegerField(min_value=0, max_value=100000, required=False, default=0)
     is_active = serializers.BooleanField(required=False, default=True)
+
+
+class ProductCreateInput(ProductInput):
+    idempotency_key = serializers.CharField(min_length=8, max_length=128, required=False)
 
 
 class StallProfileInput(StrictInput):
@@ -125,7 +133,7 @@ def services(request, stall_id):
     form = ServicesInput(data=request.data)
     form.is_valid(raise_exception=True)
     with transaction.atomic():
-        stall = merchant_stall(stall_id, request.user, locked=True)
+        stall = merchant_stall(stall_id, request.user, locked=True, permission='market.change_stall')
         if not eligible(stall):
             raise BusinessError('快捷开关目前用于模拟经营；正式服务需由运营完成接入后启用。', 'simulation_unavailable')
         values = form.validated_data
@@ -151,7 +159,7 @@ def delivery(request, stall_id):
     form.is_valid(raise_exception=True)
     values = dict(form.validated_data)
     with transaction.atomic():
-        stall = merchant_stall(stall_id, request.user, locked=True)
+        stall = merchant_stall(stall_id, request.user, locked=True, permission='market.change_stall')
         point_ids = values.pop('point_ids', None)
         for key, value in values.items(): setattr(stall, 'simulation_delivery_enabled' if key == 'enabled' and eligible(stall) else 'delivery_' + key, value)
         if stall.delivery_starts_at >= stall.delivery_ends_at:
@@ -172,15 +180,16 @@ def merchant_context(request):
     return {**stall_context(request), 'merchant': True}
 
 
-def selected_stall(request):
+def selected_stall(request, permission='market.view_stall'):
     value = request.query_params.get('stall')
     if not value:
         return None
-    return merchant_stall(serializers.IntegerField(min_value=1).run_validation(value), request.user)
+    return merchant_stall(serializers.IntegerField(min_value=1).run_validation(value), request.user, permission=permission)
 
 
-def owned(query, user, prefix='stall__'):
-    return query if user.is_staff else query.filter(**{prefix + 'merchant__user': user})
+def owned(query, user, prefix='stall__', permission=None):
+    permission = permission or f'{query.model._meta.app_label}.view_{query.model._meta.model_name}'
+    return owned_or_permitted(query, user, permission, prefix + 'merchant__user')
 
 
 @api_view(['GET'])
@@ -196,11 +205,23 @@ def stalls(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def products(request, stall_id):
-    form = ProductInput(data=request.data)
+    form = ProductCreateInput(data=request.data)
     form.is_valid(raise_exception=True)
+    values = dict(form.validated_data)
+    key = values.pop('idempotency_key', None)
+    digest = hashlib.sha256(json.dumps(values, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     with transaction.atomic():
-        stall = merchant_stall(stall_id, request.user, locked=True)
-        product = Product.objects.create(stall=stall, **form.validated_data)
+        stall = merchant_stall(stall_id, request.user, locked=True, permission='market.add_product')
+        prior = ProductCreation.objects.filter(stall=stall, idempotency_key=key).select_related('product').first() if key else None
+        if prior:
+            if prior.request_hash != digest:
+                raise BusinessError('此创建标识已用于不同的商品内容，请重新确认。', 'idempotency_conflict')
+            if prior.product is None:
+                raise BusinessError('此商品已被删除，不能重复创建。', 'idempotency_resource_gone')
+            return Response(ProductSerializer(prior.product).data)
+        product = Product.objects.create(stall=stall, **values)
+        if key:
+            ProductCreation.objects.create(stall=stall, idempotency_key=key, request_hash=digest, product=product)
         audit(request.user, 'product_created', product.id, stall_id=stall.id)
     return Response(ProductSerializer(product).data, status=201)
 
@@ -210,7 +231,7 @@ def products(request, stall_id):
 def product(request, product_id):
     if isinstance(request.data, Mapping) and 'stock' in request.data:
         original = get_object_or_404(Product, pk=product_id)
-        merchant_stall(original.stall_id, request.user)
+        merchant_stall(original.stall_id, request.user, permission='market.change_product')
         raise BusinessError('商品资料编辑不能覆盖库存，请使用补货或线上可售余量更正。', 'stock_edit_requires_correction', status=400)
     form = ProductInput(data=request.data, partial=True)
     form.is_valid(raise_exception=True)
@@ -218,7 +239,7 @@ def product(request, product_id):
         raise BusinessError('请提供需要修改的商品信息。', status=400)
     with transaction.atomic():
         original = get_object_or_404(Product, pk=product_id)
-        merchant_stall(original.stall_id, request.user, locked=True)
+        merchant_stall(original.stall_id, request.user, locked=True, permission='market.change_product')
         item = Product.objects.select_for_update().get(pk=product_id)
         for key, value in form.validated_data.items():
             setattr(item, key, value)
@@ -235,9 +256,10 @@ def profile(request, stall_id):
     if not form.validated_data:
         raise BusinessError('请提供需要修改的店铺信息。', status=400)
     with transaction.atomic():
-        stall = merchant_stall(stall_id, request.user, locked=True)
+        stall = merchant_stall(stall_id, request.user, locked=True, permission='market.change_stall')
         values = dict(form.validated_data)
         if 'contact_phone' in values:
+            require_stall_permission(stall, request.user, 'market.change_merchantprofile')
             # A merchant's public phone is shared by all their stalls.
             merchant = MerchantProfile.objects.select_for_update(no_key=True).get(pk=stall.merchant_id)
             merchant.contact_phone = values.pop('contact_phone')
@@ -254,7 +276,7 @@ def profile(request, stall_id):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def reviews(request):
-    stall = selected_stall(request)
+    stall = selected_stall(request, 'market.view_review')
     query = owned(Review.objects.select_related('user'), request.user)
     if stall:
         query = query.filter(stall=stall)
@@ -268,7 +290,7 @@ def reply(request, review_id):
     form.is_valid(raise_exception=True)
     content = form.validated_data['content']
     with transaction.atomic():
-        review = get_object_or_404(owned(Review.objects.select_for_update(), request.user), pk=review_id)
+        review = get_object_or_404(owned(Review.objects.select_for_update(), request.user, permission='market.change_review'), pk=review_id)
         review.merchant_reply, review.replied_at = content, timezone.now() if content else None
         review.save(update_fields=['merchant_reply', 'replied_at'])
         audit(request.user, 'review_replied' if content else 'review_reply_withdrawn', review.id)
@@ -278,8 +300,10 @@ def reply(request, review_id):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def upload_image(request, stall_id):
-    stall = merchant_stall(stall_id, request.user)
+    stall = merchant_stall(stall_id, request.user, permission='market.change_stall')
     upload = request.FILES.get('file')
+    if getattr(request._request, '_image_upload_error', None):
+        raise BusinessError('图片不能超过 5 MB。', 'image_too_large', status=400)
     if not upload or not upload.size:
         raise BusinessError('请选择需要上传的图片。', 'invalid_image', status=400)
     if upload.size > 5 * 1024 * 1024:
@@ -287,7 +311,7 @@ def upload_image(request, stall_id):
     try:
         with warnings.catch_warnings():
             warnings.simplefilter('error', Image.DecompressionBombWarning)
-            with Image.open(upload) as original:
+            with Image.open(upload, formats=('JPEG', 'PNG', 'WEBP')) as original:
                 if original.width * original.height > 20_000_000:
                     raise BusinessError('图片尺寸不能超过 2000 万像素。', 'image_too_large', status=400)
                 if original.format not in ('JPEG', 'PNG', 'WEBP'):
@@ -330,11 +354,10 @@ def net_receipts(gross, refund_cents):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def metrics(request):
-    if not request.user.is_staff and not hasattr(request.user, 'merchant_profile'):
+    if not can_operate_all(request.user, 'market.view_order') and not hasattr(request.user, 'merchant_profile'):
         raise BusinessError('没有查看权限。', 'forbidden', status=403)
-    stall = selected_stall(request)
+    stall = selected_stall(request, 'market.view_order')
     days = serializers.ChoiceField(choices=[1, 7, 30]).run_validation(request.query_params.get('days', 7))
-    expire_pending_orders()
     now = timezone.now()
     today = timezone.localdate(now)
     first_day = today - timedelta(days=days - 1)
@@ -345,8 +368,8 @@ def metrics(request):
     if mode not in ('live', 'simulation'):
         raise BusinessError('经营数据模式无效。', 'invalid_mode', status=400)
     query = query.filter(mode=mode)
-    events = owned(Event.objects.all(), request.user)
-    stall_query = owned(Stall.objects.select_related('current_session'), request.user, prefix='')
+    events = owned(Event.objects.all(), request.user, permission='market.view_order')
+    stall_query = owned(Stall.objects.select_related('current_session'), request.user, prefix='', permission='market.view_order')
     if stall:
         query, events, stall_query = query.filter(stall=stall), events.filter(stall=stall), stall_query.filter(pk=stall.pk)
     recent = query.filter(created_at__gte=start, created_at__lte=now)
@@ -391,9 +414,10 @@ def metrics(request):
     top = OrderItem.objects.filter(order__in=received).values('name').annotate(
         revenue_cents=Sum(F('unit_price_cents') * F('quantity'), output_field=IntegerField()),
         quantity=Sum('quantity')).order_by('-quantity', '-revenue_cents', 'name')[:5]
+    latest_refund = PaymentRefund.objects.filter(order_id=OuterRef('pk')).order_by('-created_at', '-pk')
     payments = list(received.order_by('-paid_at').values('id', 'number', 'total_cents', 'paid_at', 'stall_name',
-        'payment_method', 'payment_status', refund_status=F('payment_refund__status'),
-        refunded_at=F('payment_refund__completed_at'))[:20])
+        'payment_method', 'payment_status', refund_status=Subquery(latest_refund.values('status')[:1]),
+        refunded_at=Subquery(latest_refund.values('completed_at')[:1]))[:20])
     for payment in payments:
         payment['refunded'] = payment['refund_status'] == 'success'
     return Response({'mode': mode, 'period_days': days, 'stall_views': views, 'orders_created': total, 'orders_completed': completed,

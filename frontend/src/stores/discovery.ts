@@ -1,7 +1,11 @@
 import { defineStore } from "pinia";
 import { ref, watch } from "vue";
+import { readStorage, writeStorage } from "../lib/storage";
 export const useDiscovery = defineStore("discovery", () => {
-  const area = ref(Number(localStorage.getItem("yanhuo-area") || 0)),
+  const savedArea = Number(readStorage("yanhuo-area") || 0);
+  const area = ref(
+      Number.isSafeInteger(savedArea) && savedArea >= 0 ? savedArea : 0,
+    ),
     q = ref(""),
     category = ref(""),
     status = ref("open"),
@@ -13,8 +17,8 @@ export const useDiscovery = defineStore("discovery", () => {
     if (!point && sort.value === "distance") sort.value = "freshness";
   });
   function setArea(id: number) {
-    area.value = id;
-    localStorage.setItem("yanhuo-area", String(id));
+    area.value = Number.isSafeInteger(id) && id >= 0 ? id : 0;
+    writeStorage("yanhuo-area", String(area.value));
   }
   return { area, q, category, status, sort, position, setArea };
 });

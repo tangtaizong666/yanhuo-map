@@ -97,7 +97,7 @@ async function fixture(page: Page, quantity = 0, initialPortions?: any[]) {
       ({ product, quantity, initialPortions }) => {
         if (!sessionStorage.getItem("taste-fixture-seeded")) {
           localStorage.setItem(
-            "yanhuo-cart-v1",
+            "yanhuo-cart-v2:user:996",
             JSON.stringify({
               996: [
                 {
@@ -183,7 +183,7 @@ async function fixture(page: Page, quantity = 0, initialPortions?: any[]) {
 }
 async function cartData(page: Page) {
   return page.evaluate(() =>
-    JSON.parse(localStorage.getItem("yanhuo-cart-v1") || "{}"),
+    JSON.parse(localStorage.getItem("yanhuo-cart-v2:user:996") || "{}"),
   );
 }
 async function edit(page: Page) {
@@ -313,7 +313,7 @@ async function seedManyMeals(
     ({ products, portions }) => {
       if (sessionStorage.getItem("many-meals-seeded")) return;
       localStorage.setItem(
-        "yanhuo-cart-v1",
+        "yanhuo-cart-v2:user:996",
         JSON.stringify({
           996: products.map((product, index) => ({
             product,

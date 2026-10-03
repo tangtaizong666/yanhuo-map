@@ -9,7 +9,7 @@ from django.template.response import TemplateResponse
 from django.urls import path, reverse
 from .models import (Area, AuditLog, BusinessSession, DeliveryPoint, Event, Feedback, Follow, MerchantProfile,
     Order, OrderItem, PaymentAttempt, PaymentRefund, Product, Review, SiteConfiguration, Stall, StallLocation,
-    MerchantApplication, RestockBatch, StockCorrection)
+    MerchantApplication, RestockBatch, StockCorrection, FinancialEvidence, WorkerHeartbeat)
 from .services import audit
 
 
@@ -95,6 +95,44 @@ class OrderAdmin(ReadOnlyAdmin):
     list_filter = ['mode', 'status', 'payment_status', 'stall']
     search_fields = ['number', 'user__username']
     inlines = [OrderItemInline]
+    change_form_template = 'admin/market/order/change_form.html'
+    def get_urls(self):
+        return [path('<path:object_id>/financial-resolution/', self.admin_site.admin_view(self.financial_view),
+            name='market_order_financial_resolution')] + super().get_urls()
+    def change_view(self, request, object_id, form_url='', extra_context=None):
+        extra_context = {**(extra_context or {}), 'can_resolve_finance': request.user.has_perm('market.resolve_payments')}
+        return super().change_view(request, object_id, form_url, extra_context)
+    def financial_view(self, request, object_id):
+        from .errors import BusinessError
+        from .reconciliation import require_operator, verify_and_resolve, verify_external_refund, request_operator_refund
+        from django.core.exceptions import PermissionDenied
+        from django.http import Http404
+        try: require_operator(request.user)
+        except BusinessError: raise PermissionDenied from None
+        order = self.get_object(request, object_id)
+        if order is None: raise Http404
+        form = FinancialResolutionForm(request.POST if request.method == 'POST' else None, order=order,
+            initial={'operation_key': uuid.uuid4().hex})
+        if request.method == 'POST' and form.is_valid():
+            values = form.cleaned_data
+            try:
+                if values['operation'] == 'verify':
+                    verify_and_resolve(order.pk, request.user, values['reason'])
+                elif values['operation'] == 'external':
+                    verify_external_refund(order.pk, values['payment'].pk, values['out_refund_no'], request.user, values['reason'])
+                else:
+                    request_operator_refund(order.pk, values['payment'].pk, request.user, values['reason'],
+                        values['operation_key'], values['expected_amount_cents'],
+                        replaces_id=values['refund'].pk if values['operation'] == 'retry' else None)
+                self.message_user(request, '已保存核验结果。申请退款仍以支付服务方确认成功为准；有待处理资金时继续保留限制。')
+                return HttpResponseRedirect(reverse('admin:market_order_financial_resolution', args=[order.pk]))
+            except BusinessError as exc:
+                form.add_error(None, exc.detail.get('detail', '资金结果尚未核验。'))
+                order.refresh_from_db()
+        return TemplateResponse(request, 'admin/market/order/financial_resolution.html', {
+            **self.admin_site.each_context(request), 'title': f'资金核验：{order.number}', 'opts': self.model._meta,
+            'order': order, 'payments': order.payments.all(), 'refunds': order.refunds.all(),
+            'evidence': order.financial_evidence.select_related('actor')[:50], 'form': form})
 
 
 @admin.register(AuditLog)
@@ -147,7 +185,7 @@ class ProductAdmin(AuditedAdmin):
         if not change: return super().save_model(request, obj, form, change)
         with transaction.atomic():
             from .views import merchant_stall
-            merchant_stall(obj.stall_id, request.user, locked=True)
+            merchant_stall(obj.stall_id, request.user, locked=True, permission='market.change_product')
             desired = {name: getattr(obj, name) for name in form.changed_data if name not in ('stock', 'stock_version')}
             current = Product.objects.select_for_update().get(pk=obj.pk)
             for name, value in desired.items(): setattr(current, name, value)
@@ -256,10 +294,87 @@ class PaymentAdmin(ReadOnlyAdmin):
     list_filter = ['mode', 'status', 'channel', 'merchant']
     search_fields = ['out_trade_no', 'transaction_id', 'order__number']
     exclude = ['code_url', 'h5_url']
+    change_list_template = 'admin/market/paymentattempt/change_list.html'
+    def get_urls(self):
+        return [path('reconciliation-export/', self.admin_site.admin_view(self.export_view),
+            name='market_payment_reconciliation_export')] + super().get_urls()
+    def export_view(self, request):
+        from .errors import BusinessError
+        from .reconciliation import require_operator
+        from .financial_export import reconciliation_export
+        from django.core.exceptions import PermissionDenied
+        try: require_operator(request.user, 'market.export_financial_reconciliation')
+        except BusinessError: raise PermissionDenied from None
+        form = FinancialExportForm(request.POST if request.method == 'POST' else None)
+        if request.method == 'POST' and form.is_valid():
+            try:
+                return reconciliation_export(request.user, form.cleaned_data['merchant'].pk,
+                    form.cleaned_data['starts_on'], form.cleaned_data['ends_on'])
+            except BusinessError as exc:
+                form.add_error(None, exc.detail.get('detail', '无法导出。'))
+        return TemplateResponse(request, 'admin/market/paymentattempt/reconciliation_export.html', {
+            **self.admin_site.each_context(request), 'title': '商户资金对账导出', 'opts': self.model._meta, 'form': form})
 
 
 @admin.register(PaymentRefund)
 class RefundAdmin(ReadOnlyAdmin):
-    list_display = ['out_refund_no', 'mode', 'order', 'status', 'amount_cents', 'created_at', 'completed_at']
+    list_display = ['out_refund_no', 'mode', 'order', 'status', 'source', 'amount_cents', 'created_at', 'completed_at', 'resolved_at']
     list_filter = ['mode', 'status']
     search_fields = ['out_refund_no', 'refund_id', 'order__number']
+
+
+class PaymentChoiceField(forms.ModelChoiceField):
+    def label_from_instance(self, obj):
+        return f'{obj.out_trade_no} · {obj.amount_cents}分 · {obj.get_status_display()}'
+
+
+class RefundChoiceField(forms.ModelChoiceField):
+    def label_from_instance(self, obj):
+        return f'{obj.out_refund_no} · {obj.amount_cents}分 · {obj.get_status_display()}'
+
+
+class FinancialResolutionForm(forms.Form):
+    operation = forms.ChoiceField(label='操作', choices=[('verify', '查询全部流水并尝试结案'),
+        ('external', '核验外部全额退款'), ('retry', '核验关闭退款并申请新尝试'), ('compensation', '对异常付款申请全额补偿')])
+    payment = PaymentChoiceField(label='原付款', queryset=PaymentAttempt.objects.none(), required=False)
+    refund = RefundChoiceField(label='原关闭退款', queryset=PaymentRefund.objects.none(), required=False)
+    out_refund_no = forms.CharField(label='外部商户退款单号', max_length=64, required=False)
+    expected_amount_cents = forms.IntegerField(label='确认退款金额（分）', min_value=1, required=False)
+    reason = forms.CharField(label='原因及处理依据', max_length=200, widget=forms.Textarea(attrs={'rows': 3}))
+    confirm_refund = forms.BooleanField(label='我已核对原付款与全额金额，授权向原支付渠道申请此退款', required=False)
+    operation_key = forms.CharField(min_length=8, max_length=128, widget=forms.HiddenInput)
+    def __init__(self, *args, order, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['payment'].queryset = order.payments.filter(mode='live')
+        self.fields['refund'].queryset = order.refunds.filter(mode='live', status='closed', resolved_at__isnull=True)
+    def clean(self):
+        values = super().clean()
+        operation, payment, refund = values.get('operation'), values.get('payment'), values.get('refund')
+        if operation != 'verify' and payment is None: self.add_error('payment', '请选择要核验的原付款。')
+        if operation == 'external' and not values.get('out_refund_no'): self.add_error('out_refund_no', '请填写外部退款号。')
+        if operation == 'retry':
+            if refund is None: self.add_error('refund', '请选择原关闭退款。')
+            elif payment and refund.payment_id != payment.pk: self.add_error('refund', '此退款不属于所选付款。')
+        if operation in ('retry', 'compensation'):
+            if not values.get('confirm_refund'): self.add_error('confirm_refund', '申请退款须确认原付款与金额。')
+            if payment and values.get('expected_amount_cents') != payment.amount_cents:
+                self.add_error('expected_amount_cents', '必须与所选原付款的全额金额一致。')
+        return values
+
+
+class FinancialExportForm(forms.Form):
+    merchant = forms.ModelChoiceField(label='收款商户', queryset=MerchantProfile.objects.all())
+    starts_on = forms.DateField(label='开始日期', widget=forms.DateInput(attrs={'type': 'date'}))
+    ends_on = forms.DateField(label='结束日期（含）', widget=forms.DateInput(attrs={'type': 'date'}))
+
+
+@admin.register(FinancialEvidence)
+class FinancialEvidenceAdmin(ReadOnlyAdmin):
+    list_display = ['created_at', 'order', 'operation', 'outcome', 'actor']
+    list_filter = ['operation', 'outcome', 'created_at']
+    search_fields = ['order__number', 'payment__out_trade_no', 'refund__out_refund_no']
+
+
+@admin.register(WorkerHeartbeat)
+class WorkerHeartbeatAdmin(ReadOnlyAdmin):
+    list_display = ['name', 'last_success_at', 'last_failure_at', 'last_error_code', 'failure_count']

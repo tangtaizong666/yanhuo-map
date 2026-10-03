@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import {
   ArrowUpRight,
@@ -17,6 +17,14 @@ import {
   needsFinancialFollowUp,
   refundNeedsFollowUp,
 } from "../lib/orderFollowUp";
+import {
+  orderPage,
+  attentionOrders,
+  mergeOrders,
+  matchesOrderFilter,
+  type OrderCounts,
+} from "../lib/orderPages";
+import type { Order } from "../lib/types";
 import { useSession } from "../stores/session";
 
 const router = useRouter();
@@ -25,6 +33,17 @@ const orders = ref<any[]>([]);
 const loading = ref(true);
 const error = ref("");
 const selected = ref("all");
+const counts = ref<OrderCounts>({});
+const nextCursor = ref<string | null>(null);
+const pages = new Map<string, { rows: Order[]; next: string | null }>();
+let sequence = 0;
+let pageController: AbortController | undefined;
+let polling = false;
+let attention = new Set<string>();
+const activeCount = computed(() => counts.value.active ?? active.value.length);
+const followUpCount = computed(
+  () => counts.value.followup ?? followUp.value.length,
+);
 const tabs = [
   { id: "all", label: "全部订单" },
   { id: "active", label: "进行中" },
@@ -70,25 +89,79 @@ const fetching = ref(false);
 const lastSynced = ref("");
 const lifetime = new AbortController();
 let disposed = false;
-async function load() {
-  if (fetching.value || disposed) return;
+async function load(more = false) {
+  if (disposed || (more && (fetching.value || !nextCursor.value))) return;
+  const current = ++sequence;
+  pageController?.abort();
+  const controller = new AbortController();
+  pageController = controller;
+  const filter = selected.value;
+  const cursor = more ? nextCursor.value : null;
   fetching.value = true;
   try {
-    const result = await api<any[]>("/orders", { signal: lifetime.signal });
-    if (disposed) return;
-    orders.value = result;
+    const page = await orderPage("/orders", filter, cursor, controller.signal);
+    if (disposed || current !== sequence) return;
+    orders.value = more
+      ? mergeOrders(orders.value, page.results)
+      : page.results;
+    nextCursor.value = page.next;
+    counts.value = page.counts;
+    pages.set(filter, { rows: orders.value, next: page.next });
+    for (const row of orders.value)
+      if (matchesOrderFilter(row, "attention")) attention.add(row.id);
     lastSynced.value = new Date().toISOString();
     error.value = "";
   } catch (e) {
-    if (disposed) return;
-    error.value = (e as Error).message;
+    if (!disposed && current === sequence) error.value = (e as Error).message;
   } finally {
-    if (!disposed) {
+    if (!disposed && current === sequence) {
       loading.value = false;
       fetching.value = false;
     }
   }
 }
+async function pollAttention() {
+  if (document.hidden || disposed || polling || fetching.value) return;
+  polling = true;
+  const started = sequence;
+  try {
+    const page = await attentionOrders("/orders", lifetime.signal);
+    const currentIds = new Set(page.results.map((row) => row.id));
+    const ended = await Promise.all(
+      [...attention]
+        .filter((id) => !currentIds.has(id))
+        .map((id) => api<Order>(`/orders/${id}`, { signal: lifetime.signal })),
+    );
+    if (disposed || started !== sequence) return;
+    attention = currentIds;
+    counts.value = page.counts;
+    const changed = mergeOrders(page.results, ended);
+    for (const [filter, cached] of pages) {
+      const updated = mergeOrders(cached.rows, changed).filter((row) =>
+        matchesOrderFilter(row, filter),
+      );
+      pages.set(filter, { rows: updated, next: cached.next });
+    }
+    const cached = pages.get(selected.value);
+    if (cached) orders.value = cached.rows;
+    lastSynced.value = new Date().toISOString();
+    error.value = "";
+  } catch (e) {
+    if (!disposed && started === sequence) error.value = (e as Error).message;
+  } finally {
+    polling = false;
+  }
+}
+watch(selected, () => {
+  sequence++;
+  pageController?.abort();
+  const cached = pages.get(selected.value);
+  orders.value = cached?.rows || [];
+  nextCursor.value = cached?.next || null;
+  loading.value = !cached;
+  fetching.value = false;
+  if (!cached) void load();
+});
 onMounted(async () => {
   try {
     await session.load();
@@ -100,7 +173,7 @@ onMounted(async () => {
     await load();
     if (!disposed)
       timer = setInterval(() => {
-        if (!document.hidden) void load();
+        if (!document.hidden) void pollAttention();
       }, 10000);
   } catch (e) {
     if (disposed) return;
@@ -111,6 +184,8 @@ onMounted(async () => {
 onUnmounted(() => {
   disposed = true;
   lifetime.abort();
+  pageController?.abort();
+  sequence++;
   clearInterval(timer);
 });
 function caption(order: any) {
@@ -141,6 +216,7 @@ function caption(order: any) {
   )[order.status];
 }
 function paymentSummary(order: any) {
+  if (order.financial_hold_reason) return order.financial_hold_reason;
   if (order.payment_review_required || order.payment?.status === "review")
     return "付款状态需要核对，请勿重复付款";
   if (order.payment?.status === "reconcile")
@@ -182,6 +258,7 @@ function orderAction(order: any) {
     )
   )
     return "查看付款进度";
+  if (needsFinancialFollowUp(order)) return "查看款项处理进度";
   if (
     (order.status === "pending_payment" ||
       (order.fulfillment_type !== "delivery" && order.status === "ready")) &&
@@ -214,22 +291,22 @@ function orderAction(order: any) {
         >再去逛逛 <ArrowUpRight :size="17"
       /></RouterLink>
     </div>
-    <div v-if="active.length" class="active-notice">
+    <div v-if="activeCount" class="active-notice">
       <span class="notice-dot"></span
       ><span
-        >有 <strong>{{ active.length }}</strong> 份好味道正在等待你</span
+        >有 <strong>{{ activeCount }}</strong> 份好味道正在等待你</span
       ><span class="muted">{{
         error ? "订单状态暂未同步" : "订单状态每 10 秒自动更新"
       }}</span>
     </div>
     <button
-      v-if="followUp.length"
+      v-if="followUpCount"
       class="financial-notice"
       @click="selected = 'followup'"
     >
       <AlertCircle :size="19" />
       <span
-        ><strong>{{ followUp.length }} 笔订单的款项仍待处理</strong
+        ><strong>{{ followUpCount }} 笔订单的款项仍待处理</strong
         ><small>退款与款项核对记录，在这里继续查看。</small></span
       >
       <ChevronRight :size="18" />
@@ -243,13 +320,13 @@ function orderAction(order: any) {
           @click="selected = tab.id"
         >
           {{ tab.label }}
-          <span v-if="tab.id === 'active' && active.length" class="tab-count">{{
-            active.length
+          <span v-if="tab.id === 'active' && activeCount" class="tab-count">{{
+            activeCount
           }}</span>
           <span
-            v-if="tab.id === 'followup' && followUp.length"
+            v-if="tab.id === 'followup' && followUpCount"
             class="tab-count"
-            >{{ followUp.length }}</span
+            >{{ followUpCount }}</span
           >
         </button>
       </div>
@@ -258,7 +335,7 @@ function orderAction(order: any) {
         aria-label="刷新订单"
         :disabled="fetching"
         :aria-busy="fetching"
-        @click="load"
+        @click="load()"
       >
         <RefreshCw :size="16" />
       </button>
@@ -274,7 +351,7 @@ function orderAction(order: any) {
     </p>
     <p v-if="error" class="error-message" role="alert">
       {{ error }}<span v-if="lastSynced"> 当前显示上次同步的记录。</span>
-      <button class="inline-retry" :disabled="fetching" @click="load">
+      <button class="inline-retry" :disabled="fetching" @click="load()">
         {{ fetching ? "正在重试…" : "重新加载" }}
       </button>
     </p>
@@ -378,6 +455,17 @@ function orderAction(order: any) {
         </div>
       </RouterLink>
     </div>
+    <button
+      v-if="nextCursor"
+      class="btn btn-secondary order-load-more"
+      :disabled="fetching"
+      @click="load(true)"
+    >
+      {{ fetching ? "正在加载…" : "加载更多订单" }}
+    </button>
+    <p v-if="['completed', 'cancelled'].includes(selected)" class="sync-status">
+      历史按页加载；进行中与款项待处理状态仍自动同步。
+    </p>
   </div>
 </template>
 
