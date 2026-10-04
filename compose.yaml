@@ -19,7 +19,7 @@ services:
       dockerfile: backend/Dockerfile
     restart: "no"
     # A failed release never starts the application or any worker.
-    command: ["sh", "-c", "python manage.py migrate --noinput && python manage.py collectstatic --noinput"]
+    command: ["sh", "-c", "python manage.py migrate --noinput && python manage.py createcachetable && python manage.py collectstatic --noinput"]
     environment: &backend_environment
       DJANGO_ENV: production
       DEMO_MODE: "false"

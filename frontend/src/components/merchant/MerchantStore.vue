@@ -409,7 +409,7 @@ async function upload(
               v-model="location.address"
               required
               maxlength="200"
-              placeholder="例如：南门夜市入口左侧第三个摊位"
+              placeholder="例如：学府路夜市入口左侧第三个摊位"
           /></label>
           <label
             >预计收摊时间<input
@@ -475,7 +475,7 @@ async function upload(
           </div>
         </div>
         <p class="m-muted">
-          经营资质和交易权限由运营核验维护，到摊付款同样需要符合接单条件。
+          流动摊位由顾客到摊扫你的收款码付款，钱直接到你账户，平台不经手。登记了实体门店且证照核验通过的商户，才能开通平台微信支付和配送。
         </p>
       </section>
     </details>

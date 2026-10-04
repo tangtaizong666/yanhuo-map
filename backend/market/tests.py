@@ -122,6 +122,13 @@ class MarketTests(TestCase):
         self.action(order, 'approve_cancel')
         self.assertEqual(Product.objects.get(pk=self.product.pk).stock, 5)
 
+    def test_cancel_while_preparing_returns_stock(self):
+        order = self.create()
+        self.action(order, 'accept')
+        cancel_order(order['id'], self.student, '临时有事')
+        self.action(order, 'approve_cancel')
+        self.assertEqual(Product.objects.get(pk=self.product.pk).stock, 5)
+
     def test_cancel_after_payment_blocked(self):
         order = self.create()
         self.action(order, 'accept')

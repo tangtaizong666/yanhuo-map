@@ -772,7 +772,7 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
                     ? "提交后需在订单页完成微信付款。餐费和配送费一次支付，商家拒单或接单超时将发起全额退款。"
                     : stall.wechat_payment?.available
                       ? "商家出餐后，可在订单页微信支付，也可到摊付款。提交订单不会扣款。"
-                      : "微信支付尚未开通，当前支持到摊付款。商家确认接单后才开始制作。"
+                      : "到摊扫摊主收款码付款，平台不经手款项。商家确认接单后才开始制作。"
               }}
             </p>
           </div>

@@ -85,3 +85,20 @@ class QualificationTierTests(TestCase):
         order.stall.payment_qr_image = 'https://evil.example/qr.png'
         order.status = 'pending'
         self.assertEqual(OrderSerializer(order).data['stall_payment_qr_image'], '')
+
+
+class LegacyOrderListLimitTests(TestCase):
+    def test_unpaginated_list_is_capped(self):
+        from rest_framework.test import APIClient
+        from . import list_api
+        student, _, _, stall, product = fixtures()
+        for _ in range(3):
+            order, _ = create_order(student, payload(stall, product))
+            order.status = 'completed'
+            order.save(update_fields=['status'])
+        client = APIClient()
+        client.force_authenticate(student)
+        with patch.object(list_api, 'LEGACY_LIMIT', 2):
+            response = client.get('/api/v1/orders')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 2)

@@ -39,7 +39,7 @@ defineProps<{ readiness?: PaymentReadiness; delivery?: boolean }>();
                   : "出餐后在订单页付款。"
                 : delivery
                   ? "微信支付尚未开通，暂时无法提交配送订单。"
-                  : "暂不能在线扣款，可到摊付款。"
+                  : "暂不能在线扣款，到摊扫摊主收款码付款。"
           }}
         </p>
       </div>
@@ -59,7 +59,7 @@ defineProps<{ readiness?: PaymentReadiness; delivery?: boolean }>();
           {{
             readiness?.mode === "simulation"
               ? "可演练商家确认模拟收款后取餐。"
-              : "取餐时付款，由商家确认收款。"
+              : "取餐时扫摊主本人的收款码付款，平台不经手款项。"
           }}
         </p>
       </div>
@@ -74,7 +74,7 @@ defineProps<{ readiness?: PaymentReadiness; delivery?: boolean }>();
         }}<ChevronDown :size="16" />
       </summary>
       <p>
-        {{ readiness?.reason || "该商家暂未开通微信支付，当前支持到摊付款。" }}
+        {{ readiness?.reason || "该商家暂未开通微信支付，到摊扫摊主收款码付款。" }}
       </p>
       <p>
         {{

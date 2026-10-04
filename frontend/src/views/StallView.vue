@@ -81,8 +81,8 @@ function quantity(p: Product) {
   return cart.items(id.value).find((i) => i.product.id === p.id)?.quantity || 0;
 }
 function change(p: Product, d: number) {
-  if (!stall.value?.can_order || error.value) return;
-  if (d > 0 && !productAvailable(p)) return;
+  // Removing items is always allowed; adding waits for a fresh, orderable stall state.
+  if (d > 0 && (!stall.value?.can_order || error.value || !productAvailable(p))) return;
   if (d > 0 && cart.remaining(id.value) <= 0) {
     notify("每个摊位一单合计最多 10 份，请调整餐袋。", "info");
     return;
@@ -233,7 +233,7 @@ onUnmounted(() => {
                     ? "出餐后可线上付款"
                     : "尚未开通"
                 }}</strong
-                ><span v-if="!stall.wechat_payment?.available">可到摊付款</span>
+                ><span v-if="!stall.wechat_payment?.available">到摊扫码付款</span>
               </div>
               <div
                 v-if="stall.transaction_enabled"
@@ -409,7 +409,7 @@ onUnmounted(() => {
                   stall.transaction_enabled
                     ? stall.wechat_payment?.available
                       ? "线上点单，出餐后微信或到摊付款自取"
-                      : "线上点单，到摊付款自取"
+                      : "线上点单，到摊扫码付款自取"
                     : "仅提供摊位信息，线下到访"
                 }}
               </dd>

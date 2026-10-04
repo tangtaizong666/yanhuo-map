@@ -97,6 +97,10 @@ AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator'},
     {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
 ]
+# Throttle counters must survive restarts and be shared by every worker process.
+CACHES = {'default': {'BACKEND': 'django.core.cache.backends.db.DatabaseCache', 'LOCATION': 'yanhuo_cache'}} \
+    if PRODUCTION or os.getenv('DJANGO_CACHE', '') == 'database' else \
+    {'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}}
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': ['rest_framework.authentication.SessionAuthentication'],
     'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated'],
