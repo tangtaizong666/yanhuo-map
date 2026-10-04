@@ -5,7 +5,7 @@ from django.db.models import Avg, Count, IntegerField, OuterRef, Prefetch, Q, Su
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 
-from .models import DeliveryPoint, Review, Stall
+from .models import DeliveryPoint, Product, Order, Review, Stall
 
 
 def filter_status(query, status, config):
@@ -24,20 +24,29 @@ def filter_status(query, status, config):
     return query.none()
 
 
-def visible_stall_query():
+def visible_stall_query(mode='detail'):
     reviews = Review.objects.filter(stall_id=OuterRef('pk')).order_by().values('stall_id')
     query = Stall.objects.filter(is_visible=True)
     if not settings.DEMO_MODE:
         query = query.filter(is_demo=False)
-    return query.select_related('area', 'merchant', 'location', 'current_session').prefetch_related(
-        'products',
-        Prefetch('delivery_points', queryset=DeliveryPoint.objects.order_by('id'), to_attr='_delivery_points'),
-        Prefetch('reviews', queryset=Review.objects.select_related('user').order_by('-created_at', '-id')[:20], to_attr='_preview_reviews'),
-    ).annotate(
-        completed_count=Count('orders', filter=Q(orders__status='completed'), distinct=True),
-        prep_active_count=Count('orders', filter=Q(orders__status__in=('pending_payment', 'pending', 'preparing')), distinct=True),
-        delivery_active_count=Count('orders', filter=Q(orders__fulfillment_type='delivery',
-            orders__status__in=('pending_payment', 'pending', 'preparing', 'ready', 'delivering', 'arrived')), distinct=True),
+    orders = Order.objects.filter(stall_id=OuterRef('pk')).order_by().values('stall_id')
+    def count_orders(**filters):
+        return Coalesce(Subquery(orders.filter(**filters).annotate(value=Count('pk')).values('value')[:1], output_field=IntegerField()), 0)
+    query = query.select_related('area', 'merchant', 'location', 'current_session').annotate(
+        prep_active_count=count_orders(status__in=('pending_payment', 'pending', 'preparing')),
         rating_average=Subquery(reviews.annotate(value=Avg('rating')).values('value')[:1]),
         rating_count=Coalesce(Subquery(reviews.annotate(value=Count('pk')).values('value')[:1], output_field=IntegerField()), 0),
     )
+    if mode == 'detail':
+        return query.prefetch_related(
+            Prefetch('products', queryset=Product.objects.filter(is_active=True).order_by('id')),
+            Prefetch('delivery_points', queryset=DeliveryPoint.objects.order_by('id'), to_attr='_delivery_points'),
+            Prefetch('reviews', queryset=Review.objects.select_related('user').order_by('-created_at', '-id')[:20], to_attr='_preview_reviews'),
+        ).annotate(completed_count=count_orders(status='completed'),
+            delivery_active_count=count_orders(fulfillment_type='delivery',
+                status__in=('pending_payment', 'pending', 'preparing', 'ready', 'delivering', 'arrived')))
+    if mode == 'summary':
+        query = query.prefetch_related(Prefetch('products',
+            queryset=Product.objects.filter(is_active=True, sale_paused=False, stock__gt=0).order_by('id')[:2],
+            to_attr='_preview_products'))
+    return query

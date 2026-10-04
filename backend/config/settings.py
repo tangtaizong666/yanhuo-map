@@ -37,6 +37,17 @@ AUTH_TRUST_PROXY_CLIENT_IP = os.getenv('AUTH_TRUST_PROXY_CLIENT_IP', 'false').lo
 AUTH_FAILURE_WINDOW_SECONDS = int(os.getenv('AUTH_FAILURE_WINDOW_SECONDS', '900'))
 AUTH_FAILURE_ACCOUNT_LIMIT = int(os.getenv('AUTH_FAILURE_ACCOUNT_LIMIT', '10'))
 AUTH_FAILURE_IP_LIMIT = int(os.getenv('AUTH_FAILURE_IP_LIMIT', '60'))
+CHECKOUT_MAX_ACTIVE_PER_STALL = int(os.getenv('CHECKOUT_MAX_ACTIVE_PER_STALL', '1'))
+CHECKOUT_MAX_ACTIVE_TOTAL = int(os.getenv('CHECKOUT_MAX_ACTIVE_TOTAL', '3'))
+CHECKOUT_MAX_PORTIONS = int(os.getenv('CHECKOUT_MAX_PORTIONS', '10'))
+CHECKOUT_PER_MINUTE = int(os.getenv('CHECKOUT_PER_MINUTE', '6'))
+CHECKOUT_PER_HOUR = int(os.getenv('CHECKOUT_PER_HOUR', '30'))
+PAYMENT_QUERY_INTERVAL_SECONDS = 5
+PAYMENT_QUERY_FAILURE_DELAYS = (10, 20, 30, 60)
+PAYMENT_NOTIFICATION_MAX_ATTEMPTS = 10
+if min(CHECKOUT_MAX_ACTIVE_PER_STALL, CHECKOUT_MAX_ACTIVE_TOTAL, CHECKOUT_MAX_PORTIONS,
+       CHECKOUT_PER_MINUTE, CHECKOUT_PER_HOUR) < 1:
+    raise ImproperlyConfigured('Checkout limits must be positive.')
 if min(AUTH_FAILURE_WINDOW_SECONDS, AUTH_FAILURE_ACCOUNT_LIMIT, AUTH_FAILURE_IP_LIMIT) < 1:
     raise ImproperlyConfigured('Authentication failure limits must be positive.')
 if PRODUCTION:
@@ -56,6 +67,7 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware', 'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware', 'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware', 'django.contrib.messages.middleware.MessageMiddleware',
+    'market.session_boundary.SessionActorMiddleware',
     'market.auth_limits.AdminLoginLimitStatusMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -87,7 +99,7 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': ['rest_framework.authentication.SessionAuthentication'],
-    'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.AllowAny'],
+    'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated'],
     'DEFAULT_RENDERER_CLASSES': ['rest_framework.renderers.JSONRenderer'],
     'DEFAULT_PARSER_CLASSES': ['market.request_parsers.BoundedJSONParser',
         'market.request_parsers.BoundedFormParser', 'rest_framework.parsers.MultiPartParser'],

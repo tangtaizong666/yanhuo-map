@@ -2,32 +2,23 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { Clock3 } from "lucide-vue-next";
 import type { Stall } from "../lib/types";
-const props = defineProps<{ stall: Stall; compact?: boolean }>();
-const now = ref(performance.now());
-const receivedAt = ref(now.value);
-const initialAge = ref<number | null>(null);
+const props = defineProps<{
+  stall: Pick<
+    Stall,
+    "id" | "can_order" | "receiving_status" | "receiving_valid_for_seconds"
+  >;
+  compact?: boolean;
+}>();
+const now = ref(performance.now()),
+  receivedAt = ref(now.value);
 watch(
-  () =>
-    [
-      props.stall.id,
-      props.stall.receiving_seen_at,
-      props.stall.receiving_status,
-      props.stall.receiving_age_seconds,
-    ].join(":"),
+  () => [
+    props.stall.id,
+    props.stall.receiving_status,
+    props.stall.receiving_valid_for_seconds,
+  ],
   () => {
     now.value = receivedAt.value = performance.now();
-    const age = props.stall.receiving_age_seconds;
-    // The phone clock can differ from the server. Prefer server age and use
-    // monotonic elapsed time while this response remains on screen.
-    if (typeof age === "number" && Number.isFinite(age))
-      initialAge.value = Math.max(0, age);
-    else if (props.stall.receiving_status === "recent") initialAge.value = 0;
-    else {
-      const seen = Date.parse(props.stall.receiving_seen_at || "");
-      initialAge.value = Number.isFinite(seen)
-        ? Math.max(0, (Date.now() - seen) / 1000)
-        : null;
-    }
   },
   { immediate: true },
 );
@@ -35,16 +26,17 @@ let timer: ReturnType<typeof setInterval> | undefined;
 onMounted(() => {
   timer = setInterval(() => {
     now.value = performance.now();
-  }, 15000);
+  }, 5000);
 });
 onUnmounted(() => clearInterval(timer));
 const state = computed(() => {
-  if (props.stall.receiving_status === "stale") return "stale";
-  if (props.stall.receiving_status === "unknown" || initialAge.value === null)
-    return "unknown";
-  return initialAge.value + (now.value - receivedAt.value) / 1000 > 90
-    ? "stale"
-    : "recent";
+  if (props.stall.receiving_status !== "recent")
+    return props.stall.receiving_status || "unknown";
+  const ttl = Math.max(
+    0,
+    Math.min(30, props.stall.receiving_valid_for_seconds || 0),
+  );
+  return (now.value - receivedAt.value) / 1000 >= ttl ? "stale" : "recent";
 });
 </script>
 <template>

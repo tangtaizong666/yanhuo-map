@@ -1,4 +1,4 @@
-import { sessionEpoch } from "./sessionEpoch";
+import { sessionActor, sessionEpoch, verifySessionForWrite } from "./sessionEpoch";
 
 export class ApiError extends Error {
   status: number;
@@ -79,6 +79,7 @@ export async function api<T = any>(
   options: Omit<RequestInit, "body"> & { body?: any } = {},
 ): Promise<T> {
   const requestEpoch = sessionEpoch();
+  const requestActor = sessionActor();
   const method = (options.method || "GET").toUpperCase();
   const mutating = !["GET", "HEAD", "OPTIONS"].includes(method);
   const controller = new AbortController();
@@ -99,16 +100,33 @@ export async function api<T = any>(
   }, REQUEST_TIMEOUT_MS);
   options.signal?.addEventListener("abort", abort, { once: true });
   if (options.signal?.aborted) controller.abort();
-  try {
-    controller.signal.throwIfAborted();
-    if (mutating && !csrf()) await waitFor(ensureCsrf(), controller.signal);
-    controller.signal.throwIfAborted();
-    if (mutating && requestEpoch !== sessionEpoch())
+  async function verifyIdentity() {
+    if (!mutating) return;
+    try {
+      await waitFor(verifySessionForWrite(), controller.signal);
+    } catch {
+      controller.signal.throwIfAborted();
+      throw new ApiError(
+        "登录状态暂未核实，本次操作未提交。请检查网络后重试。",
+        0,
+        { code: "identity_unverified", submitted: false },
+      );
+    }
+    if (requestEpoch !== sessionEpoch())
       throw new ApiError(
         "账号已变化，本次操作未提交，请在当前账号重新确认。",
         0,
         { code: "request_aborted", submitted: false },
       );
+  }
+  try {
+    controller.signal.throwIfAborted();
+    await verifyIdentity();
+    if (mutating && !csrf()) await waitFor(ensureCsrf(), controller.signal);
+    controller.signal.throwIfAborted();
+    // The user can return from another tab while a shared CSRF request waits.
+    // Recheck immediately before dispatch, not only when the action was clicked.
+    await verifyIdentity();
     const headers = new Headers(options.headers);
     headers.set("Accept", "application/json");
     const multipart = options.body instanceof FormData;
@@ -116,6 +134,10 @@ export async function api<T = any>(
     else if (options.body !== undefined)
       headers.set("Content-Type", "application/json");
     if (mutating) headers.set("X-CSRFToken", csrf());
+    // This is an expected-account precondition, never an authentication claim.
+    // The server compares it with the actual cookie session before any write.
+    if (mutating && requestActor !== null)
+      headers.set("X-Yanhuo-Actor", requestActor);
     submitted = true;
     const response = await fetch("/api/v1" + path, {
       ...options,
@@ -152,6 +174,10 @@ export async function api<T = any>(
     // Identity can also change while a slow response body is being consumed.
     requireCurrentIdentity();
     if (!response.ok) {
+      if (data?.code === "session_changed" && requestEpoch === sessionEpoch())
+        window.dispatchEvent(
+          new CustomEvent("session-changed", { detail: { epoch: requestEpoch } }),
+        );
       if (data?.code === "not_authenticated" && requestEpoch === sessionEpoch())
         window.dispatchEvent(
           new CustomEvent("session-expired", {

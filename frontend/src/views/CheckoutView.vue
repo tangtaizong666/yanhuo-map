@@ -57,6 +57,7 @@ const stall = ref<any>(null);
 const loading = ref(true);
 const busy = ref(false);
 const error = ref("");
+const relatedOrderIds = ref<string[]>([]);
 const priceChanged = ref(false);
 const keyboardInset = ref(0);
 function updateViewport() {
@@ -168,8 +169,7 @@ function productProblem(item: CartItem) {
     return product.sale_paused
       ? "商家暂停了这道餐点的销售，请移除或稍后再来。"
       : "这道餐点暂不可售，请移除后继续。";
-  if (product.stock < item.quantity)
-    return `目前只剩 ${product.stock} 份，请调整数量。`;
+  if (cart.count(stallId) > 10) return "每单合计最多 10 份，请调整数量。";
   return "";
 }
 const unavailableItems = computed(
@@ -257,6 +257,7 @@ function prepareSubmission() {
     key,
     fingerprint: fingerprint.value,
     cart: cartFingerprint.value,
+    cartPortions: cart.capturePortions(stallId),
     note: note.value,
     phone: phone.value,
     fulfillment: fulfillment.value,
@@ -325,8 +326,12 @@ function updateQuantity(item: any, quantity: number) {
   const current = stall.value?.products?.find(
     (p: any) => p.id === item.product.id,
   );
-  if (quantity > (current?.stock ?? 99)) {
-    notify("当前库存不足", "info");
+  if (
+    quantity > item.quantity &&
+    (!productAvailable(current) ||
+      cart.remaining(stallId) < quantity - item.quantity)
+  ) {
+    notify("每个摊位一单合计最多 10 份", "info");
     return;
   }
   cart.setQuantity(stallId, item.product, quantity);
@@ -357,6 +362,7 @@ async function confirmSubmission() {
 async function sendSubmission(record: CheckoutSubmission, recovering = false) {
   busy.value = true;
   error.value = "";
+  relatedOrderIds.value = [];
   try {
     const order = await api<any>("/orders", {
       method: "POST",
@@ -368,9 +374,10 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
       throw new ApiError("订单返回信息不完整，请确认原订单结果。", 502, null);
     const unchangedCart = record.cart === cartFingerprint.value;
     const unchangedDraft = record.fingerprint === fingerprint.value;
-    if (unchangedCart) cart.clear(stallId);
+    if (record.cartPortions) cart.consumePortions(stallId, record.cartPortions, pageUserId!);
+    else if (unchangedCart) cart.clear(stallId);
     forgetSubmission();
-    if (unchangedDraft) drafts.clear(stallId);
+    if (unchangedDraft && !cart.count(stallId)) drafts.clear(stallId);
     notify(
       order.fulfillment_type === "delivery"
         ? "配送订单已创建，请完成微信付款"
@@ -379,8 +386,20 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
     );
     await router.replace(`/orders/${order.id}`);
   } catch (e) {
-    if (!isCurrentPage()) return;
+    if (!isCurrentPage()) {
+      // Identity verification may unmount this page before the first write is
+      // ever sent. Do not leave a phantom recovery request for the old account;
+      // an actual retry still retains its original uncertain operation.
+      if (!recovering && e instanceof ApiError && e.data?.submitted === false &&
+          readSubmission(keyName, stallId)?.key === record.key)
+        removeSubmission(keyName);
+      return;
+    }
     error.value = (e as Error).message;
+    if (e instanceof ApiError && Array.isArray(e.data?.order_ids)) {
+      relatedOrderIds.value = e.data.order_ids.filter((id: unknown) =>
+        typeof id === 'string' && /^[a-f0-9-]{36}$/i.test(id)).slice(0, 10);
+    }
     // During recovery, CSRF/auth/schema failures only describe this retry, not
     // the original write. Only business checks after server-side duplicate
     // lookup prove there is no committed original order to recover.
@@ -399,6 +418,10 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
       "product_sale_paused",
       "prep_capacity_reached",
       "ordering_stopped",
+      "stall_reservation_limit",
+      "active_reservation_limit",
+      "order_quantity_limit",
+      "checkout_rate_limited",
     ]);
     const rejected =
       e instanceof ApiError &&
@@ -765,6 +788,9 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
         <p v-if="error && !unresolved" class="error-message" role="alert">
           {{ error }}
         </p>
+        <nav v-if="relatedOrderIds.length && !unresolved" class="recovery-actions" aria-label="已有订单">
+          <RouterLink v-for="(id, index) in relatedOrderIds" :key="id" :to="`/orders/${id}`" class="btn btn-secondary">查看已有订单 {{ index + 1 }}</RouterLink>
+        </nav>
         <p
           v-if="isDelivery && !deliveryCanSubmit"
           class="error-message"
@@ -776,7 +802,7 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
               : "请核对交接点、收餐人、有效联系号码及起送金额。"
           }}
         </p>
-        <div class="checkout-action-bar" aria-label="确认金额并提交">
+        <div v-if="!unresolved || busy" class="checkout-action-bar" aria-label="确认金额并提交">
           <div class="mobile-checkout-total">
             <small>{{ isSimulation ? "模拟应付" : "合计" }}</small
             ><strong>¥{{ money(total + deliveryFee) }}</strong
@@ -1221,16 +1247,24 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
     padding-top: 18px;
   }
   .checkout-product {
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr);
     gap: 12px;
   }
+  .checkout-product-photo { grid-row: 1 / 3; align-self: start; }
+  .checkout-product > .portion-editor,
+  .checkout-product-problem { grid-column: 1 / -1; }
   .checkout-product img {
-    width: 68px;
-    height: 68px;
+    width: 64px;
+    height: 64px;
   }
   .product-text p {
-    font-size: 10px;
+    display: none;
   }
+  .product-text h3 a { min-height: 0; padding: 0 0 6px; line-height: 1.5; }
   .quantity-control {
+    grid-column: 2;
+    justify-self: start;
     gap: 5px;
   }
   .checkout-card > .section-heading {

@@ -16,14 +16,15 @@ import {
 import { useStalls } from "../lib/discovery";
 import { useSession } from "../stores/session";
 import { loadAMap, locate } from "../lib/amap";
-import { confirmedText, statusText, routeUrl } from "../lib/api";
+import { api, confirmedText, statusText, routeUrl } from "../lib/api";
 import { notify } from "../lib/notify";
-import type { Stall } from "../lib/types";
+import type { Stall, StallMap } from "../lib/types";
 import StallCard from "../components/StallCard.vue";
 import DiscoveryFilters from "../components/DiscoveryFilters.vue";
 import StallVisitInfo from "../components/StallVisitInfo.vue";
 import StallShare from "../components/StallShare.vue";
 const route = useRoute();
+const bounds = ref("");
 const {
     stalls: allStalls,
     loading,
@@ -32,7 +33,8 @@ const {
     follow,
     pendingFollows,
     filters,
-  } = useStalls(),
+    truncated,
+  } = useStalls<StallMap>("map", bounds),
   session = useSession(),
   mapNode = ref<HTMLDivElement | null>(null),
   selected = ref<Stall | null>(null),
@@ -80,6 +82,8 @@ async function init() {
       mapStyle: "amap://styles/whitesmoke",
     });
     map.addControl(new AMap.Scale());
+    map.on("moveend", syncBounds);
+    syncBounds();
     renderMarkers();
   } catch (e) {
     mapError.value = (e as Error).message;
@@ -112,10 +116,33 @@ function renderMarkers() {
   });
   map.add(markers);
 }
-function selectStall(s: Stall) {
-  selected.value = s;
+function syncBounds() {
+  const extent = map?.getBounds();
+  if (!extent) return;
+  const sw = extent.getSouthWest(),
+    ne = extent.getNorthEast();
+  bounds.value = [sw.lng, sw.lat, ne.lng, ne.lat]
+    .map((value: number) => value.toFixed(6))
+    .join(",");
+}
+let selectionSequence = 0,
+  selectionController: AbortController | undefined;
+async function selectStall(s: StallMap) {
+  selectionController?.abort();
+  selectionController = new AbortController();
+  const current = ++selectionSequence;
   if (map) map.panTo([s.longitude, s.latitude]);
-  renderMarkers();
+  try {
+    const detail = await api<Stall>(`/stalls/${s.id}`, {
+      signal: selectionController.signal,
+    });
+    if (current !== selectionSequence || unmounted) return;
+    selected.value = detail;
+    renderMarkers();
+  } catch (cause) {
+    if (current === selectionSequence && !unmounted)
+      notify((cause as Error).message, "error");
+  }
 }
 async function findMe() {
   if (!session.config) return;
@@ -141,8 +168,12 @@ async function findMe() {
 }
 watch(stalls, () => {
   if (selected.value)
-    selected.value =
-      stalls.value.find((s) => s.id === selected.value?.id) || null;
+    selected.value = stalls.value.some((s) => s.id === selected.value?.id)
+      ? {
+          ...selected.value,
+          ...stalls.value.find((s) => s.id === selected.value?.id),
+        }
+      : null;
   renderMarkers();
 });
 watch(area, (a) => {
@@ -152,6 +183,7 @@ watch(area, (a) => {
 onMounted(init);
 onUnmounted(() => {
   unmounted = true;
+  selectionController?.abort();
   map?.destroy();
 });
 </script>
@@ -207,6 +239,10 @@ onUnmounted(() => {
           </div>
         </div>
         <div class="map-results">
+          <p v-if="truncated" class="error-message" role="status">
+            当前范围摊位较多，仅展示前 200
+            个。请放大地图或选择校园区域缩小范围。
+          </p>
           <div v-if="error" class="error-message" role="status">
             暂未同步最新状态。{{
               stalls.length
@@ -240,16 +276,39 @@ onUnmounted(() => {
             :key="s.id"
             :class="['map-list-item', { selected: selected?.id === s.id }]"
           >
-            <StallCard
-              :stall="s"
-              compact
-              :follow-busy="pendingFollows.has(s.id)"
-              @follow="follow"
-            /><button class="map-select" @click="selectStall(s)">
-              <MapPin :size="12" />{{
-                selected?.id === s.id ? "已选中" : "在地图中查看"
-              }}
-            </button>
+            <article class="stall-card map-summary-card">
+              <RouterLink :to="`/stalls/${s.id}`"
+                ><img
+                  v-if="s.image"
+                  :src="s.image"
+                  :alt="s.name"
+                  width="72"
+                  height="56"
+                  loading="lazy"
+                /><strong>{{ s.name }}</strong></RouterLink
+              >
+              <span :class="['badge', s.status]">{{
+                statusText(s.status)
+              }}</span>
+              <p>{{ s.address }}</p>
+              <small>{{ confirmedText(s.last_confirmed_at) }}</small>
+              <div class="map-summary-actions">
+                <button
+                  class="btn btn-secondary map-select"
+                  @click="selectStall(s)"
+                >
+                  {{ selected?.id === s.id ? "已选中" : "在地图中查看" }}
+                </button>
+                <button
+                  class="btn btn-ghost"
+                  :disabled="pendingFollows.has(s.id)"
+                  :aria-label="`${s.is_followed ? '取消关注' : '关注'}${s.name}`"
+                  @click="follow(s)"
+                >
+                  {{ s.is_followed ? "已关注" : "关注" }}
+                </button>
+              </div>
+            </article>
           </div>
         </div>
       </aside>
@@ -338,6 +397,38 @@ onUnmounted(() => {
   </div>
 </template>
 <style scoped>
+.map-summary-card {
+  padding: 16px;
+  border: 1px solid #eee1d3;
+  border-radius: 14px;
+  background: #fffaf3;
+}
+.map-summary-card > a {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  margin-bottom: 10px;
+}
+.map-summary-card img {
+  object-fit: cover;
+  border-radius: 10px;
+}
+.map-summary-card p {
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.map-summary-card small {
+  color: #75624f;
+}
+.map-summary-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
 .selected-visit {
   grid-column: 1/-1;
   min-width: 0;

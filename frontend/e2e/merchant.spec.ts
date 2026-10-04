@@ -272,7 +272,7 @@ test("merchant creates and uploads a menu item, edits it and controls public ava
     await expect(
       card.getByAltText(uniqueName, { exact: true }),
     ).toHaveAttribute("src", image.url);
-    await card.getByRole("button", { name: "编辑商品", exact: true }).click();
+    await card.getByRole("button", { name: /^编辑商品：/ }).click();
     const editDialog = page.getByRole("dialog", { name: "编辑商品" });
     await editDialog.getByLabel("商品名称", { exact: false }).fill(editedName);
     await editDialog

@@ -69,13 +69,14 @@ if ($Simulation) {
 }
 $workerProcess = Start-Process -FilePath $pythonExe -ArgumentList @('-u','manage.py','expire_orders','--loop') -WorkingDirectory $backendDir -WindowStyle Hidden -RedirectStandardOutput (Join-Path $runtimeDir 'worker.log') -RedirectStandardError (Join-Path $runtimeDir 'worker.error.log') -PassThru
 $paymentWorkerProcess = Start-Process -FilePath $pythonExe -ArgumentList @('-u','manage.py','reconcile_payments','--loop') -WorkingDirectory $backendDir -WindowStyle Hidden -RedirectStandardOutput (Join-Path $runtimeDir 'payment-worker.log') -RedirectStandardError (Join-Path $runtimeDir 'payment-worker.error.log') -PassThru
+$notificationWorkerProcess = Start-Process -FilePath $pythonExe -ArgumentList @('-u','manage.py','process_payment_notifications','--loop') -WorkingDirectory $backendDir -WindowStyle Hidden -RedirectStandardOutput (Join-Path $runtimeDir 'notification-worker.log') -RedirectStandardError (Join-Path $runtimeDir 'notification-worker.error.log') -PassThru
 $nodeExe = (Get-Command node.exe).Source
 # Detach the preview's process group and stdin from this launching terminal.
 # The helper opens logs directly; no visible console or interactive CLI is needed.
 $frontendId = & $pythonExe (Join-Path $PSScriptRoot 'start_frontend.py') --node $nodeExe --host $frontendHost
 if ($LASTEXITCODE -ne 0) { throw 'Frontend preview could not be launched.' }
 $frontendProcess = Get-Process -Id ([int]$frontendId) -ErrorAction Stop
-$records = @($backendProcess,$workerProcess,$paymentWorkerProcess,$frontendProcess) | ForEach-Object { @{id=$_.Id;started=$_.StartTime.ToUniversalTime().ToString('o')} }
+$records = @($backendProcess,$workerProcess,$paymentWorkerProcess,$notificationWorkerProcess,$frontendProcess) | ForEach-Object { @{id=$_.Id;started=$_.StartTime.ToUniversalTime().ToString('o')} }
 @{root=$projectRoot;processes=@($records);lan_url=$lanUrl} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $runtimeDir 'processes.json') -Encoding utf8
 $ready = $false
 for ($attempt = 0; $attempt -lt 20; $attempt++) {

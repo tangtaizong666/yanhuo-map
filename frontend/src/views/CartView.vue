@@ -20,6 +20,8 @@ import {
 import { api, ApiError, confirmedText, money, statusText } from "../lib/api";
 import type { CartItem, Product, Stall } from "../lib/types";
 import { useCart } from "../stores/cart";
+import { useSession } from '../stores/session';
+import { listSubmissions } from '../lib/checkoutSubmission';
 import PortionEditor from "../components/PortionEditor.vue";
 import { normalizePortions, invalidPortions } from "../lib/portions";
 import {
@@ -28,6 +30,9 @@ import {
 } from "../lib/availability";
 
 const cart = useCart();
+const session = useSession();
+const recoveries = computed(() => listSubmissions(session.user?.id));
+const hasRecovery = (id: string) => recoveries.value.some(row => row.stallId === Number(id));
 type StallState = {
   stall: Stall | null;
   error: string;
@@ -183,8 +188,7 @@ function productIssue(id: string, item: CartItem) {
   const product = current(id, item);
   if (!product) return "已下架或不再供应";
   if (!productAvailable(product)) return productUnavailableReason(product);
-  if (product.stock < item.quantity)
-    return `仅剩 ${product.stock} 份，请调整数量`;
+  if (cart.count(id) > 10) return "每个摊位一单合计最多 10 份，请调整数量";
   if (invalidPortions(product, item.portions, item.quantity))
     return "口味选项已变更，请重新选择后再结算";
   return "";
@@ -216,7 +220,7 @@ function stallIssue(id: string) {
 }
 function canCheckout(id: string) {
   return (
-    !stallIssue(id) &&
+    !hasRecovery(id) && !stallIssue(id) &&
     cart.items(id).length > 0 &&
     cart
       .items(id)
@@ -231,7 +235,7 @@ function increaseDisabled(id: string, item: CartItem) {
     !!state.error ||
     !state.stall.can_order ||
     !productAvailable(current(id, item)) ||
-    item.quantity >= Math.min(99, current(id, item)?.stock || 0)
+    cart.remaining(id) <= 0
   );
 }
 function setQuantity(id: string, item: CartItem, quantity: number) {
@@ -313,6 +317,14 @@ function acceptPrice(id: string, item: CartItem) {
       </div>
     </header>
 
+    <section v-if="recoveries.length" class="card cart-recovery" aria-label="待确认的订单">
+      <h2>先确认上一笔订单</h2>
+      <p>提交结果还未确认。餐袋里的新选择会保留，请先找回原订单。</p>
+      <div v-for="recovery in recoveries" :key="recovery.stallId" class="cart-recovery-row">
+        <span>{{ recovery.record.summary }}</span>
+        <RouterLink :to="`/checkout/${recovery.stallId}`" class="btn btn-primary">确认原订单结果</RouterLink>
+      </div>
+    </section>
     <section
       v-if="cart.guestCount"
       class="card guest-cart-choice"
@@ -320,8 +332,7 @@ function acceptPrice(id: string, item: CartItem) {
     >
       <h2>登录前还有 {{ cart.guestCount }} 份餐点</h2>
       <p>
-        可由你确认后加入当前账号，再核对价格、库存与逐份备注。同款合并最多 99
-        份。
+        可由你确认后加入当前账号，再核对价格、库存与逐份备注。每个摊位合计最多 10 份，未加入的餐点会保留在登录前餐袋。
       </p>
       <button class="btn btn-primary" @click="cart.mergeGuest()">
         加入当前账号餐袋
@@ -568,7 +579,9 @@ function acceptPrice(id: string, item: CartItem) {
               >去结算<ArrowUpRight :size="17" /></RouterLink
             ><button v-else type="button" class="btn btn-primary" disabled>
               {{
-                states[group.id]?.loading
+                hasRecovery(group.id)
+                  ? "请先确认原订单"
+                  : states[group.id]?.loading
                   ? "核对中…"
                   : group.rows.some((item) => priceChanged(group.id, item))
                     ? "请先确认价格"
@@ -615,6 +628,13 @@ function acceptPrice(id: string, item: CartItem) {
 </template>
 
 <style scoped>
+.cart-recovery { margin-bottom: 20px; padding: 20px; background: #fff5e7; border-color: #e6ca9e; }
+.cart-recovery h2 { margin: 0 0 8px; font-size: 18px; }
+.cart-recovery p { color: #745c45; font-size: 13px; line-height: 1.7; }
+.cart-recovery-row { display: flex; gap: 16px; align-items: center; justify-content: space-between; margin-top: 14px; }
+.cart-recovery-row span { min-width: 0; overflow-wrap: anywhere; font-size: 13px; }
+.cart-recovery-row .btn { flex-shrink: 0; }
+@media (max-width: 600px) { .cart-recovery { padding: 16px; } .cart-recovery-row { align-items: stretch; flex-direction: column; gap: 10px; } }
 .guest-cart-choice {
   padding: 24px;
   margin-bottom: 24px;
@@ -1171,6 +1191,8 @@ function acceptPrice(id: string, item: CartItem) {
   }
 }
 @media (max-width: 800px) {
+  .cart-page { padding-bottom: calc(104px + env(safe-area-inset-bottom)); }
+  .cart-stall-footer .btn { scroll-margin-block: 100px; }
   .cart-layout {
     grid-template-columns: minmax(0, 1fr);
     gap: 7px;
@@ -1201,16 +1223,17 @@ function acceptPrice(id: string, item: CartItem) {
   }
   .cart-heading {
     gap: 12px;
+    padding: 8px 0 14px;
   }
   .cart-heading .eyebrow {
-    font-size: 8px;
-    letter-spacing: 1.3px;
+    display: none;
   }
   .cart-heading h1 {
-    font-size: 30px;
+    font-size: 26px;
+    margin: 0;
   }
   .cart-heading p {
-    font-size: 12px;
+    display: none;
   }
   .cart-heading-count {
     padding: 11px;
@@ -1258,14 +1281,14 @@ function acceptPrice(id: string, item: CartItem) {
     padding: 0 15px;
   }
   .cart-item {
-    grid-template-columns: 78px minmax(0, 1fr);
+    grid-template-columns: 72px minmax(0, 1fr);
     column-gap: 12px;
     row-gap: 0;
     padding: 17px 0;
   }
   .cart-food-photo {
-    width: 78px;
-    height: 92px;
+    width: 72px;
+    height: 72px;
     grid-row: 1 / 3;
     border-radius: 11px;
   }
@@ -1277,7 +1300,7 @@ function acceptPrice(id: string, item: CartItem) {
     padding-bottom: 3px;
   }
   .cart-food-description {
-    font-size: 10px;
+    font-size: 12px;
   }
   .cart-food-price {
     margin-top: 4px;
@@ -1301,7 +1324,7 @@ function acceptPrice(id: string, item: CartItem) {
   }
   .cart-remove {
     text-align: left;
-    font-size: 10px;
+    font-size: 12px;
   }
   .cart-item-notices {
     padding-top: 12px;

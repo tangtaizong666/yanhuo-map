@@ -55,6 +55,7 @@ class MerchantWorkspaceTests(TestCase):
         self.assertEqual(order.total_cents, 800)
         self.client.force_authenticate(self.student)
         self.assertEqual(self.client.get(f'/api/v1/orders/{order.id}').status_code, 200)
+        self.client.force_authenticate(self.other)
         self.assertEqual(self.client.post('/api/v1/orders', payload(self.stall, self.product), format='json').status_code, 400)
 
     def test_product_write_validation_and_permissions(self):
@@ -219,7 +220,8 @@ class MerchantWorkspaceTests(TestCase):
         self.assertEqual(public['rating'], 4)
 
     def test_metrics_by_local_payment_day_instead_of_order_creation_day(self):
-        first, second = self.order(), self.order()
+        first = self.order()
+        second, _ = create_order(self.other, payload(self.stall, self.product))
         now = timezone.make_aware(datetime(2026, 9, 26, 0, 30))
         old_creation = now - timedelta(days=3)
         Order.objects.filter(pk=first.pk).update(created_at=old_creation, status='completed', payment_status='paid',

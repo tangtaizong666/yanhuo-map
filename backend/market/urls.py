@@ -1,6 +1,7 @@
 from django.urls import path
 from . import merchant, operations, payment_views, views, recovery, counter
 from .proxy import amap_proxy
+from . import discovery_api
 
 urlpatterns = [
     path('health', views.health),
@@ -8,6 +9,7 @@ urlpatterns = [
     path('auth/login', views.login_view), path('auth/register', views.register), path('auth/logout', views.logout_view),
     path('auth/profile', views.profile), path('auth/password', views.password), path('auth/account', views.account),
     path('auth/recovery', recovery.manage_recovery), path('auth/recovery/reset', recovery.reset_password),
+    path('products', discovery_api.products), path('stalls/map', discovery_api.map_stalls),
     path('stalls', views.stalls), path('stalls/<int:stall_id>', views.stall_detail),
     path('stalls/<int:stall_id>/follow', views.follow), path('follows', views.follows),
     path('events', views.event), path('feedback', operations.feedback),

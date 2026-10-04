@@ -1,6 +1,6 @@
 # 微信支付：接入、部署与日常处理
 
-更新日期：2026-09-27。当前代码已提供普通直连商户的微信 Native 扫码、H5 支付、查询、关闭支付、全额原路退款和通知验签。**真实支付默认关闭，示例环境不会真实扣款；接通代码不等于商户产品权限、域名审核或真实收款已经开通。**
+更新日期：2026-10-03。当前代码已提供普通直连商户的微信 Native 扫码、H5 支付、查询、关闭支付、全额原路退款和通知验签。**真实支付默认关闭，示例环境不会真实扣款；接通代码不等于商户产品权限、域名审核或真实收款已经开通。**
 
 用户已要求先用模拟支付与配送试流程。开发环境另设带明确标识的模拟模式，操作说明见[模拟体验指南](simulation-guide.md)，实际验证见[模拟验证记录](simulation-verification.md)。下文的凭据、微信通知与真实收退款要求均针对真实模式；模拟按钮不访问微信，不需要商家填写密钥，也不能作为已开通收款的证明。
 
@@ -98,7 +98,7 @@ reverse_proxy backend:8000 {
 
 ## 使用可选 Compose 覆盖文件
 
-不接支付时继续使用基础 `compose.yaml`，它不要求密钥目录存在，线上付款保持关闭。基础栈包含两个独立后台任务：`worker` 负责未接单超时，`payment_worker` 负责在途支付和退款查询。
+不接支付时继续使用基础 `compose.yaml`，它不要求密钥目录存在，线上付款保持关闭。基础栈包含三个独立后台任务：`worker` 负责未接单超时，`payment_worker` 负责在途支付和退款查询，`notification_worker` 处理已验签并持久保存的通知。应用、回调进程和三个 worker 都在 `release` 成功完成迁移、静态收集后启动；已有部署升级须先按[发布流程](deployment-release.md)停写。
 
 确需真实接入时：
 
@@ -116,13 +116,17 @@ docker compose --env-file .env.production -f compose.yaml -f compose.payments.ya
 # 目标服务器上完成接入准备后才执行。
 docker compose --env-file .env.production -f compose.yaml -f compose.payments.yaml up -d --build
 
-# 观察两个后台任务；不要开启包含密钥或解密正文的调试日志。
-docker compose --env-file .env.production -f compose.yaml -f compose.payments.yaml logs --tail=100 backend worker payment_worker
+# 观察应用、回调和三个后台任务；不要开启包含密钥或解密正文的调试日志。
+docker compose --env-file .env.production -f compose.yaml -f compose.payments.yaml logs --tail=100 backend callback worker payment_worker notification_worker
 ```
 
-`compose.payments.yaml` 仅给 `backend` 和 `payment_worker` 挂载外部目录，且为只读；目录不存在会失败，不会自动建立空目录掩盖配置问题。图片、前端和数据库服务不读取支付密钥。普通过期任务不需要密钥。
+`compose.payments.yaml` 给 `backend`、`callback`、`payment_worker` 和 `notification_worker` 只读挂载外部目录；目录不存在会失败，不会自动建立空目录掩盖配置问题。图片、前端和数据库服务不读取支付密钥。普通过期任务不需要密钥。已接收通知由 worker 使用入库的验签结果处理，不再次访问微信或依赖轮换后的当前密钥；既有交易的主动查询和新通知仍需要原账户配置。
 
 支付及退款通知地址由服务端生成，共用 `https://实际域名/api/v1/payments/wechat/notify/账户键`。该路径必须可从公网访问，不应加用户登录、重定向或浏览器挑战；只由微信通知验签校验身份。不要把本机 `127.0.0.1`、局域网 HTTP 地址或管理后台 URL 填成通知地址。API 出站固定连接 `api.mch.weixin.qq.com:443`；生产主机需要可靠的 DNS、HTTPS 出站及时间同步。
+
+Caddy 将此路径送到独立 `callback` 服务，入口和进程都限制 2 MiB 请求体、处理并发为 2；临时容量或验签配置不可用时返回 503，通知不会误报成功。签名验证通过且通知已持久落库后才返回 204，随后由 `process_payment_notifications --loop` 异步应用业务结果。204 表示可靠接收，不表示已完成业务处理；必须监控全局 `check_operations` 中的 `notifications.dead/conflicts/overdue`，仅看进程存活不足以判断通知健康。
+
+失败日志仅包含 `payment_notification_failed notification=<UUID> code=<安全代码>`。核对原交易、通知记录及微信后台后，可用 `python manage.py retry_payment_notification <UUID> --reason '核验后重试'` 重排队；原事件、处理次数和摘要保留。确认通知冲突已核验时加 `--acknowledge-conflict`，该操作只记录审核并清待处理冲突计数，不重排队、不修改资金事实。命令在目标栈的 `exec backend` 内执行，仍须带两份 Compose 文件；不要把任意错误文字当作已退款证据。
 
 ## 日常付款、撤销和退款
 
@@ -144,6 +148,10 @@ docker compose --env-file .env.production -f compose.yaml -f compose.payments.ya
 ## 后台查询与人工对账
 
 `payment_worker` 运行 `python manage.py reconcile_payments --loop --interval 30 --limit 100`。每轮优先处理待查询退款和支付，旧查询优先；`--interval` 最少 10 秒，`--limit` 为 1—1000。它不根据本地超时直接判定退款或支付结束。
+
+用户手动查单、页面自动刷新及后台任务共享数据库查询预算：同笔支付或退款默认至少间隔 5 秒，失败按 10/20/30/60 秒退避。API 返回剩余冷却时间，客户端使用单调倒计时；冷却内不会重新访问微信。关单和退款等资金操作有各自校验，不能用刷新按钮绕过查询预算或凭本地计时判断资金终态。
+
+运营核验外部退款也遵守该预算：已记录的退款使用自己的冷却和在途租约；未记录的退款号共用原付款的一次核验预算，付款核验至外部退款查询结束期间持续持有租约，失败按整次核验退避。只有核验为原付款的全额成功退款才新增退款记录；换退款号、重复点击和旧请求返回均不能绕过调度或覆盖新请求。
 
 支付与退款先在短数据库事务中保存稳定编号和本次请求的临时占用，再在事务外访问微信，最后重新锁定订单应用已验证结果。支付请求占用期为 90 秒，退款为 60 秒；进程异常后可以在占用到期后查询原编号，不生成替代交易号。临时占用到期不代表微信交易已关闭。后到的旧请求不能清除新请求的占用，旧的未付或处理中响应也不能覆盖已确认的付款、退款成功或退款关闭结果。
 
@@ -167,7 +175,7 @@ docker compose --env-file .env.production -f compose.yaml -f compose.payments.ya
 
 ## 停用、轮换与恢复
 
-- **暂停售卖/支付**：把 `WECHAT_PAY_ENABLED=false` 或某账户 `enabled=false`，阻止新支付；保留原账户文件、密钥、通知路由和 `payment_worker`。已经创建的二维码/支付链接不因总开关关闭而自动撤销，应逐单查明并按需关单。
+- **暂停售卖/支付**：把 `WECHAT_PAY_ENABLED=false` 或某账户 `enabled=false`，阻止新支付；保留原账户文件、密钥、通知路由、`payment_worker` 与 `notification_worker`。已经创建的二维码/支付链接不因总开关关闭而自动撤销，应逐单查明并按需关单。
 - **稳定账户标识**：支付记录保存账户键、商户号和 AppID 快照。不能删除旧账户键、改给另一家商户或覆盖为新收款主体。更换收款主体需要单独迁移方案，旧交易的查询与退款仍使用原主体；当前配置不支持一个商户档案同时绑定两个独立收款号。
 - **商户签名凭据轮换**：保持账户键、`mchid`、`appid` 不变，将新私钥和对应证书序列号一起更新；先核对微信侧启用状态，再验证既有订单的查询能力，保留必要的受控恢复资料。
 - **微信验签公钥轮换**：按官方渠道取得新公钥及 ID，配置映射可同时保留旧、新公钥；当前实现使用映射第一项作为出站首选 ID。待旧响应/通知处置完毕后，再按实际有效期移除旧公钥。

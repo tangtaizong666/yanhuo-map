@@ -61,21 +61,25 @@ class CounterTests(TestCase):
     def test_defaults_and_public_contract_do_not_change_existing_availability(self):
         data = self.api.get(f'/api/v1/stalls/{self.stall.pk}').data
         self.assertTrue(data['can_order'])
-        self.assertEqual((data['prep_capacity'], data['stop_orders_at'], data['receiving_seen_at']), (None, None, None))
-        self.assertEqual((data['prep_active_orders'], data['receiving_status']), (0, 'unknown'))
-        self.assertEqual((data['products'][0]['stock_version'], data['products'][0]['sale_paused']), (0, False))
+        self.assertEqual(data['receiving_status'], 'unknown')
+        self.assertEqual(data['products'][0]['availability'], 'available')
+        for key in ('prep_capacity', 'prep_active_orders', 'receiving_seen_at', 'receiving_age_seconds'):
+            self.assertNotIn(key, data)
+        self.assertNotIn('stock_version', data['products'][0])
+        owned = self.api.get('/api/v1/merchant/stalls').data[0]
+        self.assertEqual((owned['prep_active_orders'], owned['products'][0]['stock_version']), (0, 0))
 
     def test_receiving_age_uses_server_clock_and_clamps_future_timestamps(self):
         url = f'/api/v1/stalls/{self.stall.pk}'
         now = timezone.now()
         with patch('market.serializers.timezone.now', return_value=now):
-            self.assertIsNone(self.api.get(url).data['receiving_age_seconds'])
+            self.assertEqual(self.api.get(url).data['receiving_valid_for_seconds'], 0)
             Stall.objects.filter(pk=self.stall.pk).update(receiving_seen_at=now - timedelta(seconds=91.25))
             data = self.api.get(url).data
-            self.assertEqual(data['receiving_age_seconds'], 91.25)
+            self.assertEqual(data['receiving_valid_for_seconds'], 0)
             self.assertEqual(data['receiving_status'], 'stale')
             Stall.objects.filter(pk=self.stall.pk).update(receiving_seen_at=now + timedelta(hours=1))
-            self.assertEqual(self.api.get(url).data['receiving_age_seconds'], 0)
+            self.assertEqual(self.api.get(url).data['receiving_valid_for_seconds'], 30)
             response = self.api.post(f'/api/v1/merchant/stalls/{self.stall.pk}/receiving-heartbeat', {}, format='json')
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.data['receiving_age_seconds'], 0)
@@ -196,7 +200,8 @@ class CounterTests(TestCase):
         self.assertEqual(self.profile({'prep_capacity': 1}).status_code, 200)
         order, _ = create_order(self.student, payload(self.stall, self.product))
         public = self.api.get(f'/api/v1/stalls/{self.stall.pk}').data
-        self.assertEqual((public['prep_active_orders'], public['status'], public['can_order']), (1, 'open', False))
+        self.assertNotIn('prep_active_orders', public)
+        self.assertEqual((public['status'], public['can_order']), ('open', False))
         with self.assertRaises(BusinessError) as exc: create_order(self.other, payload(self.stall, self.product))
         self.assertEqual(exc.exception.detail['code'], 'prep_capacity_reached')
         merchant_action(order.pk, self.vendor, 'accept')
@@ -212,7 +217,8 @@ class CounterTests(TestCase):
         self.assertEqual(response.data['prep_active_orders'], 2)
         self.assertEqual(Order.objects.filter(status='pending').count(), 2)
         self.assertEqual(self.profile({'prep_capacity': None}).status_code, 200)
-        self.assertTrue(create_order(self.student, payload(self.stall, self.product))[1])
+        newcomer = User.objects.create_user('capacity_newcomer', password='ExampleSafe123')
+        self.assertTrue(create_order(newcomer, payload(self.stall, self.product))[1])
         for value in (0, -1, 101): self.assertEqual(self.profile({'prep_capacity': value}).status_code, 400)
 
     def test_cutoff_is_this_session_only_and_does_not_confirm_location_or_close_stall(self):

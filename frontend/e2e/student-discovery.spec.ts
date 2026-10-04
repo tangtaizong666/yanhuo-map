@@ -1,3 +1,4 @@
+import { publicResponse, mealResponse } from "./public-contracts";
 import { expect, test, type Page } from "@playwright/test";
 import { assertNoHorizontalOverflow, fulfillCsrf } from "./helpers";
 
@@ -125,7 +126,11 @@ async function fixture(page: Page, signedIn = true) {
     const req = route.request(),
       url = new URL(req.url()),
       path = url.pathname.replace("/api/v1", "");
-    const send = (json: any, status = 200) => route.fulfill({ json, status });
+    const send = (json: any, status = 200) =>
+      route.fulfill({
+        json: status >= 400 ? json : publicResponse(path, json),
+        status,
+      });
     if (path === "/config")
       return send({
         user: state.user,
@@ -187,7 +192,9 @@ async function fixture(page: Page, signedIn = true) {
         decorate(state.stalls.find((s) => s.id === Number(follow[1]))),
       );
     }
-    if (path === "/stalls") {
+    if (path === "/products")
+      return send(mealResponse(state.stalls.map(decorate), url.searchParams));
+    if (path === "/stalls" || path === "/stalls/map") {
       state.queries.push(url.searchParams);
       if (state.failList) return route.abort("failed");
       let rows = state.stalls;

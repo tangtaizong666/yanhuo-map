@@ -58,12 +58,11 @@ test("student and merchant complete a real pickup order in separate browser sess
     const productEditor = merchant.locator("article.merchant-product").filter({
       has: merchant.getByRole("heading", { name: product.name, exact: true }),
     });
-    await expect(
-      productEditor.getByRole("spinbutton", {
-        name: `${product.name}库存`,
-        exact: true,
-      }),
-    ).toHaveValue(String(product.stock));
+    await expect(productEditor.locator('.stock-readout b')).toHaveText(String(product.stock));
+    await expect(productEditor.getByRole('spinbutton', { name: `${product.name}库存`, exact: true })).toHaveCount(0);
+    await productEditor.getByRole('button', { name: `编辑商品：${product.name}`, exact: true }).click();
+    const productDialog = merchant.getByRole('dialog', { name: '编辑商品', exact: true });
+    await expect(productDialog.getByRole('spinbutton', { name: /单价（元）/ })).toHaveValue((product.price_cents / 100).toFixed(2));
 
     // Start as a guest: adding a draft is public; checkout must require login,
     // and the chosen food must survive the authentication round trip.
@@ -75,6 +74,9 @@ test("student and merchant complete a real pickup order in separate browser sess
     await expect(page).toHaveURL(/\/login\?returnTo=/);
     await login(page, student.username, student.password);
     await expect(page).toHaveURL(new RegExp(`/checkout/${stall.id}$`));
+    await page.goto('/cart');
+    await page.getByRole('button', { name: '加入当前账号餐袋', exact: true }).click();
+    await page.goto(`/checkout/${stall.id}`);
     await expect(
       page.locator('.pay-at-stall'),
     ).toBeVisible();
@@ -102,23 +104,23 @@ test("student and merchant complete a real pickup order in separate browser sess
     const order = await created.json();
     await expect(page).toHaveURL(new RegExp(`/orders/${order.id}$`));
     await expect(
-      page.getByRole("heading", { name: "你的好味道，已在路上" }),
+      page.getByRole("heading", { name: "订单已提交，等待商家接单" }),
     ).toBeVisible();
     expect(order.total_cents).toBe(product.price_cents);
 
     // The merchant loaded this editor before the student's stock reservation.
     // A price-only update must never write that old stock count back.
     try {
-      await productEditor
-        .getByRole("spinbutton", { name: `${product.name}售价`, exact: true })
+      await productDialog
+        .getByRole("spinbutton", { name: /单价（元）/ })
         .fill(((product.price_cents + 1) / 100).toFixed(2));
       const savedPromise = merchant.waitForResponse(
         (response) =>
           response.request().method() === "PATCH" &&
           response.url().endsWith(`/merchant/products/${product.id}`),
       );
-      await productEditor
-        .getByRole("button", { name: "保存", exact: true })
+      await productDialog
+        .getByRole("button", { name: "保存修改", exact: true })
         .click();
       const saved = await savedPromise;
       expect(saved.status(), await saved.text()).toBe(200);
@@ -126,10 +128,10 @@ test("student and merchant complete a real pickup order in separate browser sess
         price_cents: product.price_cents + 1,
       });
       const afterPriceChange = await (
-        await context.request.get(`${baseURL}/api/v1/stalls/${stall.id}`)
+        await merchantContext.request.get(`${baseURL}/api/v1/merchant/stalls`)
       ).json();
       expect(
-        afterPriceChange.products.find((item: any) => item.id === product.id)
+        afterPriceChange.find((item: any) => item.id === stall.id).products.find((item: any) => item.id === product.id)
           .stock,
       ).toBe(product.stock - 1);
       const unchangedOrder = await (
@@ -165,6 +167,7 @@ test("student and merchant complete a real pickup order in separate browser sess
       exact: true,
     });
     await expect(details).toBeVisible();
+    await details.locator('.m-order-records > summary').click();
     await expect(
       details.getByText(order.pickup_address, { exact: true }),
     ).toBeVisible();
@@ -187,17 +190,18 @@ test("student and merchant complete a real pickup order in separate browser sess
     await merchant.keyboard.press("Escape");
     await expect(details).not.toBeVisible();
     await expect(detailTrigger).toBeFocused();
-    const merchantStored = await (
+    const { results: merchantStored } = await (
       await merchantContext.request.get(
-        `${baseURL}/api/v1/merchant/orders?stall=${stall.id}`,
+        `${baseURL}/api/v1/merchant/orders?stall=${stall.id}&pagination=cursor`,
       )
     ).json();
     expect(
       merchantStored.find((item: any) => item.id === order.id).pickup_code,
     ).toBe("");
     await merchantOrder
-      .getByRole("button", { name: "确认接单", exact: true })
+      .getByRole("button", { name: "接单开始做", exact: true })
       .click();
+    await merchant.getByRole('group', { name: '订单阶段', exact: true }).getByRole('button', { name: /制作中/ }).click();
     await expect(merchantOrder.locator(".merchant-order-status")).toHaveText(
       "制作中",
     );
@@ -206,8 +210,9 @@ test("student and merchant complete a real pickup order in separate browser sess
       page.getByRole("heading", { name: "小摊正忙着，为你做一餐" }),
     ).toBeVisible();
     await merchantOrder
-      .getByRole("button", { name: "做好了，通知取餐" })
+      .getByRole("button", { name: "做好了", exact: true })
       .click();
+    await merchant.getByRole('group', { name: '订单阶段', exact: true }).getByRole('button', { name: /待取餐/ }).click();
     await expect(merchantOrder.locator(".merchant-order-status")).toHaveText(
       "待取餐",
     );
@@ -225,7 +230,7 @@ test("student and merchant complete a real pickup order in separate browser sess
 
     // Payment and collection remain distinct, explicit merchant actions.
     await expect(merchantOrder.getByPlaceholder("输入取餐码")).toHaveCount(0);
-    await merchantOrder.getByRole("button", { name: /确认已收到/ }).click();
+    await merchantOrder.getByRole("button", { name: /^收款 ¥/ }).click();
     const receipt = merchant.getByRole("dialog", {
       name: "确认这笔线下收款",
       exact: true,
@@ -244,7 +249,8 @@ test("student and merchant complete a real pickup order in separate browser sess
     await expect(merchantOrder.locator(".merchant-order-status")).toHaveText(
       "待取餐",
     );
-    await merchantOrder.getByPlaceholder("输入取餐码").fill(pickupCode);
+    await merchantOrder.getByRole('button', { name: '核对取餐码', exact: true }).click();
+    await details.getByPlaceholder("输入取餐码").fill(pickupCode);
     for (const width of [360, 390]) {
       await merchant.setViewportSize({ width, height: 844 });
       await assertNoHorizontalOverflow(merchant);
@@ -253,7 +259,7 @@ test("student and merchant complete a real pickup order in separate browser sess
         fullPage: true,
       });
     }
-    await merchantOrder.getByRole("button", { name: "核销并完成" }).click();
+    await details.getByRole("button", { name: "核销并完成" }).click();
     await expect(merchantOrder).toHaveCount(0);
     await page.getByRole("button", { name: "刷新订单状态" }).click();
     await expect(
@@ -294,6 +300,7 @@ test("a pending order can be cancelled from the customer dialog", async ({
   // This case also runs on its own, after the demo's location confirmation expires.
   const merchantContext = await browser.newContext({ baseURL });
   let fixtureStallId: number | null = null;
+  let fixtureProduct: any;
   try {
     const signedIn = await mutate(merchantContext, "/auth/login", {
       username: "vendor",
@@ -315,6 +322,7 @@ test("a pending order can be cancelled from the customer dialog", async ({
       "The demo vendor needs an eligible stall with stock",
     ).toBeTruthy();
     fixtureStallId = eligible.id;
+    fixtureProduct = eligible.products.find((product: any) => product.is_active !== false && product.stock > 0);
     const opened = await mutate(
       merchantContext,
       `/merchant/stalls/${eligible.id}/status`,
@@ -331,17 +339,13 @@ test("a pending order can be cancelled from the customer dialog", async ({
   await page.goto("/login?returnTo=/orders");
   await login(page, student.username, student.password);
   await expect(page).toHaveURL(/\/orders$/);
-  const stalls = await (
-    await context.request.get(`${baseURL}/api/v1/stalls`)
+  const stall = await (
+    await context.request.get(`${baseURL}/api/v1/stalls/${fixtureStallId}`)
   ).json();
-  const stall = stalls.find(
-    (item: any) =>
-      item.id === fixtureStallId &&
-      item.can_order &&
-      item.products.some((product: any) => product.stock > 0),
-  );
-  expect(stall).toBeTruthy();
-  const product = stall.products.find((item: any) => item.stock > 0);
+  expect(stall.can_order).toBe(true);
+  const product = stall.products.find((item: any) => item.id === fixtureProduct.id && item.availability === 'available');
+  expect(product).toBeTruthy();
+  expect(product).not.toHaveProperty('stock');
   const created = await mutate(context, "/orders", {
     stall_id: stall.id,
     idempotency_key: `cancel-${student.username}`,
@@ -368,10 +372,13 @@ test("a pending order can be cancelled from the customer dialog", async ({
   await expect(
     page.getByRole("button", { name: "取消订单", exact: true }),
   ).toHaveCount(0);
-  const refreshed = await (
-    await context.request.get(`${baseURL}/api/v1/stalls/${stall.id}`)
-  ).json();
-  expect(
-    refreshed.products.find((item: any) => item.id === product.id).stock,
-  ).toBe(product.stock);
+  const verification = await browser.newContext({ baseURL });
+  try {
+    const signedIn = await mutate(verification, '/auth/login', { username: 'vendor', password: 'demo12345' });
+    expect(signedIn.ok(), await signedIn.text()).toBeTruthy();
+    const refreshed = await (await verification.request.get(`${baseURL}/api/v1/merchant/stalls`)).json();
+    expect(refreshed.find((item: any) => item.id === stall.id).products.find((item: any) => item.id === product.id).stock).toBe(fixtureProduct.stock);
+  } finally {
+    await verification.close();
+  }
 });

@@ -4,7 +4,8 @@ import urllib.parse
 import urllib.request
 from django.conf import settings
 from django.http import HttpResponse, JsonResponse
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
 from .errors import BusinessError
 
 
@@ -13,6 +14,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 @api_view(['GET'])
+@permission_classes([AllowAny])
 def amap_proxy(request, upstream_path=''):
     if not settings.AMAP_KEY or not settings.AMAP_SECURITY_CODE:
         return JsonResponse({'detail': '地图服务尚未配置。', 'code': 'map_unavailable'}, status=503)

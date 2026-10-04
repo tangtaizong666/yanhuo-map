@@ -1,4 +1,8 @@
+import logging
+from threading import BoundedSemaphore
+
 from django.conf import settings
+from django.db import DatabaseError
 from rest_framework import serializers
 from rest_framework.decorators import api_view, authentication_classes, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -8,7 +12,10 @@ from .errors import BusinessError
 from . import payments
 from .serializers import OrderSerializer
 from .views import csrf, order_query
-from .wechatpay import GatewayError
+from .wechatpay import ConfigurationError, GatewayError
+
+
+_notification_slots = BoundedSemaphore(2)
 
 
 def _response(order, request, *, merchant=False):
@@ -77,8 +84,26 @@ def simulate_refund(request, order_id):
 def notify(request, account_key):
     # This is the sole unauthenticated payment endpoint; verified WeChat signatures
     # replace session CSRF. Use exact raw bytes, never DRF's reserialized request.data.
+    from .notification_inbox import MAX_NOTIFICATION_BYTES
     try:
-        payments.handle_notification(account_key, request.headers, request.body)
-    except GatewayError:
-        return Response({'code': 'FAIL', 'message': '通知未通过校验或暂时无法处理，请重试。'}, status=400)
+        length = int(request.META.get('CONTENT_LENGTH') or 0)
+    except (TypeError, ValueError):
+        return Response({'code': 'FAIL', 'message': '通知格式无效。'}, status=400)
+    if length > MAX_NOTIFICATION_BYTES:
+        return Response({'code': 'FAIL', 'message': '通知过大。'}, status=413)
+    if not _notification_slots.acquire(blocking=False):
+        return Response({'code': 'FAIL', 'message': '通知接收繁忙，请重试。'}, status=503, headers={'Retry-After': '1'})
+    try:
+        body = request.body
+        if len(body) > MAX_NOTIFICATION_BYTES:
+            return Response({'code': 'FAIL', 'message': '通知过大。'}, status=413)
+        payments.handle_notification(account_key, request.headers, body)
+    except GatewayError as exc:
+        status = 503 if exc.retryable or isinstance(exc, ConfigurationError) else 400
+        return Response({'code': 'FAIL', 'message': '通知未通过校验或暂时无法处理，请重试。'}, status=status)
+    except DatabaseError as exc:
+        logging.getLogger('market').warning('payment_notification_ingest_failed type=%s', type(exc).__name__)
+        return Response({'code': 'FAIL', 'message': '通知暂时无法保存，请重试。'}, status=503, headers={'Retry-After': '1'})
+    finally:
+        _notification_slots.release()
     return Response(status=204)

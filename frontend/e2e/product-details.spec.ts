@@ -101,7 +101,7 @@ test("menu photos and names open a refreshable detail page at mobile and desktop
     product.description,
   );
   await expect(page.locator(".dish-price-line strong")).toHaveText("¥8.5");
-  await expect(page.locator(".dish-pickup-facts")).toContainText(stall.address);
+  await expect(page.locator(".dish-location-fact")).toContainText(stall.address);
   await page.reload();
   await expect(
     page.getByRole("heading", { name: product.name, exact: true }),
@@ -124,7 +124,7 @@ test("menu photos and names open a refreshable detail page at mobile and desktop
   ).toBeVisible();
 });
 
-test("dish quantity respects stock, persists and survives guest checkout login", async ({
+test("dish quantity respects the per-order limit, persists and survives guest checkout login", async ({
   page,
   context,
 }) => {
@@ -139,38 +139,42 @@ test("dish quantity respects stock, persists and survives guest checkout login",
   await page
     .getByRole("link", { name: `查看${product.name}详情`, exact: true })
     .click();
-  await page.getByRole("button", { name: "增加份数", exact: true }).click();
-  await expect(page.locator(".dish-quantity output")).toHaveText("2");
+  for (let index = 0; index < 8; index++)
+    await page.getByRole("button", { name: "增加份数", exact: true }).click();
+  await expect(page.locator(".dish-quantity output")).toHaveText("9");
   await expect(
     page.getByRole("button", { name: "增加份数", exact: true }),
   ).toBeDisabled();
-  await expect(page.locator(".dish-add-button strong")).toHaveText("¥17");
+  await expect(page.locator(".dish-add-button strong")).toHaveText("¥76.5");
   await page.getByRole("button", { name: /加入餐袋/ }).click();
   await expect(
-    page.getByRole("button", { name: /已达库存上限/ }),
+    page.getByRole("button", { name: /每单合计最多 10 份/ }),
   ).toBeDisabled();
   await expect(page.locator(".dish-cart-line")).toContainText(
-    "本摊餐袋 3 份 · ¥25.5",
+    "本摊餐袋 10 份 · ¥85",
   );
   await page.reload();
   await expect(page.locator(".dish-cart-line")).toContainText(
-    "本摊餐袋 3 份 · ¥25.5",
+    "本摊餐袋 10 份 · ¥85",
   );
-  await page.getByRole("link", { name: "查看餐袋并结算", exact: true }).click();
+  await page.getByRole("link", { name: "去结算", exact: true }).click();
   await expect(page).toHaveURL(/\/login\?returnTo=/);
   await login(page, student.username, student.password);
   await expect(page).toHaveURL(new RegExp(`/checkout/${stall.id}$`));
+  await page.goto('/cart');
+  await page.getByRole('button', { name: '加入当前账号餐袋', exact: true }).click();
+  await page.goto(`/checkout/${stall.id}`);
   await expect(
     page.getByRole("link", { name: `查看${product.name}详情`, exact: true }),
   ).toBeVisible();
+  const user = await (await context.request.get(`${baseURL}/api/v1/auth/me`)).json();
   const draft = await page.evaluate(
-    (id) =>
-      JSON.parse(localStorage.getItem("yanhuo-cart-v1") || "{}")[String(id)],
-    stall.id,
+    ({ id, key }) => JSON.parse(localStorage.getItem(key) || "{}")[String(id)],
+    { id: stall.id, key: `yanhuo-cart-v2:user:${user.id}` },
   );
   expect(draft).toEqual([
     expect.objectContaining({
-      quantity: 3,
+      quantity: 10,
       product: expect.objectContaining({ id: product.id, price_cents: 850 }),
     }),
   ]);
@@ -217,8 +221,11 @@ test("checkout food links retain optional fields in memory and logout clears the
   const student = await createStudent(context);
   await page.goto(`/stalls/${stall.id}/products/${product.id}`);
   await page.getByRole("button", { name: /加入餐袋/ }).click();
-  await page.getByRole("link", { name: "查看餐袋并结算", exact: true }).click();
+  await page.getByRole("link", { name: "去结算", exact: true }).click();
   await login(page, student.username, student.password);
+  await page.goto('/cart');
+  await page.getByRole('button', { name: '加入当前账号餐袋', exact: true }).click();
+  await page.goto(`/checkout/${stall.id}`);
   const note = page.getByPlaceholder(
     "例如：餐具按需提供（每份口味请在上方分别填写）",
   );
@@ -231,7 +238,7 @@ test("checkout food links retain optional fields in memory and logout clears the
   await expect(page).toHaveURL(
     new RegExp(`/stalls/${stall.id}/products/${product.id}$`),
   );
-  await page.getByRole("link", { name: "查看餐袋并结算", exact: true }).click();
+  await page.getByRole("link", { name: "去结算", exact: true }).click();
   await expect(note).toHaveValue("详情往返测试：少辣，谢谢");
   await expect(phone).toHaveValue("13800138000");
   // Titles are also independent detail links, and the desktop bag preview opens the same dish.
@@ -242,7 +249,7 @@ test("checkout food links retain optional fields in memory and logout clears the
   await page
     .getByRole("link", { name: `查看餐袋中${product.name}详情`, exact: true })
     .click();
-  await page.getByRole("link", { name: "查看餐袋并结算", exact: true }).click();
+  await page.getByRole("link", { name: "去结算", exact: true }).click();
   await expect(note).toHaveValue("详情往返测试：少辣，谢谢");
   await expect(phone).toHaveValue("13800138000");
   expect(
@@ -275,7 +282,7 @@ test("offline-only stall food has details without an online ordering action", as
   page,
   context,
 }) => {
-  const all = await (
+  const { results: all } = await (
     await context.request.get(`${baseURL}/api/v1/stalls`)
   ).json();
   const offline = all.find(

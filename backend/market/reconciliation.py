@@ -34,7 +34,7 @@ def _live(order, payment=None):
         raise BusinessError('运营资金核验只处理原有正式支付记录。', 'live_payment_required')
 
 
-def _observe(order_id, payment_id, actor, reason, *, refund_id=None):
+def _observe(order_id, payment_id, actor, reason, *, refund_id=None, external_refund_no=None):
     """Claim a short lease, query outside SQL, append only validated safe facts."""
     require_operator(actor)
     reason = _reason(reason)
@@ -50,6 +50,10 @@ def _observe(order_id, payment_id, actor, reason, *, refund_id=None):
             record = payment
         if record.request_in_flight_until and record.request_in_flight_until > timezone.now():
             raise BusinessError('该记录正在查询，请稍后核验。', 'financial_operation_busy')
+        from .payment_schedule import admit_query, finish_query
+        if not admit_query(record):
+            raise BusinessError('刚刚查询过该记录，请稍后核验。', 'payment_query_cooldown',
+                next_query_at=record.next_query_at.isoformat())
         lease = timezone.now() + timedelta(seconds=90)
         record.request_in_flight_until = lease
         record.save(update_fields=['request_in_flight_until'])
@@ -65,12 +69,12 @@ def _observe(order_id, payment_id, actor, reason, *, refund_id=None):
         record = PaymentRefund.objects.select_related('payment').get(pk=refund_id) if refund_id else payment
         if record.request_in_flight_until != lease:
             raise BusinessError('另一查询已接管此记录，请重新核验。', 'financial_operation_busy')
-        record.request_in_flight_until = None
-        record.save(update_fields=['request_in_flight_until'])
         if failure is None:
             try:
                 if refund_id: _apply_refund(order, record, data)
                 else: _apply_payment(order, payment, data)
+                if external_refund_no and (payment.status != 'paid' or not payment.transaction_id):
+                    raise GatewayError('PAYMENT_CAPTURE_UNVERIFIED', '原付款尚未核验为已收款。')
             except GatewayError as exc:
                 failure = exc
         if failure:
@@ -82,9 +86,65 @@ def _observe(order_id, payment_id, actor, reason, *, refund_id=None):
             evidence(order, 'refund_checked' if refund_id else 'payment_checked', 'verified', reason,
                 actor=actor, payment=payment, refund=record if refund_id else None,
                 facts=refund_facts(payment, data) if refund_id else payment_facts(payment, data))
+        continuing = external_refund_no is not None and failure is None
+        if not continuing:
+            record.request_in_flight_until = None
+            record.save(update_fields=['request_in_flight_until'])
+            finish_query(record, failed=failure is not None)
     # Raise after commit so an unavailable/invalid gateway cannot erase its evidence.
     if failure:
         raise BusinessError(failure.safe_message, 'financial_verification_failed', status=409)
+    if continuing:
+        # An unknown external number has no refund record yet. Keep the payment's
+        # lease and failure budget through the second HTTP request, so changing
+        # numbers cannot bypass pacing and capture success cannot reset failures.
+        return _observe_unknown_refund(order_id, payment_id, external_refund_no, actor, reason, lease)
+    return data
+
+
+def _observe_unknown_refund(order_id, payment_id, out_refund_no, actor, reason, lease):
+    """Continue the admitted payment observation; never persist an unverified refund."""
+    from .payment_schedule import finish_query
+    with transaction.atomic():
+        order = _order(order_id)
+        payment = order.payments.get(pk=payment_id)
+        if payment.request_in_flight_until != lease:
+            raise BusinessError('另一查询已接管此记录，请重新核验。', 'financial_operation_busy')
+    failure = None
+    try:
+        data = _compatible_client(payment).query_refund(out_refund_no)
+    except GatewayError as exc:
+        data, failure = None, exc
+    with transaction.atomic():
+        order = _order(order_id)
+        payment = order.payments.get(pk=payment_id)
+        if payment.request_in_flight_until != lease:
+            raise BusinessError('另一查询已接管此记录，请重新核验。', 'financial_operation_busy')
+        existing = PaymentRefund.objects.filter(mchid=payment.mchid, out_refund_no=out_refund_no).first()
+        refund = PaymentRefund(order=order, payment=payment, mode=payment.mode,
+            out_refund_no=out_refund_no, amount_cents=payment.amount_cents, reason=reason[:80],
+            requested_by=actor, source='external')
+        if existing:
+            # A new record appeared during HTTP. Its own lease/budget must win;
+            # retry through the known-record path instead of applying stale work.
+            failure = GatewayError('EXTERNAL_REFUND_RECORD_CHANGED', '退款记录已变化，请重新核验。')
+        if failure is None:
+            try:
+                state, _ = _validate_refund(order, refund, data)
+                if state != 'SUCCESS':
+                    raise GatewayError('EXTERNAL_REFUND_NOT_SUCCESS', '外部退款尚未核验为全额成功，不能结案。')
+                _apply_refund(order, refund, data)
+                finish_query(refund, failed=False)
+            except GatewayError as exc:
+                failure = exc
+        evidence(order, 'external_refund_checked', 'unverified' if failure else 'verified', reason,
+            actor=actor, payment=payment, refund=refund if not refund._state.adding else None,
+            facts={'error_code': failure.code} if failure else refund_facts(payment, data))
+        payment.request_in_flight_until = None
+        payment.save(update_fields=['request_in_flight_until'])
+        finish_query(payment, failed=failure is not None)
+    if failure:
+        raise BusinessError(failure.safe_message, 'financial_verification_failed')
     return data
 
 
@@ -94,41 +154,22 @@ def verify_external_refund(order_id, payment_id, out_refund_no, actor, reason):
     reason = _reason(reason)
     if not isinstance(out_refund_no, str) or not re.fullmatch(r'[A-Za-z0-9_\-|*@]{1,64}', out_refund_no):
         raise BusinessError('请填写有效的商户退款单号。', 'invalid_refund_number', status=400)
-    _observe(order_id, payment_id, actor, reason)
     with transaction.atomic():
         order = _order(order_id)
-        payment = order.payments.get(pk=payment_id)
+        try: payment = order.payments.get(pk=payment_id)
+        except PaymentAttempt.DoesNotExist: raise BusinessError('付款记录不存在。', 'not_found', status=404) from None
         _live(order, payment)
-        if payment.status != 'paid' or not payment.transaction_id:
-            raise BusinessError('原付款尚未核验为已收款。', 'payment_requires_review')
-    failure = None
-    try:
-        data = _compatible_client(payment).query_refund(out_refund_no)
-    except GatewayError as exc:
-        data, failure = None, exc
-    with transaction.atomic():
-        order = _order(order_id)
-        payment = order.payments.get(pk=payment_id)
         existing = PaymentRefund.objects.filter(mchid=payment.mchid, out_refund_no=out_refund_no).first()
         if existing and (existing.order_id != order.pk or existing.payment_id != payment.pk):
             raise BusinessError('退款单号与本付款不匹配。', 'refund_identity_mismatch')
-        refund = existing or PaymentRefund(order=order, payment=payment, mode=payment.mode,
-            out_refund_no=out_refund_no, amount_cents=payment.amount_cents, reason=reason[:80],
-            requested_by=actor, source='external')
-        if failure is None:
-            try:
-                state, _ = _validate_refund(order, refund, data)
-                if state != 'SUCCESS':
-                    raise GatewayError('EXTERNAL_REFUND_NOT_SUCCESS', '外部退款尚未核验为全额成功，不能结案。')
-                _apply_refund(order, refund, data)
-            except GatewayError as exc:
-                failure = exc
-        evidence(order, 'external_refund_checked', 'unverified' if failure else 'verified', reason,
-            actor=actor, payment=payment, refund=refund if not refund._state.adding else None,
-            facts={'error_code': failure.code} if failure else refund_facts(payment, data))
-    if failure:
-        raise BusinessError(failure.safe_message, 'financial_verification_failed')
-    return order
+    if existing:
+        data = _observe(order_id, payment_id, actor, reason, refund_id=existing.pk)
+        if data.get('status') != 'SUCCESS':
+            raise BusinessError('外部退款尚未核验为全额成功，不能结案。', 'financial_verification_failed')
+    else:
+        _observe(order_id, payment_id, actor, reason, external_refund_no=out_refund_no)
+    with transaction.atomic():
+        return _order(order_id)
 
 
 def _operation_digest(order_id, payment_id, source, replaces_id, amount, reason):

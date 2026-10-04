@@ -7,14 +7,13 @@ import {
   Play,
   ClipboardList,
   MessageSquare,
-  CircleCheck,
 } from "lucide-vue-next";
-import { api, statusText } from "../../lib/api";
+import { api, formatTime, statusText } from "../../lib/api";
 import { notify } from "../../lib/notify";
 import { acceptReady } from "./delivery";
 import MerchantQueueSettings from "./MerchantQueueSettings.vue";
 const props = withDefaults(
-  defineProps<{ stall: any; orders?: any[]; ready?: boolean }>(),
+  defineProps<{ stall: any; orders?: any[]; ready?: boolean; compact?: boolean }>(),
   { orders: () => [], ready: false },
 );
 const emit = defineEmits<{ refresh: []; location: [] }>();
@@ -35,25 +34,12 @@ const unfinished = computed(() =>
 );
 const hasLocation = computed(
   () =>
-    !!props.stall.address &&
+    (props.stall.activation?.has_location ?? (!!props.stall.address && props.stall.address !== "位置尚未确认")) &&
     props.stall.latitude != null &&
     props.stall.longitude != null,
 );
 const pending = computed(() => props.orders.filter(acceptReady).length);
 const state = computed(() => props.stall.status);
-const summary = computed(() =>
-  state.value === "stale"
-    ? "位置需要重新确认"
-    : state.value === "closed"
-      ? "核对位置，准备今天开摊"
-      : state.value === "paused"
-        ? "暂歇中，回来后恢复出摊"
-        : props.stall.accepting_orders === false
-          ? "线下营业中，线上接单已暂停"
-          : pending.value
-            ? `${pending.value} 笔新订单，先回应同学`
-            : "正在营业，安心做好每一份",
-);
 async function status(value: string, confirmLocation = false) {
   if (busy.value) return;
   if (value === "open" && !hasLocation.value) {
@@ -90,6 +76,7 @@ async function status(value: string, confirmLocation = false) {
   }
 }
 async function confirmHere() {
+  if (!hasLocation.value) { emit("location"); return; }
   await status(props.stall.session_status || "open", true);
 }
 async function accepting() {
@@ -135,11 +122,20 @@ async function loadReports() {
 }
 </script>
 <template>
-  <section class="m-panel operations" aria-label="今天怎样营业">
+  <section v-if="compact" class="m-business-compact" aria-label="营业与接单">
+    <div><strong>{{ stall.name }}</strong><span :class="{ 'is-open': state === 'open' && stall.accepting_orders !== false, 'is-paused': state !== 'open' || stall.accepting_orders === false }">{{ state === 'stale' ? '位置过期，暂停新单' : state === 'closed' ? '已收摊' : state === 'paused' ? '暂歇中' : stall.accepting_orders === false ? '已暂停新单' : '营业中' }}</span></div>
+    <button v-if="state === 'stale'" class="compact-open" :disabled="busy" @click="confirmHere">{{ hasLocation ? '确认仍在这里' : '设置位置' }}</button>
+    <button v-else-if="state === 'closed'" class="compact-open" :disabled="busy" @click="status('open', true)">{{ hasLocation ? '开始营业' : '设置位置' }}</button>
+    <button v-else-if="state === 'paused'" class="compact-open" :disabled="busy" @click="status('open')">恢复营业</button>
+    <button v-else :disabled="busy" @click="accepting">{{ stall.accepting_orders === false ? '恢复接单' : '暂停接单' }}</button>
+    <RouterLink to="/merchant/store" aria-label="营业设置"><Store :size="18" /><span>设置</span></RouterLink>
+    <p v-if="state === 'closed' || state === 'stale'" class="compact-location"><MapPin :size="16" /><span>{{ hasLocation ? stall.address : '先确认实际取餐位置，再开始营业。' }}</span><RouterLink v-if="hasLocation" to="/merchant/store#location">更换位置</RouterLink></p>
+    <p v-if="error" class="m-alert" role="alert">{{ error }}</p>
+  </section>
+  <section v-else class="m-panel operations" aria-label="今天怎样营业">
     <div class="operations-head">
       <div>
-        <span class="m-eyebrow">让同学少跑空</span>
-        <h2><Store :size="22" /> 今天怎样营业</h2>
+        <h2><Store :size="22" /> 营业与接单</h2>
       </div>
       <span :class="['m-status', stall.status]">{{
         statusText(stall.status)
@@ -147,13 +143,13 @@ async function loadReports() {
     </div>
     <p class="location">
       <MapPin :size="17" /><span>{{
-        stall.address || "还没有确认取餐位置"
+        hasLocation ? stall.address : "还没有确认取餐位置"
       }}</span
       ><button class="m-text-link" @click="emit('location')">
         {{ hasLocation ? "更换位置" : "设置位置" }}
       </button>
     </p>
-    <p class="operation-summary" role="status">{{ summary }}</p>
+    <p v-if="hasLocation && stall.last_confirmed_at" class="location-time">上次确认 {{ formatTime(stall.last_confirmed_at) }}</p>
     <div class="main-actions">
       <button
         v-if="state === 'stale'"
@@ -195,11 +191,6 @@ async function loadReports() {
       >
         <Play :size="17" />恢复线上接单
       </button>
-      <div v-else class="open-indicator">
-        <CircleCheck :size="20" />营业中<span>{{
-          ready ? "新订单到达后会在这里显示" : "待处理订单正在同步"
-        }}</span>
-      </div>
       <button
         v-if="state === 'open' && (stall.accepting_orders !== false || pending)"
         class="btn btn-secondary"
@@ -216,15 +207,9 @@ async function loadReports() {
         }}
       </button>
     </div>
-    <p class="helper">
-      {{
-        stall.accepting_orders === false
-          ? "线上接单已暂停，同学仍能看到你的线下营业状态。已有订单继续处理。"
-          : stall.order_unavailable_reason ||
-            "线上接单按营业、位置和经营核验情况开放。已有订单不会因暂停而取消。"
-      }}
-    </p>
+    <p v-if="stall.order_unavailable_reason || stall.accepting_orders === false" class="helper">{{ stall.order_unavailable_reason || "线上接单已暂停，已有订单继续处理。" }}</p>
     <div class="secondary-actions">
+      <button v-if="hasLocation && state !== 'stale' && state !== 'closed'" :disabled="busy" @click="confirmHere"><MapPin :size="15" />我还在这里，确认当前位置</button>
       <button
         v-if="state !== 'closed' && state !== 'paused'"
         :disabled="busy"
@@ -295,6 +280,22 @@ async function loadReports() {
   </section>
 </template>
 <style scoped>
+.m-business-compact { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; padding: 8px 0; }
+.m-business-compact > div { flex: 1; min-width: 100px; display: grid; gap: 5px; }
+.m-business-compact strong { font-size: 16px; line-height: 1.4; overflow-wrap: anywhere; }
+.m-business-compact > div > span { font-size: 13px; color: #776956; }
+.m-business-compact .is-open { color: #3d704d; }
+.m-business-compact .is-open::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; margin-right: 6px; vertical-align: middle; }
+.m-business-compact button, .m-business-compact > a { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; font-size: 14px; padding: 0 12px; border: 1px solid #e6dccf; border-radius: 10px; background: white; }
+.m-business-compact button.compact-open { background: #e86a27; border-color: #e86a27; color: white; font-weight: 700; }
+.m-business-compact > a { padding: 0 8px; color: #766452; border-color: transparent; background: transparent; }
+.m-business-compact .m-alert { flex-basis: 100%; }
+.compact-location { display: flex; flex-basis: 100%; align-items: flex-start; gap: 7px; margin: 0; font-size: 14px; line-height: 1.6; color: #65533f; }
+.compact-location > svg { flex: none; margin-top: 4px; }
+.compact-location > span { flex: 1; overflow-wrap: anywhere; }
+.compact-location > a { flex: none; display: inline-flex; align-items: center; min-height: 44px; margin-top: -9px; padding: 0 5px; color: #93451d; text-decoration: underline; text-underline-offset: 3px; }
+@media (max-width: 380px) { .m-business-compact > a span { display: none; } }
+
 .operations {
   margin-bottom: 20px;
 }
@@ -308,8 +309,8 @@ async function loadReports() {
   display: flex;
   gap: 10px;
   align-items: center;
-  margin: 8px 0 16px;
-  font-size: 22px;
+  margin: 0;
+  font-size: 20px;
 }
 .location {
   display: flex;
@@ -319,6 +320,7 @@ async function loadReports() {
   color: #65533f;
   line-height: 1.7;
 }
+.location-time { margin: -5px 0 0; font-size: 13px; line-height: 1.6; color: #74624e; }
 .location span {
   flex: 1;
   min-width: 140px;
@@ -328,29 +330,10 @@ async function loadReports() {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
-  margin-top: 18px;
+  margin-top: 12px;
 }
 .main-actions button {
   min-height: 48px;
-}
-.operation-summary {
-  color: #4f3829;
-  font-weight: 650;
-  margin: 14px 0 0;
-  line-height: 1.6;
-}
-.open-indicator {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  flex-wrap: wrap;
-  min-height: 48px;
-  color: #346447;
-}
-.open-indicator span {
-  font-size: 13px;
-  font-weight: 400;
-  color: #74624e;
 }
 .main-actions a {
   min-height: 48px;

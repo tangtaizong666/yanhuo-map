@@ -6,6 +6,10 @@ export function notify(
   type: "success" | "error" | "info" = "info",
 ) {
   const id = ++next;
+  // Fast order handling needs the latest confirmation, not a stack covering
+  // the next order. Errors and informational messages remain independent.
+  if (type === "success")
+    notices.value = notices.value.filter((notice) => notice.type !== "success");
   notices.value.push({ id, message, type });
   window.setTimeout(() => {
     notices.value = notices.value.filter((n) => n.id !== id);

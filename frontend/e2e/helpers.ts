@@ -8,7 +8,36 @@ import {
 export const baseURL = process.env.E2E_BASE_URL || "http://127.0.0.1:5183";
 
 // Isolated UI fixtures must model the cookie that Django sets before a write.
-export function fulfillCsrf(route: Route) {
+export async function fulfillCsrf(route: Route) {
+  // WebKit's intercepted response may omit Set-Cookie under the test runner.
+  // Establish the same readable, same-origin cookie before resolving the mock;
+  // production still requires Django's response cookie before every mutation.
+  await route
+    .request()
+    .frame()
+    .page()
+    .context()
+    .addCookies([
+      {
+        name: "csrftoken",
+        value: "fixture-csrf-token",
+        url: new URL(route.request().url()).origin,
+        sameSite: "Lax",
+      },
+    ]);
+  // Some WebKit intercepts acknowledge the cookie jar update before exposing
+  // it to the document. Model only a successful same-origin CSRF response;
+  // failure fixtures never call this helper and still block the write.
+  await route
+    .request()
+    .frame()
+    .evaluate(() => {
+      document.cookie = "csrftoken=fixture-csrf-token; Path=/; SameSite=Lax";
+      if (!document.cookie.split("; ").includes("csrftoken=fixture-csrf-token"))
+        throw new Error(
+          "Successful CSRF fixture did not establish a readable cookie",
+        );
+    });
   return route.fulfill({
     json: { csrfToken: "fixture-csrf-token" },
     headers: {

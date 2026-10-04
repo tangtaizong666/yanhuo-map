@@ -294,7 +294,7 @@ class WechatPayClient:
         return self._request('GET', f'/v3/refund/domestic/refunds/{quote(out_refund_no, safe="")}')
 
     def verify_notification(self, headers, raw_body):
-        if not isinstance(raw_body, bytes) or not 0 < len(raw_body) <= MAX_BODY_BYTES:
+        if not isinstance(raw_body, bytes) or not 0 < len(raw_body) <= 2 * 1024 * 1024:
             raise GatewayError('INVALID_PAYMENT_NOTIFICATION', '支付通知格式无效。')
         self._verify_signature(headers, raw_body)
         try:

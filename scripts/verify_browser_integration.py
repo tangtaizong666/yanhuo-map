@@ -138,8 +138,30 @@ def main():
                     config = json.load(response)
                 if not config.get("demo_mode") or not config.get("services_simulation_enabled"):
                     raise RuntimeError("Isolated proxy did not report the required rehearsal configuration.")
+                def public_json(path):
+                    with urllib.request.urlopen(env["E2E_BASE_URL"] + "/api/v1" + path, timeout=10) as response:
+                        return json.load(response)
+                discovery = public_json("/stalls")
+                if not isinstance(discovery, dict) or not {"results", "next"} <= discovery.keys():
+                    raise RuntimeError("Public discovery did not return a bounded page.")
+                for stall in discovery["results"]:
+                    if len(stall.get("products", [])) > 2 or any(key in stall for key in (
+                        "contact_phone", "order_count", "prep_capacity", "prep_active_orders", "receiving_seen_at")):
+                        raise RuntimeError("Public summary exposed operating details or an unbounded menu.")
+                    for product in stall.get("products", []):
+                        if "stock" in product or "stock_version" in product or not {"availability", "max_order_quantity"} <= product.keys():
+                            raise RuntimeError("Public product did not use the availability contract.")
+                markers = public_json("/stalls/map")
+                if not isinstance(markers, dict) or len(markers.get("results", [])) > 200 or any("products" in row for row in markers.get("results", [])):
+                    raise RuntimeError("Map projection is unbounded or contains full menus.")
+                (artifacts / "public-contract.json").write_text(json.dumps({
+                    "status": "passed", "summary_count": len(discovery["results"]),
+                    "map_count": len(markers["results"]), "exact_stock_exposed": False,
+                }, indent=2), encoding="utf-8")
                 run("browser-integration", [node, "node_modules/@playwright/test/cli.js", "test",
                     "e2e/counter-integration.spec.ts", "e2e/simulation-live.spec.ts",
+                    "e2e/product-details.spec.ts", "e2e/checkout.spec.ts", "e2e/reorder.spec.ts",
+                    "e2e/mobile-usability.spec.ts", "e2e/identity-cookie-integration.spec.ts",
                     "--reporter=list", f"--output={artifacts / 'browser-results'}"], FRONTEND, timeout=540)
             finally:
                 if vite:

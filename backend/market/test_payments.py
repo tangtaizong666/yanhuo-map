@@ -1,3 +1,4 @@
+import uuid
 """Live WeChat responses below use isolated test doubles; rehearsal is tested in test_simulation.py."""
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
@@ -13,10 +14,11 @@ from rest_framework.test import APIClient
 
 from .errors import BusinessError
 from .models import AuditLog, Order, PaymentAttempt, PaymentRefund
-from .payments import close_payment, handle_notification, request_refund, start_payment, sync_payment
+from .payments import close_payment, request_refund, start_payment, sync_payment
 from .services import cancel_order, create_order, merchant_action
 from .tests import fixtures, payload
 from .wechatpay import GatewayError
+from .payment_test_utils import deliver_notification as handle_notification
 
 
 def payment_result(payment, state='SUCCESS', **changes):
@@ -43,6 +45,10 @@ def refund_result(refund, state='SUCCESS', notification=False, **changes):
 
 class PaymentSetup:
     def setUp(self):
+        # These tests exercise financial transitions; default pacing has separate clock/concurrency regressions.
+        pacing = override_settings(PAYMENT_QUERY_INTERVAL_SECONDS=0, PAYMENT_QUERY_FAILURE_DELAYS=(0,),
+            CHECKOUT_MAX_ACTIVE_PER_STALL=100, CHECKOUT_MAX_ACTIVE_TOTAL=100)
+        pacing.enable(); self.addCleanup(pacing.disable)
         self.student, self.other, self.vendor, self.stall, self.product = fixtures()
         self.order, _ = create_order(self.student, payload(self.stall, self.product))
         merchant_action(self.order.pk, self.vendor, 'accept')
@@ -74,7 +80,7 @@ class PaymentSetup:
 
     def pay(self):
         payment = self.start()
-        self.gateway.verify_notification.return_value = {'event_type': 'TRANSACTION.SUCCESS', 'resource': payment_result(payment)}
+        self.gateway.verify_notification.return_value = {'id': uuid.uuid4().hex, 'event_type': 'TRANSACTION.SUCCESS', 'resource': payment_result(payment)}
         handle_notification('own-account', {}, b'{}')
         payment.refresh_from_db()
         return payment
@@ -122,7 +128,7 @@ class PaymentTests(PaymentSetup, TestCase):
         response = real_session.post(f'/api/v1/orders/{self.order.pk}/payments/wechat', {'channel': 'native'})
         self.assertEqual(response.status_code, 403)
         payment = self.start()
-        self.gateway.verify_notification.return_value = {'event_type': 'TRANSACTION.SUCCESS', 'resource': payment_result(payment)}
+        self.gateway.verify_notification.return_value = {'id': uuid.uuid4().hex, 'event_type': 'TRANSACTION.SUCCESS', 'resource': payment_result(payment)}
         response = real_session.post('/api/v1/payments/wechat/notify/own-account', '{}', content_type='application/json')
         self.assertEqual(response.status_code, 204)
 
@@ -212,9 +218,15 @@ class PaymentTests(PaymentSetup, TestCase):
         response = self.api.post('/api/v1/payments/wechat/notify/own-account', '{}', content_type='application/json')
         self.assertEqual(response.status_code, 400)
         self.gateway.verify_notification.side_effect = None
-        self.gateway.verify_notification.return_value = {'event_type': 'TRANSACTION.SUCCESS', 'resource': payment_result(payment)}
+        self.gateway.verify_notification.return_value = {'id': uuid.uuid4().hex, 'event_type': 'TRANSACTION.SUCCESS', 'resource': payment_result(payment)}
         response = self.api.post('/api/v1/payments/wechat/notify/other-account', '{}', content_type='application/json')
-        self.assertEqual(response.status_code, 400)
+        # The signature double declares a valid receipt; ownership is rechecked
+        # asynchronously before any order mutation, without locking HTTP ingress.
+        self.assertEqual(response.status_code, 204)
+        from .notification_inbox import process_notifications
+        from .models import PaymentNotification
+        self.assertEqual(process_notifications(), (0, 1))
+        self.assertEqual(PaymentNotification.objects.get().status, 'dead')
         self.refresh(); self.assertEqual(self.order.payment_status, 'unpaid')
 
     def test_unpaid_query_can_omit_amount_and_confirmed_close_unblocks_offline(self):
@@ -250,7 +262,7 @@ class PaymentTests(PaymentSetup, TestCase):
         payment = self.start(); close_payment(self.order.pk, self.student)
         cancel_order(self.order.pk, self.student, '取消')
         merchant_action(self.order.pk, self.vendor, 'approve_cancel')
-        self.gateway.verify_notification.return_value = {'event_type': 'TRANSACTION.SUCCESS', 'resource': payment_result(payment)}
+        self.gateway.verify_notification.return_value = {'id': uuid.uuid4().hex, 'event_type': 'TRANSACTION.SUCCESS', 'resource': payment_result(payment)}
         handle_notification('own-account', {}, b'{}')
         self.refresh(); payment.refresh_from_db()
         self.assertEqual(self.order.status, 'cancelled')
@@ -271,7 +283,7 @@ class PaymentTests(PaymentSetup, TestCase):
         refund = PaymentRefund.objects.get(order=self.order)
         self.refresh(); self.assertEqual(self.order.payment_status, 'refunding')
         with self.assertRaises(BusinessError): merchant_action(self.order.pk, self.vendor, 'complete', self.order.pickup_code)
-        self.gateway.verify_notification.return_value = {'event_type': 'REFUND.SUCCESS', 'resource': refund_result(refund, notification=True)}
+        self.gateway.verify_notification.return_value = {'id': uuid.uuid4().hex, 'event_type': 'REFUND.SUCCESS', 'resource': refund_result(refund, notification=True)}
         handle_notification('own-account', {}, b'{}')
         handle_notification('own-account', {}, b'{}')
         request_refund(self.order.pk, self.vendor, '重复点击')
@@ -343,7 +355,7 @@ class PaymentTests(PaymentSetup, TestCase):
         merchant_action(other_order.pk, self.vendor, 'accept'); merchant_action(other_order.pk, self.vendor, 'ready')
         start_payment(other_order.pk, self.student, 'native', '127.0.0.1')
         other_payment = PaymentAttempt.objects.get(order=other_order)
-        self.gateway.verify_notification.return_value = {'event_type': 'TRANSACTION.SUCCESS', 'resource': payment_result(other_payment)}
+        self.gateway.verify_notification.return_value = {'id': uuid.uuid4().hex, 'event_type': 'TRANSACTION.SUCCESS', 'resource': payment_result(other_payment)}
         handle_notification('own-account', {}, b'{}')
         request_refund(other_order.pk, self.vendor, '退款')
         PaymentRefund.objects.filter(order=other_order).update(last_checked_at=timezone.now())
@@ -402,7 +414,7 @@ class PaymentConcurrencyTests(PaymentSetup, TransactionTestCase):
 
     def test_payment_notification_and_manual_payment_cannot_double_collect(self):
         payment = self.start()
-        self.gateway.verify_notification.return_value = {'event_type': 'TRANSACTION.SUCCESS', 'resource': payment_result(payment)}
+        self.gateway.verify_notification.return_value = {'id': uuid.uuid4().hex, 'event_type': 'TRANSACTION.SUCCESS', 'resource': payment_result(payment)}
         self.race(lambda: handle_notification('own-account', {}, b'{}'),
             lambda: merchant_action(self.order.pk, self.vendor, 'confirm_payment'))
         self.refresh()

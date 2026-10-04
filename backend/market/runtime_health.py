@@ -2,13 +2,13 @@
 import logging
 from datetime import timedelta
 
-from django.db.models import F, Min
+from django.db.models import Count, F, Min, Q
 from django.utils import timezone
 
 from .operational_models import WorkerHeartbeat
 
 logger = logging.getLogger('market.operations')
-WORKERS = ('expire_orders', 'reconcile_payments')
+WORKERS = ('expire_orders', 'reconcile_payments', 'process_payment_notifications')
 
 
 def record_worker_success(name, processed=0):
@@ -34,8 +34,8 @@ def record_worker_failure(name, exc):
     logger.error('worker_run_failed worker=%s code=%s', name, code)
 
 
-def operations_status(*, worker=None, max_heartbeat_age=120, max_payment_age=600):
-    from .models import Order, PaymentAttempt, PaymentRefund
+def operations_status(*, worker=None, max_heartbeat_age=120, max_payment_age=600, max_expiry_age=120):
+    from .models import Order, PaymentAttempt, PaymentRefund, PaymentNotification
 
     now = timezone.now()
     names = (worker,) if worker else WORKERS
@@ -55,6 +55,19 @@ def operations_status(*, worker=None, max_heartbeat_age=120, max_payment_age=600
               'checked_at': now.isoformat(), 'workers': workers}
     if worker:
         return result
+    from .services import expiry_candidates
+    # Healthy heartbeats can coexist with skipped locked rows or a stalled
+    # business queue. Observe the backlog without claiming or releasing orders.
+    expiry = expiry_candidates(now=now).aggregate(
+        eligible_pending=Count('pk'), oldest=Min('expires_at'),
+        overdue_count=Count('pk', filter=Q(expires_at__lt=now-timedelta(seconds=max_expiry_age))))
+    result['order_expiry'] = {
+        'eligible_pending': expiry['eligible_pending'], 'overdue_count': expiry['overdue_count'],
+        'oldest_overdue_seconds': round((now-expiry['oldest']).total_seconds(), 1) if expiry['oldest'] else None,
+        'overdue': bool(expiry['overdue_count']),
+    }
+    if result['status'] == 'ok' and result['order_expiry']['overdue']:
+        result['status'] = 'attention'
     active = PaymentAttempt.objects.filter(mode='live', status__in=PaymentAttempt.ACTIVE_STATUSES)
     refunds = PaymentRefund.objects.filter(mode='live', resolved_at__isnull=True).exclude(status='success')
     oldest = min((date for date in (active.aggregate(date=Min('created_at'))['date'],
@@ -66,5 +79,16 @@ def operations_status(*, worker=None, max_heartbeat_age=120, max_payment_age=600
         'overdue': bool(oldest and oldest < now-timedelta(seconds=max_payment_age)),
     }
     if result['status'] == 'ok' and (result['payments']['overdue'] or result['payments']['reviews_required']):
+        result['status'] = 'attention'
+    notifications = PaymentNotification.objects.exclude(status='done')
+    pending_notifications = notifications.exclude(status='dead')
+    oldest_notification = pending_notifications.aggregate(date=Min('created_at'))['date']
+    result['notifications'] = {
+        'pending': pending_notifications.count(), 'dead': notifications.filter(status='dead').count(),
+        'conflicts': PaymentNotification.objects.filter(conflict_count__gt=0).count(),
+        'oldest_pending_seconds': round((now-oldest_notification).total_seconds(), 1) if oldest_notification else None,
+        'overdue': bool(oldest_notification and oldest_notification < now-timedelta(seconds=max_payment_age)),
+    }
+    if result['status'] == 'ok' and any(result['notifications'][key] for key in ('dead', 'conflicts', 'overdue')):
         result['status'] = 'attention'
     return result

@@ -22,12 +22,39 @@ import { useSession } from "../stores/session";
 import { notify } from "../lib/notify";
 import { useFollowState } from "../lib/discovery";
 import { orderPage, type OrderCounts } from "../lib/orderPages";
-import type { Stall } from "../lib/types";
+import type { StallSummary as Stall, DiscoveryPage } from "../lib/types";
 
 const router = useRouter();
 const session = useSession();
 const section = ref("follows");
 const follows = ref<Stall[]>([]);
+const nextFollows = ref<string | null>(null);
+const moreLoading = ref(false);
+async function loadMoreFollows() {
+  if (!nextFollows.value || moreLoading.value) return;
+  const read = followState.snapshot();
+  moreLoading.value = true;
+  try {
+    const result = await api<DiscoveryPage<Stall>>(
+      `/follows?cursor=${encodeURIComponent(nextFollows.value)}`,
+    );
+    if (followState.isCurrent(read)) {
+      follows.value = [
+        ...new Map(
+          [
+            ...follows.value,
+            ...result.results.map((row) => followState.reconcile(row, read)),
+          ].map((row) => [row.id, row]),
+        ).values(),
+      ];
+      nextFollows.value = result.next;
+    }
+  } catch (cause) {
+    if (followState.isCurrent(read)) error.value = (cause as Error).message;
+  } finally {
+    moreLoading.value = false;
+  }
+}
 const followState = useFollowState((id, followed) => {
   if (!followed) follows.value = follows.value.filter((item) => item.id !== id);
 });
@@ -70,11 +97,12 @@ onMounted(async () => {
     }
     displayName.value = session.user.display_name;
     const results = await Promise.all([
-      api<Stall[]>("/follows"),
+      api<DiscoveryPage<Stall>>("/follows"),
       orderPage("/orders", "all", null, undefined, 1),
     ]);
     if (followState.isCurrent(read)) {
-      follows.value = results[0]
+      nextFollows.value = results[0].next;
+      follows.value = results[0].results
         .map((stall) => followState.reconcile(stall, read))
         .filter((stall) => stall.is_followed);
       orderCounts.value = results[1].counts;
@@ -286,8 +314,17 @@ async function deleteAccount() {
                   >今天吃点什么 <ArrowUpRight :size="15"
                 /></RouterLink>
               </div>
-            </article></div
-        ></template>
+            </article>
+          </div>
+          <button
+            v-if="nextFollows"
+            class="btn btn-secondary"
+            :disabled="moreLoading"
+            @click="loadMoreFollows"
+          >
+            {{ moreLoading ? "正在加载" : "加载更多关注" }}
+          </button>
+        </template>
         <template v-else-if="section === 'settings'"
           ><div class="section-heading">
             <div>

@@ -18,3 +18,13 @@ services:
       WECHAT_PAY_CONFIG_FILE: /run/yanhuo-wechat/wechat-accounts.json
     volumes:
       - *wechat_secrets
+  callback:
+    environment:
+      WECHAT_PAY_CONFIG_FILE: /run/yanhuo-wechat/wechat-accounts.json
+    volumes:
+      - *wechat_secrets
+  notification_worker:
+    environment:
+      WECHAT_PAY_CONFIG_FILE: /run/yanhuo-wechat/wechat-accounts.json
+    volumes:
+      - *wechat_secrets
