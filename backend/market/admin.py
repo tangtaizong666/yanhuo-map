@@ -28,8 +28,8 @@ class AuditedAdmin(admin.ModelAdmin):
 
 @admin.register(MerchantProfile)
 class MerchantAdmin(AuditedAdmin):
-    list_display = ['business_name', 'user', 'is_verified', 'license_number']
-    list_filter = ['is_verified']
+    list_display = ['business_name', 'user', 'qualification_tier', 'is_verified', 'license_number', 'license_valid_until']
+    list_filter = ['qualification_tier', 'is_verified']
     search_fields = ['business_name', 'user__username']
 
 

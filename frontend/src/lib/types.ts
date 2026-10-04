@@ -71,6 +71,7 @@ export interface Stall {
   address: string;
   arrival_note?: string;
   arrival_image?: string;
+  payment_qr_image?: string;
   accepting_orders?: boolean;
   usual_hours?: string;
   stop_orders_at?: string | null;
@@ -308,6 +309,7 @@ export interface Order {
   contact_phone: string;
   cancel_requested: boolean;
   merchant_contact_phone?: string;
+  stall_payment_qr_image?: string;
   cancel_reason: string;
   review: Review | null;
   items: {

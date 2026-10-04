@@ -79,6 +79,7 @@ class StallProfileInput(StrictInput):
     usual_hours = serializers.CharField(max_length=100, allow_blank=True, required=False)
     arrival_note = serializers.CharField(max_length=200, allow_blank=True, required=False)
     arrival_image = ImageAddress(required=False)
+    payment_qr_image = ImageAddress(required=False)
     location_draft_address = serializers.CharField(max_length=200, allow_blank=True, required=False)
     accepting_orders = serializers.BooleanField(required=False)
     name = serializers.CharField(max_length=80, required=False)

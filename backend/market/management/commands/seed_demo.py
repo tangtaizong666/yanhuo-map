@@ -66,7 +66,7 @@ class Command(BaseCommand):
         vendor = User.objects.get(username='vendor')
         merchant, _ = MerchantProfile.objects.get_or_create(user=vendor, defaults={
             'business_name': '校园烟火示例商户（演示）', 'contact_phone': '', 'is_verified': True,
-            'license_number': 'DEMO-ONLY', 'qualification_note': '演示环境：商户、经营资质与地点均为示例，不能用于实际交易。正式经营资料须由运营核验后公示。'})
+            'license_number': 'DEMO-ONLY', 'qualification_tier': 'mobile_vendor', 'qualification_note': '演示环境：商户、经营资质与地点均为示例，不能用于实际交易。正式经营资料须由运营核验后公示。'})
         areas = []
         for name, subtitle, lat, lng in [('示例大学 · 南门', '南门夜市与周边', 31.2304, 121.4740),
             ('示例大学 · 东门', '生活区与梧桐路', 31.2335, 121.4760), ('示例大学 · 西门', '运动场与便民点', 31.2315, 121.4700)]:

@@ -18,7 +18,9 @@ def fixtures():
     student = User.objects.create_user('tester', password='DemoStrong123', first_name='小宇')
     other = User.objects.create_user('other', password='DemoStrong123')
     vendor = User.objects.create_user('merchant', password='DemoStrong123')
-    merchant = MerchantProfile.objects.create(user=vendor, business_name='测试商户', is_verified=True)
+    # Storefront tier keeps the shared fixture on the platform-payment path; mobile vendors have their own tests.
+    merchant = MerchantProfile.objects.create(user=vendor, business_name='测试商户', is_verified=True,
+        qualification_tier='storefront', licensed_business_address='测试门店', food_preparation_address='测试门店后厨')
     area = Area.objects.create(name='测试校园', latitude=31.23, longitude=121.47)
     stall = Stall.objects.create(merchant=merchant, area=area, name='测试烤冷面', category='小吃', transaction_enabled=True)
     StallLocation.objects.create(stall=stall, address='校园南门', latitude=31.23, longitude=121.47)

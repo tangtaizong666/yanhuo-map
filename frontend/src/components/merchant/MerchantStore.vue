@@ -38,6 +38,7 @@ const profile = reactive({
   public_phone_enabled: false,
   arrival_note: "",
   arrival_image: "",
+  payment_qr_image: "",
   location_draft_address: "",
   usual_hours: "",
 });
@@ -99,6 +100,7 @@ function fill(current: any, previous?: any) {
     public_phone_enabled: !!props.stall.public_phone_enabled,
     arrival_note: props.stall.arrival_note || "",
     arrival_image: props.stall.arrival_image || "",
+    payment_qr_image: props.stall.payment_qr_image || "",
     location_draft_address: props.stall.location_draft_address || "",
     usual_hours: props.stall.usual_hours || "",
   };
@@ -303,7 +305,10 @@ async function saveAddressDraft() {
     if (!disposed) busy.value = "";
   }
 }
-async function upload(e: Event, field: "image" | "arrival_image" = "image") {
+async function upload(
+  e: Event,
+  field: "image" | "arrival_image" | "payment_qr_image" = "image",
+) {
   const input = e.target as HTMLInputElement,
     file = input.files?.[0];
   if (!file) return;
@@ -325,7 +330,9 @@ async function upload(e: Event, field: "image" | "arrival_image" = "image") {
     notify(
       field === "image"
         ? "封面已上传，保存店铺信息后生效"
-        : "找摊照片已上传，保存店铺信息后生效，不会替换封面",
+        : field === "payment_qr_image"
+          ? "收款码已上传，保存店铺信息后顾客下单即可看到"
+          : "找摊照片已上传，保存店铺信息后生效，不会替换封面",
       "info",
     );
   } catch (e) {
@@ -576,6 +583,32 @@ async function upload(e: Event, field: "image" | "arrival_image" = "image") {
                 @click="profile.arrival_image = ''"
               >
                 移除找摊照片
+              </button>
+            </div>
+          </div>
+          <div class="m-shop-photo">
+            <img
+              v-if="ownedImage(profile.payment_qr_image)"
+              :src="ownedImage(profile.payment_qr_image)"
+              alt="摊主自有收款码"
+            />
+            <div>
+              <label class="btn btn-secondary m-upload"
+                ><Camera :size="16" /> 上传我的收款码<input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  :disabled="!!busy"
+                  @change="upload($event, 'payment_qr_image')"
+                  aria-label="上传我的收款码" /></label
+              ><small
+                >上传你自己的微信或支付宝收款码。只给已下单、待付款的顾客看，钱直接进你的账户，平台不经手。</small
+              ><button
+                v-if="profile.payment_qr_image"
+                type="button"
+                class="m-text-link"
+                @click="profile.payment_qr_image = ''"
+              >
+                移除收款码
               </button>
             </div>
           </div>
