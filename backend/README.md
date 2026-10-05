@@ -27,6 +27,16 @@ python -m venv .venv
 
 ## 接口约定
 
+### 服务能力与展示供应（2026-10-05）
+
+摊位详情、商户摊位响应及商户 `/services` 返回 `capabilities`：`mode`、`public_listing`、`pickup_orders`、`online_payment`、`delivery_orders`。展示项含 `available/reason`，交易项另含 `eligible`。`eligible` 用于判断工作台模式，`available` 包含当前营业与服务配置条件。停业、暂停新单或售罄不改变商户的资格类型；实际下单、开关和支付请求都再次验证。
+
+`transaction_enabled` 在响应中代表有效交易资格；运营保存的原开通标志保留在模型，资质失效不会清空历史订单。未获准的真实流动摊位只提供信息展示；示例演练订单明确保存 `mode=simulation`。禁止用线下收款代替线上下单准入。
+
+找摊菜品新增 `display_availability`（`available` 今天有、`sold_out` 卖完了、`paused` 暂时不卖、空值沿用原状态），商家创建／PATCH 可维护。此字段不修改 `stock`、`stock_version` 或交易用的 `sale_paused`。公开餐点的 `display_only=true` 时按展示状态返回 `availability`，`max_order_quantity=0`；恢复交易资格后重新按线上库存与停售开关判断。旧数据不自动填充“今天有”。
+
+订单 `offline_payment_available` 是当前展示现场付款入口的明确授权；真实自取待取餐、未付款、无线下／线上资金冲突及取消申请时才可能为 true。`stall_payment_qr_image` 在其他状态返回空字符串，模拟订单始终为空。资质失效后的旧线上支付入口收起，查询、关闭和必要售后仍可执行；前端不能仅凭图片地址或旧链接展示付款入口。
+
 ### 试点安全与分页接口（2026-10-03）
 
 订单响应新增 `financial_hold_reason`（无资金限制时空字符串）和 `allowed_actions`。动作列表同时结合当前状态与请求用户权限，供页面控制按钮；每次服务端写操作仍独立检查操作者、状态、款项、库存与模式。只读运营不会拿到写入或退款能力。款项未核清时隐藏取餐码并禁止核销，退款 CLOSED 不再能恢复正常履约。原 `refund` 提供当前未结案尝试或最新摘要；`refunds` 保留尝试历史及 `resolved_at`。原付款、退款编号和模式快照不覆盖。
