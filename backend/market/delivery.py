@@ -17,7 +17,7 @@ def service_enabled(stall):
 
 def service_approved(stall):
     from .simulation import eligible
-    return eligible(stall) or stall.delivery_approved
+    return eligible(stall) or (stall.delivery_approved and not stall.merchant.online_trade_reason())
 
 
 def available_points(stall):
@@ -46,7 +46,9 @@ def delivery_settings(stall, *, merchant=False, context=None):
         mode='simulation' if simulated else 'live', enabled=service_enabled(stall),
         points=[point_data(p) for p in points], point_ids=[p.pk for p in points])
     reason = ''
-    if not service_approved(stall): reason = '配送尚未通过运营准入核验。'
+    trade_reason = '' if simulated else stall.merchant.online_trade_reason()
+    if trade_reason: reason = trade_reason
+    elif not service_approved(stall): reason = '配送尚未通过运营准入核验。'
     elif not service_enabled(stall): reason = '商家暂未开启配送。'
     elif stall.is_demo and not simulated: reason = '示例摊位不发起真实配送与微信扣款。'
     elif not public_payment_readiness(stall, context).get('available'): reason = '配送需要先完成微信支付，商家尚未开通线上收款。'

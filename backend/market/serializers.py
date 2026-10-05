@@ -105,7 +105,7 @@ class StallSerializer(serializers.ModelSerializer):
           'area_id', 'area_name', 'status', 'session_status', 'business_session_id', 'last_confirmed_at', 'closes_at', 'prep_minutes',
           'transaction_enabled', 'can_order', 'qualification_note', 'merchant_name', 'contact_phone',
           'rating', 'review_count', 'order_count', 'distance_m', 'is_followed', 'products', 'reviews', 'wechat_payment', 'delivery', 'services',
-          'arrival_note', 'arrival_image', 'accepting_orders', 'order_unavailable_reason', 'location_draft_address', 'usual_hours',
+          'arrival_note', 'arrival_image', 'payment_qr_image', 'accepting_orders', 'order_unavailable_reason', 'location_draft_address', 'usual_hours',
           'prep_capacity', 'prep_active_orders', 'stop_orders_at', 'receiving_seen_at', 'receiving_status', 'receiving_age_seconds']
     def to_representation(self, instance):
         result = super().to_representation(instance)
@@ -133,7 +133,7 @@ class StallSerializer(serializers.ModelSerializer):
         else:
             from .media_policy import public_image
             for name in ('location_draft_address', 'prep_capacity', 'prep_active_orders',
-                    'receiving_seen_at', 'receiving_age_seconds', 'services'):
+                    'receiving_seen_at', 'receiving_age_seconds', 'services', 'payment_qr_image'):
                 result.pop(name, None)
             result['image'] = public_image(instance.image)
             result['arrival_image'] = public_image(instance.arrival_image)
@@ -226,6 +226,7 @@ class OrderSerializer(serializers.ModelSerializer):
     items = OrderItemSerializer(many=True, read_only=True)
     review = ReviewSerializer(read_only=True, default=None)
     current_address = serializers.CharField(source='stall.location.address', read_only=True, default='')
+    stall_payment_qr_image = serializers.SerializerMethodField()
     location_changed = serializers.SerializerMethodField()
     wechat_payment = serializers.SerializerMethodField()
     payment = serializers.SerializerMethodField()
@@ -242,11 +243,17 @@ class OrderSerializer(serializers.ModelSerializer):
             'total_cents', 'created_at', 'accepted_at', 'ready_at', 'completed_at', 'paid_at', 'expires_at', 'pickup_code',
             'estimated_ready_at', 'prep_updated_at', 'prep_delay_reason',
             'pickup_address', 'pickup_latitude', 'pickup_longitude', 'current_address', 'location_changed',
-            'note', 'contact_phone', 'merchant_contact_phone', 'cancel_requested', 'cancel_reason', 'review', 'items',
+            'note', 'contact_phone', 'merchant_contact_phone', 'stall_payment_qr_image', 'cancel_requested', 'cancel_reason', 'review', 'items',
             'fulfillment_type', 'items_total_cents', 'delivery_fee_cents', 'delivery_point_id',
             'delivery_point_name', 'delivery_point_address', 'delivery_point_latitude', 'delivery_point_longitude',
             'recipient_name', 'delivery_eta_min_at', 'delivery_eta_max_at', 'dispatched_at', 'arrived_at', 'delivery_issue']
     def get_items_total_cents(self, obj): return obj.total_cents - obj.delivery_fee_cents
+    def get_stall_payment_qr_image(self, obj):
+        # Only unpaid at-stall orders need the vendor's own code; never shown once settled.
+        if obj.payment_method != 'offline' or obj.payment_status != 'unpaid' or obj.status in ('cancelled', 'rejected', 'completed'):
+            return ''
+        from .media_policy import public_image
+        return public_image(obj.stall.payment_qr_image)
     def get_location_changed(self, obj):
         loc = getattr(obj.stall, 'location', None)
         return bool(loc and (loc.address != obj.pickup_address or

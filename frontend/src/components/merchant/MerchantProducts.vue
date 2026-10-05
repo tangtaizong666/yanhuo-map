@@ -268,7 +268,6 @@ async function uploadImage(event: Event) {
 async function saveEditor(continueAdding = false) {
   if (saving.value || uploading.value) return;
   formError.value = "";
-  const recovering = editingId.value == null && !!pendingCreation.value;
   try {
     if (!form.name.trim()) throw new Error("请填写商品名称。");
     const tasteOptions = tasteValues(form.taste_options);
@@ -356,21 +355,35 @@ async function saveEditor(continueAdding = false) {
       nameInput.value?.focus();
     } else closeEditor(true);
   } catch (error) {
+    // A definite 4xx/409 means the server answered; only network/5xx outcomes stay unconfirmed.
     if (
-      !recovering &&
       error instanceof ApiError &&
       (error.data?.submitted === false ||
-        [400, 403, 404, 422].includes(error.status))
+        [400, 403, 404, 409, 422].includes(error.status))
     ) {
       pendingCreation.value = null;
       removeStorage(creationKey, "session");
     }
-    formError.value = pendingCreation.value
-      ? "新增结果尚未确认。请确认原请求结果；将使用相同标识和内容重试，不会重复新增。"
-      : (error as Error).message;
+    formError.value =
+      editingId.value == null && pendingCreation.value
+        ? "新增结果尚未确认。请确认原请求结果；将使用相同标识和内容重试，不会重复新增。"
+        : (error as Error).message;
   } finally {
     saving.value = false;
   }
+}
+function abandonCreation() {
+  if (saving.value) return;
+  if (
+    !window.confirm(
+      "放弃后不再核对上一笔新增。如果它其实已经保存，商品列表里会出现这道菜，可直接编辑。确定放弃吗？",
+    )
+  )
+    return;
+  pendingCreation.value = null;
+  removeStorage(creationKey, "session");
+  formError.value = "";
+  emit("refresh");
 }
 function tasteValues(groups: Draft["taste_options"]) {
   if (groups.length > 3) throw new Error("口味最多设置 3 组。");
@@ -429,6 +442,9 @@ function tasteValues(groups: Draft["taste_options"]) {
         @click="startEditor()"
       >
         确认上一笔新增
+      </button>
+      <button type="button" class="m-text-link" @click="abandonCreation">
+        放弃这笔新增
       </button>
     </p>
     <MerchantRestock
@@ -617,6 +633,9 @@ function tasteValues(groups: Draft["taste_options"]) {
         <form class="product-editor" @submit.prevent="saveEditor(false)">
           <p v-if="pendingCreation && editingId == null" class="m-info-banner">
             原请求已保留，请先确认新增结果，再修改商品资料。
+            <button type="button" class="m-text-link" @click="abandonCreation">
+              放弃这笔新增
+            </button>
           </p>
           <fieldset
             class="editor-body"

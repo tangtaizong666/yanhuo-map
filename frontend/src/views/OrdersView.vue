@@ -12,7 +12,7 @@ import {
   Store,
   AlertCircle,
 } from "lucide-vue-next";
-import { api, formatTime, money, statusText } from "../lib/api";
+import { api, ApiError, formatTime, money, statusText } from "../lib/api";
 import {
   needsFinancialFollowUp,
   refundNeedsFollowUp,
@@ -127,12 +127,25 @@ async function pollAttention() {
   try {
     const page = await attentionOrders("/orders", lifetime.signal);
     const currentIds = new Set(page.results.map((row) => row.id));
-    const ended = await Promise.all(
-      [...attention]
-        .filter((id) => !currentIds.has(id))
-        .map((id) => api<Order>(`/orders/${id}`, { signal: lifetime.signal })),
+    const endedIds = [...attention].filter((id) => !currentIds.has(id));
+    // One unreadable order must not fail every later poll.
+    const settled = await Promise.allSettled(
+      endedIds.map((id) =>
+        api<Order>(`/orders/${id}`, { signal: lifetime.signal }),
+      ),
     );
     if (disposed || started !== sequence) return;
+    const ended: Order[] = [];
+    settled.forEach((result, index) => {
+      if (result.status === "fulfilled") ended.push(result.value);
+      else if (
+        !(
+          result.reason instanceof ApiError &&
+          [403, 404].includes(result.reason.status)
+        )
+      )
+        currentIds.add(endedIds[index]); // Transient failure: retry next poll.
+    });
     attention = currentIds;
     counts.value = page.counts;
     const changed = mergeOrders(page.results, ended);
@@ -145,7 +158,8 @@ async function pollAttention() {
     const cached = pages.get(selected.value);
     if (cached) orders.value = cached.rows;
     lastSynced.value = new Date().toISOString();
-    error.value = "";
+    // Keep a page-load error visible until the selected list itself has loaded.
+    if (cached) error.value = "";
   } catch (e) {
     if (!disposed && started === sequence) error.value = (e as Error).message;
   } finally {
@@ -246,7 +260,7 @@ function paymentSummary(order: any) {
     return order.status === "ready"
       ? "微信支付 · 待付款"
       : "微信支付 · 出餐后可支付";
-  return "微信支付 · 尚未开通，可到摊付款";
+  return "到摊扫码付给摊主";
 }
 function orderAction(order: any) {
   if (refundNeedsFollowUp(order)) return "查看退款进度";

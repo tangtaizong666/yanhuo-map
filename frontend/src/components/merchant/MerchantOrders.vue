@@ -156,6 +156,11 @@ const historyFilter = computed(() =>
       ? filter.value
       : null,
 );
+function invalidateHistory() {
+  historyPages.clear();
+  // Re-read the visible history tab in the background; the current rows stay until it returns.
+  if (historyFilter.value) void loadHistory();
+}
 async function loadHistory(more = false) {
   if (
     !historyFilter.value ||
@@ -220,7 +225,8 @@ function selectStage(value: string) {
 const query = ref("");
 const fulfillment = ref("all");
 const cancellationOnly = ref(props.initialFilter === "cancellation");
-const busy = ref("");
+const busyIds = reactive(new Set<string>());
+const isBusy = (order: any) => !!order && busyIds.has(String(order.id));
 const now = ref(Date.now());
 const updatedOrders = reactive<Record<string, any>>({});
 const pickupCodes = reactive<Record<string, string>>({});
@@ -237,7 +243,12 @@ const actionError = ref("");
 const expiryRefreshes = new Set<string>();
 let ticker: ReturnType<typeof setInterval> | undefined;
 let actionGeneration = 0;
-let actionController: AbortController | undefined;
+const actionControllers = new Map<string, AbortController>();
+function abortActions() {
+  for (const controller of actionControllers.values()) controller.abort();
+  actionControllers.clear();
+  busyIds.clear();
+}
 
 const allOrders = computed(() => {
   const values = mergeOrders(history.value, props.orders).map(
@@ -796,7 +807,7 @@ function closeDetails() {
   selectedId.value = null;
 }
 function closeConfirmation() {
-  if (busy.value) return;
+  if (isBusy(confirmationOrder.value)) return;
   confirmation.value?.close();
   confirmationState.value = null;
   actionError.value = "";
@@ -806,7 +817,7 @@ function backdropClose(event: MouseEvent, kind: "drawer" | "confirmation") {
     kind === "drawer" ? closeDetails() : closeConfirmation();
 }
 async function requestAction(order: any, value: string) {
-  if (busy.value || !canAct(order, value)) return;
+  if (isBusy(order) || !canAct(order, value)) return;
   if (pendingPrep[order.id]) {
     await performAction(order, value);
     return;
@@ -864,7 +875,7 @@ async function confirmAction() {
   );
 }
 async function performAction(order: any, value: string, explanation = "") {
-  if (busy.value || !canAct(order, value)) return;
+  if (isBusy(order) || !canAct(order, value)) return;
   if (value === "refund" && !explanation.trim()) {
     actionError.value = "请填写退款原因，便于顾客了解和后续对账。";
     return;
@@ -931,10 +942,11 @@ async function performAction(order: any, value: string, explanation = "") {
     pendingPrep[order.id] = body;
     savePrepRequests();
   }
-  busy.value = String(order.id);
+  const busyId = String(order.id);
+  busyIds.add(busyId);
   actionError.value = "";
   const controller = new AbortController();
-  actionController = controller;
+  actionControllers.set(busyId, controller);
   const timeout = window.setTimeout(() => controller.abort(), 20000);
   try {
     const simulateRefund = value.startsWith("simulate_refund_");
@@ -992,10 +1004,11 @@ async function performAction(order: any, value: string, explanation = "") {
       savePrepRequests();
     }
     updatedOrders[String(result.id)] = result;
+    invalidateHistory();
     if (lookupOrder.value?.id === result.id) lookupOrder.value = result;
     emit("refresh", result);
     if (value === "complete") delete pickupCodes[order.id];
-    busy.value = "";
+    busyIds.delete(busyId);
     closeConfirmation();
     if (isRefund) {
       if (
@@ -1081,8 +1094,8 @@ async function performAction(order: any, value: string, explanation = "") {
   } finally {
     window.clearTimeout(timeout);
     if (generation === actionGeneration) {
-      busy.value = "";
-      actionController = undefined;
+      busyIds.delete(busyId);
+      actionControllers.delete(busyId);
     }
   }
 }
@@ -1155,8 +1168,7 @@ watch(
   () => `${session.user?.id}:${props.stall?.id}`,
   () => {
     actionGeneration++;
-    actionController?.abort();
-    busy.value = "";
+    abortActions();
     closeConfirmation();
     closeDetails();
     query.value = "";
@@ -1191,7 +1203,7 @@ onUnmounted(() => {
   historyGeneration++;
   historyController?.abort();
   actionGeneration++;
-  actionController?.abort();
+  abortActions();
   clearInterval(ticker);
   drawer.value?.close();
   confirmation.value?.close();
@@ -1357,7 +1369,7 @@ onUnmounted(() => {
       </p>
       <button
         class="m-orders-button secondary"
-        :disabled="loading || !!busy"
+        :disabled="loading || busyIds.size > 0"
         @click="emit('refresh')"
       >
         重新同步订单
@@ -1472,7 +1484,7 @@ onUnmounted(() => {
               min="1"
               max="180"
               inputmode="numeric"
-              :disabled="!!busy"
+              :disabled="isBusy(order)"
               @input="
                 prepMinutes[order.id] = Number(
                   ($event.target as HTMLInputElement).value,
@@ -1541,7 +1553,7 @@ onUnmounted(() => {
           <button
             v-if="cardAction(order)"
             class="m-orders-button primary m-simple-primary"
-            :disabled="!!busy"
+            :disabled="isBusy(order)"
             @click="runCardAction(order)"
           >
             <component
@@ -1549,7 +1561,7 @@ onUnmounted(() => {
               v-if="actionIcon(cardAction(order)!.value)"
               :size="20"
             />{{
-              busy === String(order.id) ? "正在处理…" : cardAction(order)!.label
+              isBusy(order) ? "正在处理…" : cardAction(order)!.label
             }}
           </button>
           <button
@@ -1752,7 +1764,7 @@ onUnmounted(() => {
                   :key="item.value"
                   class="m-orders-button"
                   :class="item.primary ? 'primary' : 'secondary'"
-                  :disabled="!!busy || !canAct(selectedOrder, item.value)"
+                  :disabled="isBusy(selectedOrder) || !canAct(selectedOrder, item.value)"
                   @click="requestAction(selectedOrder, item.value)"
                 >
                   <component
@@ -1760,7 +1772,7 @@ onUnmounted(() => {
                     v-if="actionIcon(item.value)"
                     :size="17"
                   />{{
-                    busy === String(selectedOrder.id) ? "正在处理…" : item.label
+                    isBusy(selectedOrder) ? "正在处理…" : item.label
                   }}
                 </button>
               </div>
@@ -1788,8 +1800,11 @@ onUnmounted(() => {
                     "
                     required
                     autocomplete="off"
-                    :disabled="!!busy"
-                  /><button class="m-orders-button primary" :disabled="!!busy">
+                    :disabled="isBusy(selectedOrder)"
+                  /><button
+                    class="m-orders-button primary"
+                    :disabled="isBusy(selectedOrder)"
+                  >
                     <CheckCircle2 :size="17" />核销并完成
                   </button>
                 </div>
@@ -1804,7 +1819,7 @@ onUnmounted(() => {
                     v-for="item in moreActions(selectedOrder)"
                     :key="item.value"
                     class="m-orders-button secondary"
-                    :disabled="!!busy || !canAct(selectedOrder, item.value)"
+                    :disabled="isBusy(selectedOrder) || !canAct(selectedOrder, item.value)"
                     @click="requestAction(selectedOrder, item.value)"
                   >
                     {{ item.label }}
@@ -1910,7 +1925,7 @@ onUnmounted(() => {
         aria-labelledby="m-orders-confirm-heading"
         @click="backdropClose($event, 'confirmation')"
         @close="confirmationState = null"
-        @cancel="busy && $event.preventDefault()"
+        @cancel="isBusy(confirmationOrder) && $event.preventDefault()"
       >
         <form v-if="confirmationState" @submit.prevent="confirmAction">
           <header>
@@ -1922,7 +1937,7 @@ onUnmounted(() => {
               type="button"
               class="m-orders-icon-button"
               aria-label="关闭操作确认"
-              :disabled="!!busy"
+              :disabled="isBusy(confirmationOrder)"
               @click="closeConfirmation"
             >
               <X :size="21" />
@@ -1942,7 +1957,7 @@ onUnmounted(() => {
               >退款测试结果<select
                 v-model="simulationRefundOutcome"
                 aria-label="退款测试结果"
-                :disabled="!!busy"
+                :disabled="isBusy(confirmationOrder)"
               >
                 <option value="success">正常退款成功</option>
                 <option value="failure">退款失败</option>
@@ -1963,7 +1978,7 @@ onUnmounted(() => {
               max="180"
               required
               inputmode="numeric"
-              :disabled="!!busy || !!pendingPrep[confirmationOrder?.id]"
+              :disabled="isBusy(confirmationOrder) || !!pendingPrep[confirmationOrder?.id]"
           /></label>
           <label
             v-if="
@@ -1987,7 +2002,7 @@ onUnmounted(() => {
               "
               :maxlength="confirmationState.action === 'refund' ? 80 : 200"
               :disabled="
-                !!busy ||
+                isBusy(confirmationOrder) ||
                 (confirmationState.action === 'update_prep' &&
                   !!pendingPrep[confirmationOrder?.id])
               "
@@ -2013,21 +2028,21 @@ onUnmounted(() => {
             <button
               type="button"
               class="m-orders-button secondary"
-              :disabled="!!busy"
+              :disabled="isBusy(confirmationOrder)"
               @click="closeConfirmation"
             >
               返回订单</button
             ><button
               class="m-orders-button primary"
               :disabled="
-                !!busy ||
+                isBusy(confirmationOrder) ||
                 !canAct(confirmationOrder, confirmationState.action) ||
                 (confirmationState.action === 'refund' &&
                   (!reason.trim() || reasonBytes > 80))
               "
             >
               {{
-                busy
+                isBusy(confirmationOrder)
                   ? "正在处理…"
                   : pendingPrep[confirmationOrder?.id]
                     ? "确认原操作结果"

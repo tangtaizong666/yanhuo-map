@@ -26,7 +26,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from .errors import BusinessError
-from .models import DeliveryPoint, Event, Follow, MerchantProfile, Order, OrderItem, PaymentRefund, Product, Review, Stall
+from .models import DeliveryPoint, Event, Follow, MerchantProfile, Order, OrderItem, PaymentRefund, Product, Review, SiteConfiguration, Stall
 from .serializers import ProductSerializer, ReviewSerializer, StallSerializer
 from .services import audit
 from .views import merchant_stall, stall_context
@@ -79,6 +79,7 @@ class StallProfileInput(StrictInput):
     usual_hours = serializers.CharField(max_length=100, allow_blank=True, required=False)
     arrival_note = serializers.CharField(max_length=200, allow_blank=True, required=False)
     arrival_image = ImageAddress(required=False)
+    payment_qr_image = ImageAddress(required=False)
     location_draft_address = serializers.CharField(max_length=200, allow_blank=True, required=False)
     accepting_orders = serializers.BooleanField(required=False)
     name = serializers.CharField(max_length=80, required=False)
@@ -365,6 +366,7 @@ def metrics(request):
     query = query.filter(mode=mode)
     events = owned(Event.objects.all(), request.user, permission='market.view_order')
     stall_query = owned(Stall.objects.select_related('current_session'), request.user, prefix='', permission='market.view_order')
+    site_config = SiteConfiguration.current()
     if stall:
         query, events, stall_query = query.filter(stall=stall), events.filter(stall=stall), stall_query.filter(pk=stall.pk)
     recent = query.filter(created_at__gte=start, created_at__lte=now)
@@ -426,7 +428,7 @@ def metrics(request):
         'pending_orders': query.filter(status='pending').count(),
         'uncollected_orders': query.filter(Q(fulfillment_type='pickup', status='ready', ready_at__lt=now - timedelta(hours=1)) | Q(fulfillment_type='delivery', status='arrived', arrived_at__lt=now - timedelta(hours=1))).count(),
         'expired_orders': recent_events.filter(type='order_expired').count(),
-        'stale_stalls': sum(s.effective_status() == 'stale' for s in stall_query),
+        'stale_stalls': sum(s.effective_status(site_config) == 'stale' for s in stall_query),
         **net_receipts(gross, refund_cents),
         'average_order_cents': round(revenue / paid_count) if paid_count else 0,
         'followers': Follow.objects.filter(stall__in=stall_query).count(),

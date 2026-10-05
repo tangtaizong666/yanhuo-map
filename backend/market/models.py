@@ -37,12 +37,20 @@ class Area(models.Model):
 
 
 class MerchantProfile(models.Model):
+    # Online-food rules require a physical storefront matching the licensed address.
+    # Mobile vendors stay on the map with pickup and pay at the stall with their own code.
+    TIERS = [('mobile_vendor', '流动摊位（到摊付款自取）'), ('storefront', '实体门店（可开通线上支付与配送）')]
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='merchant_profile')
     business_name = models.CharField('经营主体', max_length=120)
     contact_phone = models.CharField('公开联系电话', max_length=30, blank=True)
     qualification_note = models.TextField('经营资质公示', blank=True)
     is_verified = models.BooleanField('资质已核验', default=False)
     license_number = models.CharField('许可证号', max_length=100, blank=True)
+    qualification_tier = models.CharField('经营资质类型', max_length=20, choices=TIERS, default='mobile_vendor',
+        help_text='只有核验过实体门店且证照地址齐全的商户才开放平台线上支付和配送。')
+    licensed_business_address = models.CharField('证照载明经营场所', max_length=200, blank=True)
+    food_preparation_address = models.CharField('实际加工制作地址', max_length=200, blank=True)
+    license_valid_until = models.DateField('许可证有效期至', null=True, blank=True)
     wechat_pay_account = models.CharField('独立微信收款配置标识', max_length=64, null=True, blank=True, unique=True,
         help_text='仅绑定该经营主体自有商户号；密钥由部署配置管理。')
     def save(self, *args, **kwargs):
@@ -50,7 +58,25 @@ class MerchantProfile(models.Model):
         super().save(*args, **kwargs)
     class Meta:
         verbose_name = verbose_name_plural = '商户档案'
+        constraints = [models.CheckConstraint(name='storefront_requires_addresses', condition=Q(qualification_tier='mobile_vendor')
+            | (Q(qualification_tier='storefront') & ~Q(licensed_business_address='') & ~Q(food_preparation_address='')))]
     def __str__(self): return self.business_name
+    def clean(self):
+        super().clean()
+        if self.qualification_tier == 'storefront':
+            missing = {name: '实体门店需填写此项。' for name in ('licensed_business_address', 'food_preparation_address')
+                if not getattr(self, name).strip()}
+            if missing: raise ValidationError(missing)
+    def online_trade_reason(self):
+        """Empty when platform-handled payment and delivery may be offered."""
+        if self.qualification_tier != 'storefront':
+            return '流动摊位不开放平台线上支付和配送，请到摊扫摊主收款码付款并自取。'
+        if not self.is_verified: return '商户资质尚未核验。'
+        if not (self.licensed_business_address.strip() and self.food_preparation_address.strip()):
+            return '门店证照地址尚未登记完整。'
+        if self.license_valid_until and self.license_valid_until < timezone.localdate():
+            return '经营许可证已过有效期，线上支付和配送暂停。'
+        return ''
 
 
 class DeliveryPoint(models.Model):
@@ -77,6 +103,8 @@ class Stall(models.Model):
     public_phone_enabled = models.BooleanField('允许公开联系电话', default=False)
     arrival_note = models.CharField('认摊说明', max_length=200, blank=True)
     arrival_image = models.CharField('认摊现场照片', max_length=500, blank=True)
+    # The vendor's own WeChat/Alipay personal QR; the platform only displays it and never touches the money.
+    payment_qr_image = models.CharField('摊主自有收款码', max_length=500, blank=True)
     location_draft_address = models.CharField('待核验位置草稿', max_length=200, blank=True)
     accepting_orders = models.BooleanField('接收新订单', default=True)
     prep_capacity = models.PositiveSmallIntegerField('同时备餐订单上限', null=True, blank=True,

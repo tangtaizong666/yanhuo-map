@@ -406,7 +406,8 @@ class FinancialResolutionTests(ResolutionSetup, TestCase):
 
     def test_different_original_merchants_can_import_same_external_refund_number(self):
         first = self.pay(); self.paid_gateway()
-        merchant = MerchantProfile.objects.create(user=self.other, business_name='另一独立商户', is_verified=True)
+        merchant = MerchantProfile.objects.create(user=self.other, business_name='另一独立商户', is_verified=True,
+            qualification_tier='storefront', licensed_business_address='门店', food_preparation_address='后厨')
         stall = Stall.objects.create(merchant=merchant, area=self.stall.area, name='另一摊位', category='小吃')
         order = Order.objects.create(user=self.student, stall=stall, stall_name=stall.name, status='ready',
             payment_method='wechat', payment_status='paid', total_cents=800, paid_at=timezone.now(),

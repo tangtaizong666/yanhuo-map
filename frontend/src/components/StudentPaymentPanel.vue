@@ -585,7 +585,7 @@ onUnmounted(() => {
                 ? order.wechat_payment?.available
                   ? "出餐后可微信付款，现在无需提前支付。"
                   : order.wechat_payment?.reason ||
-                    "当前支持到摊付款，取餐时向商家确认。"
+                    "到摊扫摊主收款码付款，平台不经手款项。"
                 : isSimulation
                   ? order.wechat_payment?.available
                     ? isDelivery
@@ -601,7 +601,7 @@ onUnmounted(() => {
                     : isDelivery
                       ? "微信支付当前不可用，配送订单不能改为线下付款。请稍后重试或取消订单。"
                       : order.wechat_payment?.reason ||
-                        "当前支持到摊付款，请向商家确认支付方式。"
+                        "到摊扫摊主收款码付款，平台不经手款项。"
             }}
           </p>
         </div>
@@ -647,7 +647,7 @@ onUnmounted(() => {
       取消申请正在处理中，暂时不能发起付款。
     </p>
     <p v-if="compactPickup" class="compact-offline-note">
-      也可到摊付款，取餐时向商家确认。
+      也可到摊扫摊主收款码付款。
     </p>
     <div
       v-if="financialFollowUp && (!active || review || refundFollowUp)"
@@ -687,9 +687,25 @@ onUnmounted(() => {
       class="offline-option"
     >
       <ShieldCheck :size="16" /><span
-        ><strong>也可到摊付款</strong>取餐时直接向商家付款，无需提前支付。</span
+        ><strong>也可到摊付款</strong>取餐时扫摊主收款码付款，无需提前支付。</span
       >
     </p>
+    <figure
+      v-if="!isDelivery && order.stall_payment_qr_image"
+      class="stall-qr"
+    >
+      <img
+        :src="order.stall_payment_qr_image"
+        :alt="`${order.stall_name}摊主自有收款码`"
+        loading="lazy"
+        width="220"
+        height="220"
+      />
+      <figcaption>
+        <strong>摊主收款码 · 应付 ¥{{ money(order.total_cents) }}</strong>
+        到摊后扫码付给摊主本人，平台不经手款项。付款后请向摊主出示取餐码，由摊主确认收款。
+      </figcaption>
+    </figure>
     <p v-if="error" class="error-message" role="alert">{{ error }}</p>
   </section>
 </template>
@@ -747,6 +763,34 @@ onUnmounted(() => {
   border-radius: 5px;
   padding: 2px 6px;
   vertical-align: middle;
+}
+.stall-qr {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px 18px;
+  margin: 18px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid #ece7dc;
+}
+.stall-qr img {
+  width: 180px;
+  height: 180px;
+  object-fit: contain;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid #ece7dc;
+}
+.stall-qr figcaption {
+  flex: 1 1 200px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #6b6251;
+}
+.stall-qr strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 14px;
 }
 .offline-option {
   display: flex;

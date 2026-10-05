@@ -33,10 +33,15 @@ def scope_orders(query, *, merchant=False):
     }
 
 
+LEGACY_LIMIT = 100
+
+
 def order_list_response(query, request, *, merchant=False):
     context = {'merchant': merchant, 'request': request}
     if request.query_params.get('pagination') != 'cursor':
-        return Response(OrderSerializer(query, many=True, context=context).data,
+        # Legacy clients still get a bounded response; cursor pagination is the supported path.
+        rows = query.order_by('-created_at', '-pk')[:LEGACY_LIMIT]
+        return Response(OrderSerializer(rows, many=True, context=context).data,
             headers={'Cache-Control': 'private, no-store'})
     selected = request.query_params.get('filter', 'all')
     query, filters = scope_orders(query, merchant=merchant)
