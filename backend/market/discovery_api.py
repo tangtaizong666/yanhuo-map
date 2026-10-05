@@ -124,7 +124,8 @@ def products(request):
     stall_query = filtered(request, context, mode='map')
     # Restaurant discovery can include closed stalls; meal suggestions never do.
     stall_query = filter_status(stall_query, 'open', context['config'])
-    query = Product.objects.filter(stall_id__in=stall_query.values('pk'), is_active=True, sale_paused=False, stock__gt=0)
+    from .catalogue import available_products
+    query = Product.objects.filter(available_products(), stall_id__in=stall_query.values('pk'))
     term = request.query_params.get('q', '').strip()[:100]
     if term: query = query.filter(Q(name__icontains=term) | Q(description__icontains=term) | Q(stall__name__icontains=term))
     budget = request.query_params.get('budget')
@@ -138,6 +139,7 @@ def products(request):
     order = ['price_cents', 'id'] if request.query_params.get('meal_sort') == 'price' else ['id']
     rows, next_cursor = page(query, request, order, kind='products')
     stalls = {stall.pk: stall for stall in visible_stall_query('map').filter(pk__in={row.stall_id for row in rows})}
+    for row in rows: row.stall = stalls[row.stall_id]
     data = [{'product': PublicProductSerializer(row).data,
         'stall': StallMapSerializer(stalls[row.stall_id], context=context).data} for row in rows]
     return Response({'results': data, 'next': next_cursor}, headers={'Cache-Control': 'private, no-store'})

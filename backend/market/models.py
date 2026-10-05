@@ -38,8 +38,8 @@ class Area(models.Model):
 
 class MerchantProfile(models.Model):
     # Online-food rules require a physical storefront matching the licensed address.
-    # Mobile vendors stay on the map with pickup and pay at the stall with their own code.
-    TIERS = [('mobile_vendor', '流动摊位（到摊付款自取）'), ('storefront', '实体门店（可开通线上支付与配送）')]
+    # Mobile vendors can publish information; online reservations also require admission.
+    TIERS = [('mobile_vendor', '流动摊位（找摊与信息展示）'), ('storefront', '实体门店（经核验可开通线上交易）')]
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='merchant_profile')
     business_name = models.CharField('经营主体', max_length=120)
     contact_phone = models.CharField('公开联系电话', max_length=30, blank=True)
@@ -47,7 +47,7 @@ class MerchantProfile(models.Model):
     is_verified = models.BooleanField('资质已核验', default=False)
     license_number = models.CharField('许可证号', max_length=100, blank=True)
     qualification_tier = models.CharField('经营资质类型', max_length=20, choices=TIERS, default='mobile_vendor',
-        help_text='只有核验过实体门店且证照地址齐全的商户才开放平台线上支付和配送。')
+        help_text='公开展示不等于交易准入；只有经营资格核验有效并获运营授权的实体门店才开放线上下单、支付与配送。')
     licensed_business_address = models.CharField('证照载明经营场所', max_length=200, blank=True)
     food_preparation_address = models.CharField('实际加工制作地址', max_length=200, blank=True)
     license_valid_until = models.DateField('许可证有效期至', null=True, blank=True)
@@ -68,15 +68,8 @@ class MerchantProfile(models.Model):
                 if not getattr(self, name).strip()}
             if missing: raise ValidationError(missing)
     def online_trade_reason(self):
-        """Empty when platform-handled payment and delivery may be offered."""
-        if self.qualification_tier != 'storefront':
-            return '流动摊位不开放平台线上支付和配送，请到摊扫摊主收款码付款并自取。'
-        if not self.is_verified: return '商户资质尚未核验。'
-        if not (self.licensed_business_address.strip() and self.food_preparation_address.strip()):
-            return '门店证照地址尚未登记完整。'
-        if self.license_valid_until and self.license_valid_until < timezone.localdate():
-            return '经营许可证已过有效期，线上支付和配送暂停。'
-        return ''
+        from .admission import merchant_trade_reason
+        return merchant_trade_reason(self)
 
 
 class DeliveryPoint(models.Model):
@@ -163,19 +156,8 @@ class Stall(models.Model):
         if self.receiving_seen_at is None: return 'unknown'
         return 'recent' if self.receiving_seen_at >= timezone.now()-timedelta(seconds=90) else 'stale'
     def order_unavailable_reason(self, config=None, *, existing_order=False):
-        if not self.is_visible: return '摊位尚未公开。'
-        status = self.effective_status(config)
-        if status == 'stale': return '位置确认已过期，请等待商家重新确认。'
-        if status == 'closed': return '摊位已收摊，暂不接收新订单。'
-        if status == 'paused': return '商家暂时休息，暂不接收新订单。'
-        if not existing_order and not self.accepting_orders: return '商家正在忙碌，已暂停接收新订单；仍可查看摊位。'
-        if not self.transaction_enabled or not self.merchant.is_verified: return '此摊位仅支持线下到访，尚未开放在线点单。'
-        if not hasattr(self, 'location'): return '商家尚未确认取餐位置。'
-        if not existing_order:
-            gate = self.new_order_gate_code()
-            if gate == 'ordering_stopped': return '本场线上接单已截止，已下订单仍正常处理。'
-            if gate == 'prep_capacity_reached': return '正在处理的订单已达上限，请稍后再试；出餐后会自动恢复名额。'
-        return ''
+        from .admission import pickup_unavailable_reason
+        return pickup_unavailable_reason(self, config, existing_order=existing_order)
 
 
 class StallLocation(models.Model):
@@ -201,6 +183,8 @@ class BusinessSession(models.Model):
 
 
 class Product(models.Model):
+    display_availability = models.CharField('找摊展示供应状态', max_length=12, blank=True, default='',
+        choices=[('', '沿用原供应状态'), ('available', '今天有'), ('sold_out', '卖完了'), ('paused', '暂时不卖')])
     sale_paused = models.BooleanField('暂停供应', default=False)
     stock_version = models.PositiveBigIntegerField('库存版本', default=0, editable=False)
     taste_options = models.JSONField('免费口味选项', default=list, blank=True)

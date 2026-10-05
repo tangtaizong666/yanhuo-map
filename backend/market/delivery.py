@@ -16,8 +16,8 @@ def service_enabled(stall):
 
 
 def service_approved(stall):
-    from .simulation import eligible
-    return eligible(stall) or (stall.delivery_approved and not stall.merchant.online_trade_reason())
+    from .admission import delivery_eligibility_reason
+    return not delivery_eligibility_reason(stall)
 
 
 def available_points(stall):
@@ -46,7 +46,8 @@ def delivery_settings(stall, *, merchant=False, context=None):
         mode='simulation' if simulated else 'live', enabled=service_enabled(stall),
         points=[point_data(p) for p in points], point_ids=[p.pk for p in points])
     reason = ''
-    trade_reason = '' if simulated else stall.merchant.online_trade_reason()
+    from .admission import delivery_eligibility_reason
+    trade_reason = delivery_eligibility_reason(stall)
     if trade_reason: reason = trade_reason
     elif not service_approved(stall): reason = '配送尚未通过运营准入核验。'
     elif not service_enabled(stall): reason = '商家暂未开启配送。'

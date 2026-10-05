@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from threading import Barrier
 from unittest import skipUnless
 from unittest.mock import patch
 
@@ -224,18 +225,36 @@ class ReservationContentionTests(TransactionTestCase):
     def test_thousand_unique_requests_respect_single_reservation(self):
         student, _, _, stall, product = fixtures()
         Product.objects.filter(pk=product.pk).update(stock=20)
-        def submit(index):
-            close_old_connections()
+        workers, requests = 12, 1000
+        ready = Barrier(workers)
+        def submit_batch(worker):
+            # Reuse one thread-local connection per concurrent client. Closing
+            # and reopening for every request churns 1000 PostgreSQL backends;
+            # on Windows their asynchronous exit can exhaust server slots even
+            # though the executor has only twelve active Python threads.
             try:
-                create_order(student, payload(stall, product, key=f'contention-{index}'))
-                return True
-            except BusinessError as exc:
-                if exc.detail['code'] != 'stall_reservation_limit': raise
-                return False
+                close_old_connections()
+                with connections['default'].cursor() as cursor:
+                    cursor.execute('SELECT pg_backend_pid()')
+                    backend_pid = cursor.fetchone()[0]
+                ready.wait(timeout=30)
+                results = []
+                for index in range(worker, requests, workers):
+                    try:
+                        create_order(student, payload(stall, product, key=f'contention-{index}'))
+                        accepted = True
+                    except BusinessError as exc:
+                        if exc.detail['code'] != 'stall_reservation_limit': raise
+                        accepted = False
+                    results.append((index, accepted))
+                return backend_pid, results
             finally:
                 connections.close_all()
-        with ThreadPoolExecutor(max_workers=12) as pool:
-            accepted = sum(pool.map(submit, range(1000)))
-        self.assertEqual(accepted, 1)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            batches = list(pool.map(submit_batch, range(workers)))
+        results = [result for _, batch in batches for result in batch]
+        self.assertEqual(len({backend_pid for backend_pid, _ in batches}), workers)
+        self.assertEqual(sorted(index for index, _ in results), list(range(requests)))
+        self.assertEqual(sum(accepted for _, accepted in results), 1)
         self.assertEqual(Order.objects.count(), 1)
         self.assertEqual(Product.objects.get(pk=product.pk).stock, 19)

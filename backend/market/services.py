@@ -8,7 +8,7 @@ from django.db import IntegrityError, connection, transaction
 from django.db.models import Exists, F, OuterRef, Q
 from django.utils import timezone
 from .errors import BusinessError
-from .models import AuditLog, Event, Order, OrderItem, PaymentAttempt, PaymentRefund, PreparationRequest, Product, Stall, SiteConfiguration
+from .models import AuditLog, Event, MerchantProfile, Order, OrderItem, PaymentAttempt, PaymentRefund, PreparationRequest, Product, Stall, SiteConfiguration
 from .tastes import canonical_item, validate_portions
 
 
@@ -125,6 +125,9 @@ def create_order(user, data):
                 raise BusinessError('摊位不存在。', 'not_found', status=404)
             existing = Order.objects.filter(user=user, idempotency_key=data['idempotency_key']).first()
             if existing: return check_duplicate(existing)
+            # Serialize admission with operator qualification changes. Replays are
+            # returned above so revocation never creates a second reservation.
+            stall.merchant = MerchantProfile.objects.select_for_update(no_key=True).get(pk=stall.merchant_id)
             from .reservation_limits import enforce_reservation_limits
             enforce_reservation_limits(user, stall, data['items'])
             config = SiteConfiguration.current()

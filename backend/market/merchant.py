@@ -58,6 +58,7 @@ class ImageAddress(serializers.CharField):
 
 
 class ProductInput(StrictInput):
+    display_availability = serializers.ChoiceField(choices=['', 'available', 'sold_out', 'paused'], required=False)
     sale_paused = serializers.BooleanField(required=False, default=False)
     taste_options = TasteOptionsField(required=False, default=list)
     name = serializers.CharField(max_length=80)
@@ -106,6 +107,7 @@ class DeliveryInput(StrictInput):
 
 
 def service_settings(stall):
+    from .admission import capabilities
     from .simulation import eligible
     from .serializers import public_payment_readiness
     from .delivery import delivery_settings, service_enabled
@@ -113,7 +115,7 @@ def service_settings(stall):
     return {'mode': 'simulation' if simulated else 'live', 'simulation_available': simulated,
         'online_payment_enabled': stall.simulation_payment_enabled if simulated else public_payment_readiness(stall, {})['available'],
         'delivery_enabled': service_enabled(stall), 'wechat_payment': public_payment_readiness(stall, {}),
-        'delivery': delivery_settings(stall, merchant=True)}
+        'delivery': delivery_settings(stall, merchant=True), 'capabilities': capabilities(stall)}
 
 
 class ServicesInput(StrictInput):
@@ -133,8 +135,10 @@ def services(request, stall_id):
         if not eligible(stall):
             raise BusinessError('快捷开关目前用于模拟经营；正式服务需由运营完成接入后启用。', 'simulation_unavailable')
         values = form.validated_data
-        if any(value is True for value in values.values()) and (not stall.transaction_enabled or not stall.merchant.is_verified):
-            raise BusinessError('此摊位当前没有在线接单资格，不能开启模拟交易。', 'stall_unavailable')
+        from .admission import pickup_eligibility_reason
+        admission_reason = pickup_eligibility_reason(stall)
+        if any(value is True for value in values.values()) and admission_reason:
+            raise BusinessError(admission_reason, 'stall_unavailable')
         if values.get('delivery_enabled') is True:
             prepare_stall(stall)
         for key, value in values.items():
@@ -157,6 +161,10 @@ def delivery(request, stall_id):
     with transaction.atomic():
         stall = merchant_stall(stall_id, request.user, locked=True, permission='market.change_stall')
         point_ids = values.pop('point_ids', None)
+        from .admission import delivery_eligibility_reason
+        admission_reason = delivery_eligibility_reason(stall)
+        if values.get('enabled') is True and admission_reason:
+            raise BusinessError(admission_reason, 'delivery_unavailable')
         for key, value in values.items(): setattr(stall, 'simulation_delivery_enabled' if key == 'enabled' and eligible(stall) else 'delivery_' + key, value)
         if stall.delivery_starts_at >= stall.delivery_ends_at:
             raise BusinessError('配送时间需为同日开始时间早于结束时间的区间。', 'invalid_delivery_window', status=400)
@@ -254,6 +262,10 @@ def profile(request, stall_id):
     with transaction.atomic():
         stall = merchant_stall(stall_id, request.user, locked=True, permission='market.change_stall')
         values = dict(form.validated_data)
+        from .admission import pickup_eligibility_reason
+        admission_reason = pickup_eligibility_reason(stall)
+        if values.get('accepting_orders') is True and admission_reason:
+            raise BusinessError(admission_reason, 'stall_unavailable')
         if 'contact_phone' in values:
             require_stall_permission(stall, request.user, 'market.change_merchantprofile')
             # A merchant's public phone is shared by all their stalls.

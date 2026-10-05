@@ -7,17 +7,23 @@ from .tastes import PortionsField
 
 
 def public_payment_readiness(stall, context):
+    from .admission import online_payment_eligibility_reason
     from .payments import readiness
     from .simulation import eligible, payment_readiness
+    supported = eligible(stall) or (not stall.is_demo and stall.merchant.qualification_tier == 'storefront' and stall.transaction_enabled)
+    admission_reason = online_payment_eligibility_reason(stall)
+    if admission_reason:
+        return {'mode': 'simulation' if eligible(stall) else 'live', 'supported': supported,
+            'available': False, 'reason': admission_reason, 'channels': []}
     if eligible(stall):
-        return {key: value for key, value in payment_readiness(stall).items() if key != 'account_key'}
+        return {'supported': True, **{key: value for key, value in payment_readiness(stall).items() if key != 'account_key'}}
     if stall.is_demo:
-        return {'mode': 'live', 'available': False, 'reason': '示例摊位不发起真实微信扣款，当前支持到摊付款。', 'channels': []}
+        return {'mode': 'simulation', 'supported': False, 'available': False, 'reason': '示例摊位不发起真实微信扣款，当前支持到摊付款。', 'channels': []}
     cache = context.setdefault('_payment_readiness', {})
     if stall.merchant_id not in cache:
         available = readiness(stall.merchant)
         cache[stall.merchant_id] = {'mode': 'live', **{key: available[key] for key in ('available', 'reason', 'channels')}}
-    return cache[stall.merchant_id]
+    return {'supported': supported, **cache[stall.merchant_id]}
 
 
 def user_data(user):
@@ -36,23 +42,31 @@ class AreaSerializer(serializers.ModelSerializer):
 class ProductSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
-        fields = ['id', 'name', 'description', 'category', 'image', 'price_cents', 'stock', 'stock_version', 'sale_paused', 'is_active', 'taste_options']
+        fields = ['id', 'name', 'description', 'category', 'image', 'price_cents', 'stock', 'stock_version', 'sale_paused', 'is_active', 'taste_options', 'display_availability']
 
 
 class PublicProductSerializer(serializers.ModelSerializer):
+    display_only = serializers.SerializerMethodField()
+    sale_paused = serializers.SerializerMethodField()
     availability = serializers.SerializerMethodField()
     max_order_quantity = serializers.SerializerMethodField()
     image = serializers.SerializerMethodField()
     class Meta:
         model = Product
         fields = ['id', 'name', 'description', 'category', 'image', 'price_cents',
-            'availability', 'max_order_quantity', 'sale_paused', 'is_active', 'taste_options']
+            'availability', 'max_order_quantity', 'sale_paused', 'is_active', 'taste_options', 'display_only']
+    def get_display_only(self, obj):
+        from .catalogue import display_only
+        return display_only(obj.stall)
+    def get_sale_paused(self, obj):
+        return self.get_availability(obj) == 'paused'
     def get_availability(self, obj):
-        if not obj.is_active: return 'unavailable'
-        if obj.sale_paused: return 'paused'
-        return 'available' if obj.stock > 0 else 'sold_out'
+        from .catalogue import product_availability
+        return product_availability(obj)
     def get_max_order_quantity(self, obj):
         # This is a public per-order policy, not a disclosure of merchant inventory.
+        from .catalogue import display_only
+        if display_only(obj.stall): return 0
         return 10 if self.get_availability(obj) == 'available' else 0
     def get_image(self, obj):
         from .media_policy import public_image
@@ -99,12 +113,13 @@ class StallSerializer(serializers.ModelSerializer):
     wechat_payment = serializers.SerializerMethodField()
     delivery = serializers.SerializerMethodField()
     services = serializers.SerializerMethodField()
+    capabilities = serializers.SerializerMethodField()
     class Meta:
         model = Stall
         fields = ['id', 'name', 'description', 'category', 'image', 'address', 'latitude', 'longitude',
           'area_id', 'area_name', 'status', 'session_status', 'business_session_id', 'last_confirmed_at', 'closes_at', 'prep_minutes',
           'transaction_enabled', 'can_order', 'qualification_note', 'merchant_name', 'contact_phone',
-          'rating', 'review_count', 'order_count', 'distance_m', 'is_followed', 'products', 'reviews', 'wechat_payment', 'delivery', 'services',
+          'rating', 'review_count', 'order_count', 'distance_m', 'is_followed', 'products', 'reviews', 'wechat_payment', 'delivery', 'services', 'capabilities',
           'arrival_note', 'arrival_image', 'payment_qr_image', 'accepting_orders', 'order_unavailable_reason', 'location_draft_address', 'usual_hours',
           'prep_capacity', 'prep_active_orders', 'stop_orders_at', 'receiving_seen_at', 'receiving_status', 'receiving_age_seconds']
     def to_representation(self, instance):
@@ -122,7 +137,7 @@ class StallSerializer(serializers.ModelSerializer):
                 step('qualification', '经营资质核验', instance.merchant.is_verified, 'operator', '由运营核验经营资料。'),
                 step('location', '确认实际取餐位置', has_location, 'merchant', '选择实际位置并保存，文字草稿不等于已确认位置。'),
                 step('visibility', '公开摊位', instance.is_visible, 'operator', '运营核验展示资料后公开；当前学生还不能查看或分享。'),
-                step('transaction', '线上接单资格', instance.transaction_enabled and instance.merchant.is_verified, 'operator', '由运营核验后开通；公开展示不等于允许线上接单。'),
+                step('transaction', '线上接单资格', result['capabilities']['pickup_orders']['eligible'], 'operator', result['capabilities']['pickup_orders']['reason']),
                 step('payment', '线上支付（可选）', payment.get('available', False), 'operator', payment.get('reason', '尚未开通线上支付。'), True),
                 step('delivery', '配送准入（可选）', instance.delivery_approved, 'operator', '需由运营单独核验配送条件。', True),
             ]
@@ -151,12 +166,17 @@ class StallSerializer(serializers.ModelSerializer):
         if not self.context.get('merchant'): return None
         from .merchant import service_settings
         return service_settings(obj)
+    def get_capabilities(self, obj):
+        from .admission import capabilities
+        return capabilities(obj, self.context)
     def get_delivery(self, obj):
         from .delivery import delivery_settings
         return delivery_settings(obj, context=self.context)
     def get_wechat_payment(self, obj): return public_payment_readiness(obj, self.context)
     def get_status(self, obj): return obj.effective_status(self.context.get('config'))
-    def get_transaction_enabled(self, obj): return obj.transaction_enabled and obj.merchant.is_verified
+    def get_transaction_enabled(self, obj):
+        from .admission import new_trade_eligible
+        return new_trade_eligible(obj)
     def get_can_order(self, obj): return obj.can_order(self.context.get('config'))
     def get_rating(self, obj):
         if hasattr(obj, 'rating_average'):
@@ -179,6 +199,7 @@ class StallSerializer(serializers.ModelSerializer):
         serializer = ProductSerializer if self.context.get('merchant') else PublicProductSerializer
         rows = getattr(obj, '_preview_products', None)
         if rows is None: rows = [p for p in obj.products.all() if p.is_active or self.context.get('merchant')]
+        for row in rows: row.stall = obj
         return serializer(rows, many=True).data
     def get_reviews(self, obj):
         rows = obj._preview_reviews if hasattr(obj, '_preview_reviews') else list(obj.reviews.all())[:20]
@@ -227,6 +248,7 @@ class OrderSerializer(serializers.ModelSerializer):
     review = ReviewSerializer(read_only=True, default=None)
     current_address = serializers.CharField(source='stall.location.address', read_only=True, default='')
     stall_payment_qr_image = serializers.SerializerMethodField()
+    offline_payment_available = serializers.SerializerMethodField()
     location_changed = serializers.SerializerMethodField()
     wechat_payment = serializers.SerializerMethodField()
     payment = serializers.SerializerMethodField()
@@ -243,14 +265,22 @@ class OrderSerializer(serializers.ModelSerializer):
             'total_cents', 'created_at', 'accepted_at', 'ready_at', 'completed_at', 'paid_at', 'expires_at', 'pickup_code',
             'estimated_ready_at', 'prep_updated_at', 'prep_delay_reason',
             'pickup_address', 'pickup_latitude', 'pickup_longitude', 'current_address', 'location_changed',
-            'note', 'contact_phone', 'merchant_contact_phone', 'stall_payment_qr_image', 'cancel_requested', 'cancel_reason', 'review', 'items',
+            'note', 'contact_phone', 'merchant_contact_phone', 'stall_payment_qr_image', 'offline_payment_available', 'cancel_requested', 'cancel_reason', 'review', 'items',
             'fulfillment_type', 'items_total_cents', 'delivery_fee_cents', 'delivery_point_id',
             'delivery_point_name', 'delivery_point_address', 'delivery_point_latitude', 'delivery_point_longitude',
             'recipient_name', 'delivery_eta_min_at', 'delivery_eta_max_at', 'dispatched_at', 'arrived_at', 'delivery_issue']
     def get_items_total_cents(self, obj): return obj.total_cents - obj.delivery_fee_cents
+    def get_offline_payment_available(self, obj):
+        # Existing orders may still settle after new-order admission closes.
+        # A rehearsal must never expose the merchant's real collection code.
+        return bool(obj.mode == 'live' and obj.fulfillment_type == 'pickup'
+            and obj.status == 'ready' and obj.payment_status == 'unpaid'
+            and obj.payment_method == 'offline' and not obj.cancel_requested
+            and not self.get_financial_hold_reason(obj)
+            and not list(obj.refunds.all())
+            and not any(payment.status != 'closed' for payment in obj.payments.all()))
     def get_stall_payment_qr_image(self, obj):
-        # Only unpaid at-stall orders need the vendor's own code; never shown once settled.
-        if obj.payment_method != 'offline' or obj.payment_status != 'unpaid' or obj.status in ('cancelled', 'rejected', 'completed'):
+        if not self.get_offline_payment_available(obj):
             return ''
         from .media_policy import public_image
         return public_image(obj.stall.payment_qr_image)
@@ -268,7 +298,9 @@ class OrderSerializer(serializers.ModelSerializer):
     def get_payment(self, obj):
         payment = self._payment(obj)
         if payment is None: return None
-        show_entry = (payment.status == 'pending' and payment.expires_at > timezone.now()
+        show_entry = (obj.mode == 'live' and payment.mode == obj.mode
+            and self.get_wechat_payment(obj)['available']
+            and payment.status == 'pending' and payment.expires_at > timezone.now()
             and not self.context.get('merchant') and 'pay' in self.get_allowed_actions(obj))
         return {'id': str(payment.pk), 'mode': payment.mode, 'status': payment.status, 'channel': payment.channel,
             'code_url': payment.code_url if show_entry else '', 'h5_url': payment.h5_url if show_entry else '',
