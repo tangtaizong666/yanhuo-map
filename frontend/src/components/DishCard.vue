@@ -37,7 +37,7 @@ watch(
       <span
         v-else-if="product.availability === 'sold_out'"
         class="dish-availability"
-        >线上售罄</span
+        >{{ product.display_only ? "今天卖完了" : "线上售罄" }}</span
       >
       <span v-else-if="stall.status !== 'open'" class="dish-availability">{{
         statusText(stall.status)

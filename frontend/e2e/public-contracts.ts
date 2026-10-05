@@ -1,10 +1,12 @@
 // Fixture builders deliberately start from merchant inventory, then serialize the
 // current public contract. Production code has no legacy-response fallback.
 export function publicProduct(value: any) {
-  const { stock, stock_version, ...item } = value;
+  const { stock, stock_version, display_availability, ...item } = value;
   const availability =
     item.is_active === false
       ? "unavailable"
+      : item.display_only && display_availability
+        ? display_availability
       : item.sale_paused
         ? "paused"
         : stock === 0
@@ -13,7 +15,8 @@ export function publicProduct(value: any) {
   return {
     ...item,
     availability,
-    max_order_quantity: availability === "available" ? 10 : 0,
+    sale_paused: availability === "paused",
+    max_order_quantity: !item.display_only && availability === "available" ? 10 : 0,
   };
 }
 export function publicStall(

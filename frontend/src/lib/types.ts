@@ -33,6 +33,7 @@ export interface Product {
   price_cents: number;
   availability: "available" | "sold_out" | "paused" | "unavailable";
   max_order_quantity: number;
+  display_only?: boolean;
   sale_paused?: boolean;
   is_active?: boolean;
   category?: string;
@@ -44,6 +45,7 @@ export interface MerchantProduct extends Omit<
 > {
   stock: number;
   stock_version: number;
+  display_availability?: "" | "available" | "sold_out" | "paused";
 }
 export interface Portion {
   options: Record<string, string>;
@@ -60,7 +62,20 @@ export interface Review {
   merchant_reply?: string;
   replied_at?: string | null;
 }
+export interface ServiceCapability {
+  eligible: boolean;
+  available: boolean;
+  reason: string;
+}
+export interface StallCapabilities {
+  mode: "live" | "simulation";
+  public_listing: { available: boolean; reason: string };
+  pickup_orders: ServiceCapability;
+  online_payment: ServiceCapability;
+  delivery_orders: ServiceCapability;
+}
 export interface Stall {
+  capabilities?: StallCapabilities;
   delivery?: DeliverySettings;
   wechat_payment?: PaymentReadiness;
   id: number;
@@ -228,6 +243,7 @@ export interface DeliverySettings {
   available_points?: DeliveryPoint[];
 }
 export interface PaymentReadiness {
+  supported?: boolean;
   mode?: "simulation" | "live";
   available: boolean;
   reason: string;
@@ -310,6 +326,7 @@ export interface Order {
   cancel_requested: boolean;
   merchant_contact_phone?: string;
   stall_payment_qr_image?: string;
+  offline_payment_available?: boolean;
   cancel_reason: string;
   review: Review | null;
   items: {

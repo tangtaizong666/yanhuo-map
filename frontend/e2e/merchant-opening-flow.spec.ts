@@ -359,6 +359,8 @@ test("direct location link opens and reaches the editor; relocation keeps existi
   await expect(
     page.getByText("取餐位置已变更，等待运营重新核验", { exact: true }),
   ).toBeVisible();
+  await expect(page.getByRole("region", { name: "今天出摊", exact: true })).toBeVisible();
+  await expect(page.getByText("已有订单的取餐地址与当前出摊位置不同，仍保留原地址；请联系顾客确认交付安排。", { exact: true })).toBeVisible();
   expect(state.stall.transaction_enabled).toBe(false);
   expect(state.orders[0]!.pickup_address).toBe(oldAddress);
   expect(state.orders[0]!.status).toBe("preparing");
@@ -367,6 +369,9 @@ test("direct location link opens and reaches the editor; relocation keeps existi
     animations: "disabled",
     fullPage: true,
   });
+  await page.reload();
+  await expect(page.getByText("已有订单的取餐地址与当前出摊位置不同，仍保留原地址；请联系顾客确认交付安排。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "处理已有订单（1）" })).toBeVisible();
   expect(state.unexpected).toEqual([]);
 });
 

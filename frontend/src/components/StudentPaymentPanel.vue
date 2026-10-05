@@ -17,11 +17,16 @@ import {
   refundNeedsFollowUp,
 } from "../lib/orderFollowUp";
 
-const props = defineProps<{ order: Order }>();
+const props = defineProps<{
+  order: Order;
+  suspended?: boolean;
+  suspensionBusy?: boolean;
+}>();
 const emit = defineEmits<{
   updated: [order: Order];
   changing: [];
   settled: [];
+  confirmCancellation: [];
 }>();
 const session = useSession();
 const userId = session.user?.id;
@@ -58,6 +63,9 @@ const mobile = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
 const payment = computed(() => props.order.payment);
 const isSimulation = computed(() => props.order.mode === "simulation");
 const isDelivery = computed(() => props.order.fulfillment_type === "delivery");
+const onlineSupported = computed(
+  () => isSimulation.value || props.order.wechat_payment?.supported !== false,
+);
 const financialFollowUp = computed(() => needsFinancialFollowUp(props.order));
 const refundFollowUp = computed(() => refundNeedsFollowUp(props.order));
 const refundProblem = computed(
@@ -87,10 +95,12 @@ const active = computed(
 const compactPickup = computed(
   () =>
     !isDelivery.value &&
+    !props.suspended &&
     ["pending", "preparing"].includes(props.order.status) &&
     props.order.payment_status === "unpaid" &&
     !payment.value &&
     !props.order.refund &&
+    !props.order.refunds?.length &&
     !financialFollowUp.value &&
     !props.order.cancel_requested &&
     !uncertain.value,
@@ -98,6 +108,35 @@ const compactPickup = computed(
 const review = computed(
   () =>
     props.order.payment_review_required || payment.value?.status === "review",
+);
+const offlineInformation = computed(
+  () =>
+    !isDelivery.value &&
+    !props.suspended &&
+    props.order.payment_status === "unpaid" &&
+    ["pending", "preparing", "ready"].includes(props.order.status) &&
+    !props.order.cancel_requested &&
+    !financialFollowUp.value &&
+    !props.order.refund &&
+    !props.order.refunds?.length &&
+    !active.value &&
+    (!payment.value || payment.value.status === "closed") &&
+    !uncertain.value &&
+    !review.value,
+);
+// The server owns permission; also fail closed if a stale response contains a
+// code alongside a cancellation, rehearsal or unresolved financial state.
+const showStallPaymentQr = computed(
+  () =>
+    props.order.offline_payment_available === true &&
+    props.order.mode === "live" &&
+    props.order.fulfillment_type === "pickup" &&
+    props.order.status === "ready" &&
+    props.order.payment_method === "offline" &&
+    !busy.value &&
+    offlineInformation.value &&
+    (!payment.value || payment.value.status === "closed") &&
+    !!props.order.stall_payment_qr_image,
 );
 const visible = computed(
   () =>
@@ -126,13 +165,19 @@ const remaining = computed(
 const canStart = computed(
   () =>
     allows(props.order, "pay", true) &&
+    !props.suspended &&
     payableStage.value &&
     !deliveryWindowClosing.value &&
     props.order.payment_status === "unpaid" &&
     !props.order.cancel_requested &&
     !active.value &&
+    (!payment.value || payment.value.status === "closed") &&
     !uncertain.value &&
     !review.value &&
+    !financialFollowUp.value &&
+    !props.order.refund &&
+    !props.order.refunds?.length &&
+    onlineSupported.value &&
     props.order.wechat_payment?.available,
 );
 const channels = computed(() => props.order.wechat_payment?.channels || []);
@@ -153,8 +198,11 @@ const browserSupported = computed(() =>
 const canRetry = computed(
   () =>
     allows(props.order, "pay", true) &&
+    !props.suspended &&
     active.value &&
     !isSimulation.value &&
+    onlineSupported.value &&
+    props.order.wechat_payment?.available === true &&
     !review.value &&
     orderUnpaid() &&
     remaining.value > 60 &&
@@ -165,6 +213,7 @@ const canRetry = computed(
 const canSimulate = computed(
   () =>
     allows(props.order, "simulate_payment", true) &&
+    !props.suspended &&
     isSimulation.value &&
     session.config?.services_simulation_enabled !== false &&
     payment.value?.mode === "simulation" &&
@@ -364,6 +413,23 @@ onUnmounted(() => {
     <p v-if="order.financial_hold_reason" class="error-message" role="status">
       {{ order.financial_hold_reason }}
     </p>
+    <div v-if="suspended" class="payment-message attention" role="status">
+      <div>
+        <strong>正在确认取消结果</strong>
+        <p>
+          付款入口已暂时收起，请勿另行付款。请刷新订单状态，或再次提交同一取消申请。
+        </p>
+        <div class="payment-actions">
+          <button
+            class="btn btn-secondary"
+            :disabled="suspensionBusy"
+            @click="emit('confirmCancellation')"
+          >
+            确认取消结果
+          </button>
+        </div>
+      </div>
+    </div>
     <div v-if="review" class="payment-message attention" role="status">
       <strong>这笔款项需要核对</strong>
       <p>请联系商家处理，暂时不要重复付款。订单不会自动核销。</p>
@@ -460,6 +526,10 @@ onUnmounted(() => {
         <template
           v-if="
             allows(order, 'pay', true) &&
+            !suspended &&
+            !isSimulation &&
+            onlineSupported &&
+            order.wechat_payment?.available === true &&
             orderUnpaid() &&
             payment?.status === 'pending' &&
             remaining > 0 &&
@@ -507,7 +577,11 @@ onUnmounted(() => {
             <p>
               请先核对这笔款项，不要另行付款。过期或关闭的二维码不能继续使用。
             </p>
-            <p v-if="payment?.status === 'pending'">
+            <p v-if="!order.wechat_payment?.available">
+              当前已暂停新的微信付款，仍可核对或关闭既有支付。
+              {{ order.wechat_payment?.reason }}
+            </p>
+            <p v-else-if="payment?.status === 'pending'">
               付款入口未就绪时，可先关闭本次微信支付，再重新发起。系统会先核对是否已付款。
             </p>
           </div>
@@ -564,10 +638,15 @@ onUnmounted(() => {
       v-else-if="
         ['pending_payment', 'pending', 'preparing', 'ready'].includes(
           order.status,
-        ) && !order.cancel_requested
+        ) &&
+        !suspended &&
+        !order.cancel_requested &&
+        !financialFollowUp &&
+        !order.refund &&
+        !order.refunds?.length
       "
     >
-      <div class="payment-choice">
+      <div v-if="onlineSupported" class="payment-choice">
         <div>
           <strong>{{
             isSimulation
@@ -623,6 +702,20 @@ onUnmounted(() => {
           }}
         </button>
       </div>
+      <div v-else class="payment-message">
+        <div>
+          <strong>{{ isDelivery ? "配送暂时无法付款" : "到摊付款" }}</strong>
+          <p>
+            {{
+              isDelivery
+                ? "该商户当前无法发起线上支付。配送不能改为线下付款，请稍后重试或取消订单。"
+                : order.status === "ready"
+                  ? "请到摊核对餐点和金额，再向摊主本人付款，平台不经手款项。"
+                  : "先等商家出餐，取餐时再向摊主本人付款，无需提前支付。"
+            }}
+          </p>
+        </div>
+      </div>
       <p v-if="deliveryWindowClosing" class="payment-footnote">
         剩余时间不足以发起新支付，请取消本单后重新下单。已发起的支付请先核对结果。
       </p>
@@ -639,15 +732,19 @@ onUnmounted(() => {
                 : "该商家暂未开通电脑扫码支付。请用手机系统浏览器打开本单，或到摊付款。"
         }}
       </p>
-      <p v-else-if="!compactPickup" class="payment-footnote">
+      <p v-else-if="onlineSupported && !compactPickup" class="payment-footnote">
         <ShieldCheck :size="14" />付款状态以服务端核验结果为准
       </p>
     </template>
     <p v-else-if="order.cancel_requested" class="payment-footnote">
       取消申请正在处理中，暂时不能发起付款。
     </p>
-    <p v-if="compactPickup" class="compact-offline-note">
-      也可到摊扫摊主收款码付款。
+    <p v-if="compactPickup && onlineSupported" class="compact-offline-note">
+      {{
+        isSimulation
+          ? "出餐后也可演练商家确认模拟收款，不要支付真实款项。"
+          : "也可出餐后到摊付款，无需提前支付。"
+      }}
     </p>
     <div
       v-if="financialFollowUp && (!active || review || refundFollowUp)"
@@ -673,27 +770,21 @@ onUnmounted(() => {
       </p>
     </div>
     <p
-      v-if="
-        !isDelivery &&
-        !compactPickup &&
-        order.payment_status === 'unpaid' &&
-        !financialFollowUp &&
-        !active &&
-        !uncertain &&
-        !review &&
-        !order.cancel_requested &&
-        ['pending', 'preparing', 'ready'].includes(order.status)
-      "
+      v-if="onlineSupported && !compactPickup && offlineInformation"
       class="offline-option"
     >
       <ShieldCheck :size="16" /><span
-        ><strong>也可到摊付款</strong>取餐时扫摊主收款码付款，无需提前支付。</span
+        ><strong>{{
+          isSimulation ? "也可演练到摊付款" : "也可到摊付款"
+        }}</strong
+        >{{
+          isSimulation
+            ? "由商家确认模拟收款，不要支付真实款项。"
+            : "取餐时扫摊主收款码付款，无需提前支付。"
+        }}</span
       >
     </p>
-    <figure
-      v-if="!isDelivery && order.stall_payment_qr_image"
-      class="stall-qr"
-    >
+    <figure v-if="showStallPaymentQr" class="stall-qr">
       <img
         :src="order.stall_payment_qr_image"
         :alt="`${order.stall_name}摊主自有收款码`"

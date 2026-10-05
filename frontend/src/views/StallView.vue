@@ -300,7 +300,7 @@ onUnmounted(() => {
                     width="160"
                     height="160"
                   /><span v-if="!productAvailable(p)">{{
-                    p.sale_paused ? "暂停供应" : "线上售罄"
+                    p.sale_paused ? "暂停供应" : p.display_only ? "今天卖完了" : "线上售罄"
                   }}</span>
                 </RouterLink>
                 <div class="product-content">

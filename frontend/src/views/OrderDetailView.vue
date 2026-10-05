@@ -19,7 +19,7 @@ import {
   Wallet,
   X,
 } from "lucide-vue-next";
-import { api, formatTime, money, statusText } from "../lib/api";
+import { api, ApiError, formatTime, money, statusText } from "../lib/api";
 import { useSession } from "../stores/session";
 import { notify } from "../lib/notify";
 import ReorderDialog from "../components/ReorderDialog.vue";
@@ -48,6 +48,26 @@ const merchantPhone = computed(() =>
   (order.value?.merchant_contact_phone || "").replace(/[^\d+]/g, ""),
 );
 const cancelOpen = ref(false);
+const cancellationUncertain = ref(false);
+let cancellationReadCanResolve = false;
+const cancellationRecoveryKey = `yanhuo-cancel-pending:${session.user?.id}:${route.params.id}`;
+try {
+  const saved = sessionStorage.getItem(cancellationRecoveryKey);
+  cancellationUncertain.value = saved === "unknown" || saved === "rejected";
+  cancellationReadCanResolve = saved === "rejected";
+} catch {
+  /* Keep the in-memory guard when storage is unavailable. */
+}
+function setCancellationRecovery(state: "unknown" | "rejected" | null) {
+  cancellationUncertain.value = state !== null;
+  cancellationReadCanResolve = state === "rejected";
+  try {
+    if (state) sessionStorage.setItem(cancellationRecoveryKey, state);
+    else sessionStorage.removeItem(cancellationRecoveryKey);
+  } catch {
+    /* A storage failure must not restore payment controls. */
+  }
+}
 const cancelDialog = ref<HTMLDialogElement>();
 let cancelTrigger: HTMLElement | null = null;
 function openCancel(event: MouseEvent) {
@@ -113,6 +133,7 @@ const readyPickup = computed(
     !isDelivery.value &&
     order.value.status === "ready" &&
     !order.value.cancel_requested &&
+    !cancellationUncertain.value &&
     !!order.value.pickup_code &&
     !financialFollowUp.value &&
     !paymentPending.value &&
@@ -147,9 +168,24 @@ function paymentSettled() {
 function applyConfirmedOrder(updated: Order) {
   if (!current()) return false;
   if (
-    !updated || updated.id !== order.value?.id || updated.stall_id !== order.value?.stall_id ||
-    !["pending_payment", "pending", "preparing", "ready", "delivering", "arrived", "completed", "cancelled", "rejected"].includes(updated.status) ||
-    !["unpaid", "paid", "refunding", "refunded"].includes(updated.payment_status) ||
+    !updated ||
+    updated.id !== String(route.params.id) ||
+    !Number.isInteger(updated.stall_id) ||
+    (order.value && updated.stall_id !== order.value.stall_id) ||
+    ![
+      "pending_payment",
+      "pending",
+      "preparing",
+      "ready",
+      "delivering",
+      "arrived",
+      "completed",
+      "cancelled",
+      "rejected",
+    ].includes(updated.status) ||
+    !["unpaid", "paid", "refunding", "refunded"].includes(
+      updated.payment_status,
+    ) ||
     !Array.isArray(updated.items)
   ) {
     error.value = "订单返回信息不完整，请刷新确认当前状态。";
@@ -262,17 +298,29 @@ const navigationUrl = computed(() =>
     : "",
 );
 async function load() {
-  if (fetching || paymentWorking.value || !current()) return;
+  if (fetching || busy.value || paymentWorking.value || !current()) return;
   fetching = true;
   const requestVersion = version;
   try {
-    const result = await api(`/orders/${route.params.id}`, {
+    const result = await api<Order>(`/orders/${route.params.id}`, {
       signal: controller.signal,
     });
     if (!current() || requestVersion !== version) return;
-    order.value = result;
+    if (cancellationUncertain.value) {
+      if (!applyConfirmedOrder(result)) return;
+      // A read of the old ready state cannot disprove a lost in-flight write.
+      // Recover after a confirmed rejection or an observed cancellation result.
+      if (
+        cancellationReadCanResolve ||
+        result.cancel_requested ||
+        ["cancelled", "rejected", "completed"].includes(result.status)
+      ) {
+        setCancellationRecovery(null);
+      }
+    } else order.value = result;
     error.value = "";
-    if (terminal.value || order.value.cancel_requested) cancelOpen.value = false;
+    if (terminal.value || order.value.cancel_requested)
+      cancelOpen.value = false;
   } catch (e) {
     if (current() && requestVersion === version)
       error.value = (e as Error).message;
@@ -332,7 +380,10 @@ onUnmounted(() => {
 async function cancelOrder() {
   if (!allows(order.value, "cancel", true)) return;
   if (busy.value || paymentWorking.value || !current()) return;
+  const unresolvedBeforeSubmit =
+    cancellationUncertain.value && !cancellationReadCanResolve;
   busy.value = true;
+  setCancellationRecovery("unknown");
   ++version;
   try {
     const result = await api<Order>(`/orders/${order.value.id}/cancel`, {
@@ -342,22 +393,26 @@ async function cancelOrder() {
     });
     if (!current()) return;
     if (!applyConfirmedOrder(result)) {
-      refreshAfterChange();
       return;
     }
+    setCancellationRecovery(null);
     cancelOpen.value = false;
     notify(
-      result.status === "cancelled"
-        ? "订单已取消"
-        : "取消申请已发送给商家",
+      result.status === "cancelled" ? "订单已取消" : "取消申请已发送给商家",
       "success",
     );
   } catch (e) {
     if (!current()) return;
+    const definitelyRejected =
+      !unresolvedBeforeSubmit &&
+      e instanceof ApiError &&
+      (e.data?.submitted === false ||
+        (e.status >= 400 && e.status < 500 && e.code !== "invalid_response"));
+    setCancellationRecovery(definitelyRejected ? "rejected" : "unknown");
     notify((e as Error).message, "error");
-    refreshAfterChange();
   } finally {
     busy.value = false;
+    if (cancellationUncertain.value && current()) refreshAfterChange();
   }
 }
 async function confirmReceipt() {
@@ -434,7 +489,7 @@ async function submitReview() {
         </div>
         <button
           class="refresh-button"
-          :disabled="paymentWorking"
+          :disabled="busy || paymentWorking"
           @click="load"
           aria-label="刷新订单状态"
         >
@@ -451,6 +506,9 @@ async function submitReview() {
           />
           <StudentPaymentPanel
             :order="order"
+            :suspended="cancellationUncertain"
+            :suspension-busy="busy"
+            @confirm-cancellation="load"
             @changing="paymentChanging"
             @updated="applyConfirmedOrder"
             @settled="paymentSettled"

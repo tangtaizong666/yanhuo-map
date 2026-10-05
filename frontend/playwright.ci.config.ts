@@ -11,6 +11,7 @@ const fixtures = [
   'merchant-hardening.spec.ts',
   'payment-cooldown.spec.ts',
   'merchant-simple-flow.spec.ts',
+  'merchant-modes.spec.ts',
   'merchant-products-simple.spec.ts', 'reference-product-flow.spec.ts',
   'merchant-opening-flow.spec.ts', 'merchant-handoff-panel.spec.ts', 'order-detail-sync.spec.ts',
   'payment-student.spec.ts', 'simulation-student.spec.ts', 'payment-visibility.spec.ts',
@@ -28,8 +29,8 @@ export default defineConfig({
   projects: [
     { name: 'fixture-chromium', testMatch: fixtures, grepInvert: /production startup/, use: { ...devices['Desktop Chrome'], baseURL: 'http://127.0.0.1:5196' } },
     { name: 'smoke-webkit', testMatch: 'pilot-reliability.spec.ts', grep: /storage denial leaves|cancel dialog traps|terminal unpaid intents/, use: { ...devices['Desktop Safari'], baseURL: 'http://127.0.0.1:5196' } },
-    { name: 'student-webkit', testMatch: ['discovery-contract.spec.ts', 'payment-cooldown.spec.ts', 'quick-choice.spec.ts', 'checkout-recovery.spec.ts', 'reference-product-flow.spec.ts', 'order-detail-sync.spec.ts', 'identity-refresh.spec.ts'], grep: /identity-refresh\.spec\.ts|order-detail-sync\.spec\.ts|reference-product-flow\.spec\.ts|discovery-contract\.spec\.ts|payment-cooldown\.spec\.ts|reorder skips|paused product|a lost result locks|confirmed .* preserves/, use: { ...devices['Desktop Safari'], baseURL: 'http://127.0.0.1:5196' } },
-    { name: 'merchant-webkit', testMatch: ['merchant-hardening.spec.ts', 'merchant-simple-flow.spec.ts', 'merchant-products-simple.spec.ts', 'merchant-opening-flow.spec.ts', 'merchant-handoff-panel.spec.ts'], use: { ...devices['Desktop Safari'], baseURL: 'http://127.0.0.1:5196' } },
+    { name: 'student-webkit', testMatch: ['discovery-contract.spec.ts', 'payment-cooldown.spec.ts', 'payment-visibility.spec.ts', 'payment-student.spec.ts', 'quick-choice.spec.ts', 'checkout-recovery.spec.ts', 'reference-product-flow.spec.ts', 'order-detail-sync.spec.ts', 'identity-refresh.spec.ts'], grep: /identity-refresh\.spec\.ts|order-detail-sync\.spec\.ts|reference-product-flow\.spec\.ts|discovery-contract\.spec\.ts|payment-cooldown\.spec\.ts|payment-visibility\.spec\.ts|payment-student\.spec\.ts|reorder skips|paused product|a lost result locks|confirmed .* preserves/, use: { ...devices['Desktop Safari'], baseURL: 'http://127.0.0.1:5196' } },
+    { name: 'merchant-webkit', testMatch: ['merchant-hardening.spec.ts', 'merchant-simple-flow.spec.ts', 'merchant-products-simple.spec.ts', 'merchant-opening-flow.spec.ts', 'merchant-handoff-panel.spec.ts', 'merchant-modes.spec.ts'], use: { ...devices['Desktop Safari'], baseURL: 'http://127.0.0.1:5196' } },
     { name: 'production-chromium', testMatch: 'pilot-reliability.spec.ts', grep: /production startup/, use: { ...devices['Desktop Chrome'], baseURL: 'http://127.0.0.1:5197' } },
     { name: 'production-webkit', testMatch: 'pilot-reliability.spec.ts', grep: /production startup/, use: { ...devices['Desktop Safari'], baseURL: 'http://127.0.0.1:5197' } },
   ],

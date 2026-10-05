@@ -7,13 +7,16 @@ import {
   Play,
   ClipboardList,
   MessageSquare,
+  ArrowUpRight,
 } from "lucide-vue-next";
 import { api, formatTime, statusText } from "../../lib/api";
 import { notify } from "../../lib/notify";
 import { acceptReady } from "./delivery";
 import MerchantQueueSettings from "./MerchantQueueSettings.vue";
+import { useSession } from "../../stores/session";
+const session = useSession();
 const props = withDefaults(
-  defineProps<{ stall: any; orders?: any[]; ready?: boolean; compact?: boolean }>(),
+  defineProps<{ stall: any; orders?: any[]; ready?: boolean; compact?: boolean; discoveryOnly?: boolean }>(),
   { orders: () => [], ready: false },
 );
 const emit = defineEmits<{ refresh: []; location: [] }>();
@@ -32,6 +35,10 @@ const unfinished = computed(() =>
     (o) => !["completed", "cancelled", "rejected"].includes(o.status),
   ),
 );
+const relocatedOrders = computed(() => unfinished.value.some((order) =>
+  order.location_changed === true ||
+  (order.pickup_address && props.stall.address && order.pickup_address !== props.stall.address),
+));
 const hasLocation = computed(
   () =>
     (props.stall.activation?.has_location ?? (!!props.stall.address && props.stall.address !== "位置尚未确认")) &&
@@ -132,24 +139,27 @@ async function loadReports() {
     <p v-if="state === 'closed' || state === 'stale'" class="compact-location"><MapPin :size="16" /><span>{{ hasLocation ? stall.address : '先确认实际取餐位置，再开始营业。' }}</span><RouterLink v-if="hasLocation" to="/merchant/store#location">更换位置</RouterLink></p>
     <p v-if="error" class="m-alert" role="alert">{{ error }}</p>
   </section>
-  <section v-else class="m-panel operations" aria-label="今天怎样营业">
+  <section v-else class="m-panel operations" :class="{ 'discovery-operations': discoveryOnly }" :aria-label="discoveryOnly ? '今天出摊' : '今天怎样营业'">
     <div class="operations-head">
       <div>
-        <h2><Store :size="22" /> 营业与接单</h2>
+        <h2><Store :size="22" /> {{ discoveryOnly ? stall.name : '营业与接单' }}</h2>
       </div>
       <span :class="['m-status', stall.status]">{{
-        statusText(stall.status)
+        discoveryOnly && stall.status === 'stale' ? '位置待确认' : statusText(stall.status)
       }}</span>
     </div>
     <p class="location">
       <MapPin :size="17" /><span>{{
-        hasLocation ? stall.address : "还没有确认取餐位置"
+        hasLocation ? stall.address : "还没有确认出摊位置"
       }}</span
       ><button class="m-text-link" @click="emit('location')">
-        {{ hasLocation ? "更换位置" : "设置位置" }}
+        {{ hasLocation ? (discoveryOnly ? "换个位置" : "更换位置") : "设置位置" }}
       </button>
     </p>
     <p v-if="hasLocation && stall.last_confirmed_at" class="location-time">上次确认 {{ formatTime(stall.last_confirmed_at) }}</p>
+    <p v-else-if="discoveryOnly" class="location-time">位置尚未确认；保存地址草稿不会发布出摊。</p>
+    <p v-if="discoveryOnly" class="location-time discovery-closes">{{ stall.closes_at ? `预计 ${formatTime(stall.closes_at)} 收摊` : '尚未填写预计收摊时间' }}<button class="m-text-link" @click="emit('location')">调整时间</button></p>
+    <p v-if="discoveryOnly && state === 'stale'" class="helper">位置已超过有效期，顾客会看到“位置待确认”。请核对实际位置后再确认。</p>
     <div class="main-actions">
       <button
         v-if="state === 'stale'"
@@ -166,7 +176,7 @@ async function loadReports() {
         @click="status('open', true)"
       >
         <Play :size="17" />{{
-          hasLocation ? "就在这里，开始出摊" : "先设置出摊位置"
+          hasLocation ? (discoveryOnly ? "在老地方开摊" : "就在这里，开始出摊") : "先设置出摊位置"
         }}
       </button>
       <button
@@ -177,14 +187,20 @@ async function loadReports() {
       >
         <Play :size="17" />回到摊位，恢复出摊
       </button>
+      <button
+        v-else-if="discoveryOnly"
+        class="btn btn-primary"
+        :disabled="busy"
+        @click="confirmHere"
+      ><MapPin :size="17" />我还在这里，确认位置</button>
       <RouterLink
-        v-else-if="ready && pending"
+        v-else-if="!discoveryOnly && ready && pending"
         class="btn btn-primary"
         to="/merchant/orders?filter=pending"
         ><ClipboardList :size="18" />处理待接单 <b>{{ pending }}</b></RouterLink
       >
       <button
-        v-else-if="stall.accepting_orders === false"
+        v-else-if="!discoveryOnly && stall.accepting_orders === false"
         class="btn btn-primary"
         :disabled="busy"
         @click="accepting"
@@ -192,7 +208,7 @@ async function loadReports() {
         <Play :size="17" />恢复线上接单
       </button>
       <button
-        v-if="state === 'open' && (stall.accepting_orders !== false || pending)"
+        v-if="!discoveryOnly && state === 'open' && (stall.accepting_orders !== false || pending)"
         class="btn btn-secondary"
         :disabled="busy"
         @click="accepting"
@@ -207,9 +223,9 @@ async function loadReports() {
         }}
       </button>
     </div>
-    <p v-if="stall.order_unavailable_reason || stall.accepting_orders === false" class="helper">{{ stall.order_unavailable_reason || "线上接单已暂停，已有订单继续处理。" }}</p>
+    <p v-if="!discoveryOnly && (stall.order_unavailable_reason || stall.accepting_orders === false)" class="helper">{{ stall.order_unavailable_reason || "线上接单已暂停，已有订单继续处理。" }}</p>
     <div class="secondary-actions">
-      <button v-if="hasLocation && state !== 'stale' && state !== 'closed'" :disabled="busy" @click="confirmHere"><MapPin :size="15" />我还在这里，确认当前位置</button>
+      <button v-if="!discoveryOnly && hasLocation && state !== 'stale' && state !== 'closed'" :disabled="busy" @click="confirmHere"><MapPin :size="15" />我还在这里，确认当前位置</button>
       <button
         v-if="state !== 'closed' && state !== 'paused'"
         :disabled="busy"
@@ -228,15 +244,22 @@ async function loadReports() {
         }}
       </button>
     </div>
+    <div v-if="discoveryOnly" class="discovery-preview">
+      <div><strong>顾客现在看到的</strong><p>{{ !stall.is_visible ? '资料仍待公开展示核验，暂未对顾客显示。' : state === 'closed' ? '已收摊，最近的位置仍保留。' : state === 'paused' ? '暂歇中，位置确认时间保持不变。' : state === 'stale' ? '位置待确认，请勿按旧位置直接前往。' : '正在出摊，位置来自你上面的最近确认。' }}</p></div>
+      <RouterLink v-if="stall.is_visible" :to="`/stalls/${stall.id}`" class="m-text-link" @click="session.setConsumerPreview(true)">预览学生端 <ArrowUpRight :size="16" /></RouterLink>
+      <RouterLink to="/merchant/orders?filter=active" class="m-text-link">{{ ready && unfinished.length ? `处理已有订单（${unfinished.length}）` : '查看已有订单' }} <ClipboardList :size="16" /></RouterLink>
+    </div>
+    <p v-if="discoveryOnly && relocatedOrders" class="m-info-banner" role="status">已有订单的取餐地址与当前出摊位置不同，仍保留原地址；请联系顾客确认交付安排。</p>
     <p v-if="error" class="m-alert" role="alert">{{ error }}</p>
     <MerchantQueueSettings
+      v-if="!discoveryOnly"
       :key="stall.id"
       :stall="stall"
       :orders="orders"
       :ready="ready"
       @refresh="emit('refresh')"
     />
-    <div v-if="stall.status === 'closed'" class="closing">
+    <div v-if="stall.status === 'closed' && (!discoveryOnly || unfinished.length)" class="closing">
       <ClipboardList :size="21" />
       <div>
         <strong>{{
@@ -299,6 +322,15 @@ async function loadReports() {
 .operations {
   margin-bottom: 20px;
 }
+.discovery-closes { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.discovery-closes button { background: transparent; border: 0; min-height: 44px; }
+.discovery-preview { margin-top: 16px; padding-top: 16px; border-top: 1px solid #eee2d4; display: flex; align-items: center; flex-wrap: wrap; gap: 10px 20px; }
+.discovery-preview > div { flex-basis: 100%; }
+.discovery-preview strong { font-size: 16px; }
+.discovery-preview p { margin: 6px 0 0; font-size: 14px; line-height: 1.6; color: #705a45; }
+.discovery-preview a { display: inline-flex; align-items: center; gap: 5px; min-height: 44px; font-size: 14px; }
+.discovery-operations .location { margin-bottom: 10px; font-size: 16px; }
+.discovery-operations .main-actions { margin-bottom: 16px; }
 .operations-head {
   display: flex;
   gap: 12px;
