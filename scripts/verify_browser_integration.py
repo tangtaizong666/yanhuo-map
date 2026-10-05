@@ -91,7 +91,9 @@ def main():
         settings = temporary / "pilot_integration_settings.py"
         settings.write_text(
             "from config.settings import *\n"
-            f"DATABASES = {{'default': {{'ENGINE': 'django.db.backends.sqlite3', 'NAME': {str(temporary / 'integration.sqlite3')!r}, 'OPTIONS': {{'timeout': 20}}}}}}\n"
+            # Match development transaction locking: deferred SQLite transactions
+            # cannot upgrade a read lock while the receiving heartbeat writes.
+            f"DATABASES = {{'default': {{'ENGINE': 'django.db.backends.sqlite3', 'NAME': {str(temporary / 'integration.sqlite3')!r}, 'OPTIONS': {{'timeout': 20, 'transaction_mode': 'IMMEDIATE'}}}}}}\n"
             f"MEDIA_ROOT = {str(temporary / 'media')!r}\n"
             "WECHAT_PAY_ENABLED = False\nWECHAT_PAY_CONFIG_FILE = ''\nWECHAT_PAY_PUBLIC_ORIGIN = ''\n"
             "CACHES = {'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}}\n",
@@ -120,10 +122,13 @@ def main():
         vite_script = temporary / "vite-integration.mjs"
         vite_script.write_text(
             f"import {{createServer}} from {json.dumps((FRONTEND / 'node_modules/vite/dist/node/index.js').as_uri())};\n"
+            "process.env.CI = 'true'; // Keep Vite alive if the launching terminal closes stdin.\n"
+            "process.on('exit', code => console.log('Integration Vite exit', code));\n"
             f"const server = await createServer({{root: {json.dumps(str(FRONTEND))}, configFile: {json.dumps(str(FRONTEND / 'vite.config.ts'))}, "
             f"server: {{host:'127.0.0.1', port:{FRONTEND_PORT}, strictPort:true, proxy: Object.fromEntries(['/api','/admin','/static','/media'].map(path=>[path,{{target:'http://127.0.0.1:{BACKEND_PORT}',changeOrigin:false}}]))}}}});\n"
             "await server.listen(); server.printUrls();\n"
-            "process.stdin.setEncoding('utf8'); process.stdin.resume(); process.stdin.once('data', async()=>{await server.close();process.exit(0)});\n",
+            "let input = ''; process.stdin.setEncoding('utf8'); process.stdin.resume();\n"
+            "process.stdin.on('data', async chunk => {input += chunk; if (input.split(/\\r?\\n/).slice(0, -1).includes('stop')) {await server.close();process.exit(0)}});\n",
             encoding="utf-8")
         with (artifacts / "django-server.log").open("w", encoding="utf-8") as django_log, (artifacts / "vite-server.log").open("w", encoding="utf-8") as vite_log:
             django = subprocess.Popen([sys.executable, "manage.py", "runserver", f"127.0.0.1:{BACKEND_PORT}", "--noreload"],
