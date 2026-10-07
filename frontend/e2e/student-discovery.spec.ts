@@ -228,6 +228,66 @@ async function login(page: Page) {
   await expect(page).not.toHaveURL(/\/login/);
 }
 
+test("display-only stall keeps visit information and every meal reachable without checkout prompts", async ({ page }, info) => {
+  const state = await fixture(page);
+  const offline = state.stalls[1];
+  offline.accepting_orders = false;
+  offline.products = ["available", "sold_out", "paused"].map((supply, index) => ({
+    id: 20 + index, name: `找摊餐点${index + 1}`, description: "商家填写的今日供应",
+    image: "/images/food-jianbing.jpg", price_cents: 1000, stock: 0,
+    display_only: true, display_availability: supply, is_active: true,
+  }));
+  await page.addInitScript((product) => {
+    localStorage.setItem("yanhuo-cart-v2:user:701", JSON.stringify({
+      2: [{ product, quantity: 1, portions: [{ options: {}, note: "少辣" }] }],
+    }));
+  }, offline.products[0]);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/stalls/2");
+  await expect(page.getByRole("heading", { name: "树下豆花", exact: true })).toBeVisible();
+  await page.screenshot({ path: info.outputPath("display-only-desktop.png"), fullPage: true });
+  await expect(page.locator(".pickup-aside")).toHaveCount(0);
+  await expect(page.locator(".mobile-cart")).toHaveCount(0);
+  await expect(page.locator(".stall-overview")).toContainText("线下到访");
+  await expect(page.locator(".stall-overview")).not.toContainText("线上接单暂停");
+  await expect(page.getByRole("region", { name: "到摊指引" })).not.toContainText("暂停线上接单");
+  await expect(page.locator(".product-row").first()).toContainText("今天有，到摊选购");
+  await expect(page.getByText("可选餐，提交时核对余量", { exact: true })).toHaveCount(0);
+  await expect(page.locator(".qty-control")).toHaveCount(0);
+  for (const width of [360, 390, 768, 1440]) {
+    await page.setViewportSize({ width, height: 844 });
+    await assertNoHorizontalOverflow(page);
+    if (width === 390 || width === 1440)
+      await page.screenshot({ path: info.outputPath(`display-only-${width}.png`), fullPage: true });
+  }
+  for (const item of offline.products) {
+    await page.getByRole("link", { name: `查看${item.name}详情`, exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/stalls/2/products/${item.id}$`));
+    await expect(page.getByRole("heading", { name: item.name, exact: true })).toBeVisible();
+    await page.goBack();
+    await expect(page.locator(".product-row")).toHaveCount(3);
+  }
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("yanhuo-cart-v2:user:701") || "{}")[2][0].quantity)).toBe(1);
+  expect(state.otherWrites).toEqual([]);
+  expect(state.unexpected).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test("temporarily paused transaction stall keeps pickup and its existing bag", async ({ page }) => {
+  const state = await fixture(page);
+  const paused = state.stalls[2];
+  await page.addInitScript((product) => {
+    localStorage.setItem("yanhuo-cart-v2:user:701", JSON.stringify({ 3: [{ product, quantity: 1 }] }));
+  }, paused.products[0]);
+  await page.goto("/stalls/3");
+  await expect(page.locator(".pickup-aside")).toBeVisible();
+  await expect(page.locator(".cart-preview")).toContainText("招牌餐点3");
+  await expect(page.locator(".stall-overview")).toContainText("线上接单暂停");
+  await expect(page.getByRole("link", { name: "去结算", exact: true })).toHaveCount(0);
+  expect(state.unexpected).toEqual([]);
+});
+
 test("open-first discovery includes offline stalls, offers all/follows and fits four widths", async ({
   page,
 }, info) => {

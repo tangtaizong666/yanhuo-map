@@ -181,7 +181,7 @@ onUnmounted(() => {
           />{{ stall.is_followed ? "已关注" : "关注小摊" }}
         </button>
       </section>
-      <div class="stall-layout">
+      <div class="stall-layout" :class="{ 'visit-only': !stall.transaction_enabled }">
         <div class="stall-main">
           <section class="stall-overview card">
             <div class="overview-top">
@@ -199,7 +199,7 @@ onUnmounted(() => {
               ><span class="freshness-text">{{
                 stall.can_order
                   ? "可线上点单"
-                  : stall.accepting_orders === false
+                  : stall.transaction_enabled && stall.accepting_orders === false
                     ? "线上接单暂停"
                     : "线下到访"
               }}</span>
@@ -214,7 +214,7 @@ onUnmounted(() => {
                 <ShieldCheck :size="16" /><span>{{
                   stall.can_order
                     ? "支持线上点单 · 到摊自取"
-                    : stall.accepting_orders === false
+                    : stall.transaction_enabled && stall.accepting_orders === false
                       ? "线上接单暂停 · 可到摊选购"
                       : "线下到访 · 暂未开通在线点单"
                 }}</span>
@@ -314,7 +314,7 @@ onUnmounted(() => {
                   </h3>
                   <p>{{ p.description }}</p>
                   <small v-if="productAvailable(p)"
-                    >可选餐，提交时核对余量</small
+                    >{{ stall.transaction_enabled ? "可选餐，提交时核对余量" : "今天有，到摊选购" }}</small
                   >
                   <div class="product-bottom">
                     <span class="price"
@@ -342,7 +342,7 @@ onUnmounted(() => {
                       </button>
                     </div>
                     <span v-else class="product-off">{{
-                      productUnavailableReason(p) || "暂不可点单"
+                      productUnavailableReason(p) || (stall.transaction_enabled ? "暂不可点单" : "到摊选购")
                     }}</span>
                   </div>
                 </div>
@@ -424,7 +424,7 @@ onUnmounted(() => {
             </dl>
           </section>
         </div>
-        <aside class="pickup-aside">
+        <aside v-if="stall.transaction_enabled" class="pickup-aside">
           <div class="card pickup-card">
             <span class="pickup-icon"
               ><ShoppingBag :size="24" :stroke-width="1.5"
@@ -473,7 +473,7 @@ onUnmounted(() => {
           </p>
         </aside>
       </div>
-      <div v-if="cart.count(id)" class="mobile-cart">
+      <div v-if="stall.transaction_enabled && cart.count(id)" class="mobile-cart">
         <div class="cart-bag">
           <ShoppingBag :size="22" /><b>{{ cart.count(id) }}</b>
         </div>
@@ -595,6 +595,9 @@ onUnmounted(() => {
   grid-template-columns: minmax(0, 1fr) 330px;
   gap: 27px;
   margin-top: 25px;
+}
+.stall-layout.visit-only {
+  grid-template-columns: minmax(0, 1fr);
 }
 .stall-overview {
   padding: 24px;

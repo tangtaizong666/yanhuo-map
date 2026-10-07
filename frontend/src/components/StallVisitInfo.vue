@@ -171,7 +171,7 @@ onUnmounted(reset);
         <h3>到这里，找到好味道</h3>
         <p>
           {{ statusText(stall.status)
-          }}<template v-if="stall.accepting_orders === false">
+          }}<template v-if="stall.transaction_enabled && stall.accepting_orders === false">
             · 暂停线上接单</template
           >
         </p>
