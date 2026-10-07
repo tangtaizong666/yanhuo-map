@@ -38,6 +38,9 @@ const {
   session = useSession(),
   mapNode = ref<HTMLDivElement | null>(null),
   selected = ref<Stall | null>(null),
+  selectedId = ref<number | null>(null),
+  selectionLoading = ref(false),
+  selectionError = ref(""),
   mapError = ref(""),
   mapLoading = ref(false),
   locating = ref(false);
@@ -127,22 +130,49 @@ function syncBounds() {
 }
 let selectionSequence = 0,
   selectionController: AbortController | undefined;
-async function selectStall(s: StallMap) {
+function clearSelection() {
+  selectionSequence++;
+  selectionController?.abort();
+  selectedId.value = null;
+  selected.value = null;
+  selectionLoading.value = false;
+  selectionError.value = "";
+  renderMarkers();
+}
+async function readSelectedStall(id: number) {
   selectionController?.abort();
   selectionController = new AbortController();
   const current = ++selectionSequence;
-  if (map) map.panTo([s.longitude, s.latitude]);
+  selectionLoading.value = true;
+  selectionError.value = "";
   try {
-    const detail = await api<Stall>(`/stalls/${s.id}`, {
+    const detail = await api<Stall>(`/stalls/${id}`, {
       signal: selectionController.signal,
     });
-    if (current !== selectionSequence || unmounted) return;
+    if (current !== selectionSequence || unmounted || selectedId.value !== id) return;
+    if (!stalls.value.some(stall => stall.id === id)) {
+      clearSelection();
+      return;
+    }
     selected.value = detail;
     renderMarkers();
   } catch (cause) {
-    if (current === selectionSequence && !unmounted)
-      notify((cause as Error).message, "error");
+    if (current === selectionSequence && !unmounted) {
+      selectionError.value = (cause as Error).message;
+      if (!selected.value) notify(selectionError.value, "error");
+    }
+  } finally {
+    if (current === selectionSequence && !unmounted) selectionLoading.value = false;
   }
+}
+function selectStall(s: StallMap) {
+  if (selectedId.value !== s.id) selected.value = null;
+  selectedId.value = s.id;
+  if (map) map.panTo([s.longitude, s.latitude]);
+  void readSelectedStall(s.id);
+}
+function refreshSelected() {
+  if (selectedId.value !== null) void readSelectedStall(selectedId.value);
 }
 async function findMe() {
   if (!session.config) return;
@@ -167,18 +197,22 @@ async function findMe() {
   }
 }
 watch(stalls, () => {
-  if (selected.value)
-    selected.value = stalls.value.some((s) => s.id === selected.value?.id)
-      ? {
-          ...selected.value,
-          ...stalls.value.find((s) => s.id === selected.value?.id),
-        }
-      : null;
+  // A summary cannot update arrival photos, notes or closing time. Refresh the
+  // complete selected record instead of combining different location snapshots.
+  if (selectedId.value !== null) {
+    if (stalls.value.some(s => s.id === selectedId.value)) refreshSelected();
+    else clearSelection();
+  }
   renderMarkers();
 });
+watch(
+  () => [filters.area, filters.q, filters.category, filters.status, filters.sort,
+    session.user?.id, route.query.follow],
+  clearSelection,
+  { flush: "sync" },
+);
 watch(area, (a) => {
   if (a && map) map.setZoomAndCenter(15, [a.longitude, a.latitude]);
-  selected.value = null;
 });
 onMounted(init);
 onUnmounted(() => {
@@ -353,15 +387,15 @@ onUnmounted(() => {
         <div v-if="selected" class="selected-stall">
           <img :src="selected.image" :alt="selected.name" />
           <div class="selected-info">
-            <span :class="['badge', selected.status]">{{
+            <span v-if="!selectionLoading && !selectionError" :class="['badge', selected.status]">{{
               statusText(selected.status)
             }}</span>
             <h3>{{ selected.name }}</h3>
-            <p>
+            <p v-if="!selectionLoading && !selectionError">
               {{
                 selected.can_order
                   ? "可线上点单"
-                  : selected.accepting_orders === false
+                  : selected.transaction_enabled && selected.accepting_orders === false
                     ? "线上接单暂停 · 到摊选购"
                     : "线下到访"
               }}
@@ -369,16 +403,18 @@ onUnmounted(() => {
           </div>
           <button
             class="close-selection"
-            @click="
-              selected = null;
-              renderMarkers();
-            "
+            @click="clearSelection"
             aria-label="关闭选中摊位"
           >
             <X :size="15" />
           </button>
           <div class="selected-visit">
-            <StallVisitInfo :stall="selected" compact />
+            <p v-if="selectionLoading" role="status">正在核对最新出摊信息…</p>
+            <p v-else-if="selectionError" class="error-message" role="alert">
+              暂未同步最新到摊指引，请重新核对后再出发。
+              <button class="btn btn-secondary" @click="refreshSelected">重新核对</button>
+            </p>
+            <StallVisitInfo v-else :stall="selected" compact />
           </div>
           <div class="selected-actions">
             <RouterLink :to="`/stalls/${selected.id}`" class="btn btn-primary"
