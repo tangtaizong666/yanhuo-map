@@ -202,9 +202,12 @@ async function updateStatus(
         throw new Error("请填写有效的取餐地址和经纬度。");
       const d = location.closes_at ? new Date(location.closes_at) : null;
       if (d && Number.isNaN(d.getTime())) throw new Error("收摊时间无效。");
-      if (location.address.trim() !== locationBase.address)
+      const firstLocation = !props.stall.activation?.has_location;
+      // An application address draft is not an existing confirmed location.
+      if (firstLocation || location.address.trim() !== locationBase.address)
         body.address = location.address.trim();
       if (
+        firstLocation ||
         lat !== Number(locationBase.latitude) ||
         lng !== Number(locationBase.longitude)
       )

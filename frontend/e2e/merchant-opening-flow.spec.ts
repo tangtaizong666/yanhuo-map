@@ -160,12 +160,12 @@ async function fixture(page: Page) {
         results: orders,
         next: null,
         counts: {
-          all: 1,
-          active: 1,
-          attention: 1,
+          all: orders.length,
+          active: orders.length,
+          attention: orders.length,
           pending: 0,
           pending_payment: 0,
-          preparing: 1,
+          preparing: orders.length,
           ready: 0,
           followup: 0,
           completed: 0,
@@ -185,8 +185,21 @@ async function fixture(page: Page) {
     if (path === "/merchant/stalls/978/status") {
       const body = request.postDataJSON();
       state.writes.push({ path, body });
+      if (
+        !stall.activation.has_location &&
+        ["address", "latitude", "longitude"].some((field) => !(field in body))
+      )
+        return route.fulfill({
+          status: 400,
+          json: {
+            code: "location_required",
+            detail: "首次设置位置请填写取餐地址和完整经纬度。",
+          },
+        });
       const moved = body.address != null && body.address !== stall.address;
       Object.assign(stall, body);
+      if (["address", "latitude", "longitude"].every((field) => field in body))
+        stall.activation.has_location = true;
       if (body.status) stall.session_status = body.status;
       if (body.confirm_location) {
         stall.status = stall.session_status;
@@ -298,6 +311,72 @@ test("missing and placeholder locations lead to the location editor without an o
   }
   expect(state.unexpected).toEqual([]);
 });
+
+for (const width of [390, 1440]) {
+  test(`first location keeps the approved address draft and sends complete coordinates at ${width}px`, async ({
+    page,
+  }, info) => {
+    const state = await fixture(page);
+    Object.assign(state.stall, {
+      status: "closed",
+      session_status: null,
+      business_session_id: null,
+      last_confirmed_at: null,
+      closes_at: null,
+      transaction_enabled: false,
+      can_order: false,
+      address: "位置尚未确认",
+      latitude: null,
+      longitude: null,
+      location_draft_address: "南门入口左边第二个橙色棚",
+      activation: { has_location: false, verified: false },
+    });
+    state.orders.length = 0;
+    await page.setViewportSize({ width, height: width < 600 ? 844 : 1000 });
+    await page.goto("/merchant/store#location");
+    await expect(page.getByLabel("详细取餐地址")).toHaveValue(
+      state.stall.location_draft_address,
+    );
+    // The approved application address is already correct; only coordinates change.
+    await page.getByText("手动填写地图坐标", { exact: true }).click();
+    await page.getByLabel("纬度（高德坐标）", { exact: true }).fill("30");
+    await page.getByLabel("经度（高德坐标）", { exact: true }).fill("120");
+    const response = page.waitForResponse((value) =>
+      value.url().endsWith("/merchant/stalls/978/status") &&
+      value.request().method() === "POST",
+    );
+    await page.getByRole("button", { name: "确认并保存位置与时间", exact: true }).click();
+    const saved = await response;
+    await info.attach("first-location-request", {
+      body: JSON.stringify({ status: saved.status(), writes: state.writes }, null, 2),
+      contentType: "application/json",
+    });
+    await page.screenshot({
+      path: info.outputPath(`first-location-save-${width}.png`),
+      animations: "disabled",
+      fullPage: true,
+    });
+    expect(state.writes).toHaveLength(1);
+    expect(state.writes[0]!.body).toEqual({
+      status: "closed",
+      confirm_location: true,
+      address: state.stall.location_draft_address,
+      latitude: 30,
+      longitude: 120,
+    });
+    expect(saved.status()).toBe(200);
+    await expect(page.getByText("取餐位置和收摊时间已保存", { exact: true })).toBeVisible();
+    await assertNoHorizontalOverflow(page);
+    await page.reload();
+    await expect(page.getByLabel("详细取餐地址")).toHaveValue(state.stall.address);
+    await page.getByRole("button", { name: "在老地方开摊", exact: true }).click();
+    await expect.poll(() => state.writes.length).toBe(2);
+    expect(state.writes[1]!.body).toEqual({ status: "open", confirm_location: true });
+    expect(state.stall.status).toBe("open");
+    expect(state.stall.transaction_enabled).toBe(false);
+    expect(state.unexpected).toEqual([]);
+  });
+}
 
 test("daily store controls stay prominent while mounted settings are collapsed at four widths", async ({
   page,
