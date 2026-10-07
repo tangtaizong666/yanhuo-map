@@ -106,14 +106,8 @@ onUnmounted(() => {
           ><span>{{ statusText(stall.status) }}</span>
         </div>
         <p><MapPin :size="13" />{{ stall.address || stall.area_name }}</p>
-        <p>
-          {{
-            stall.usual_hours
-              ? `通常 ${stall.usual_hours} · 商家计划`
-              : "商家尚未填写通常出摊时段"
-          }}
-        </p>
-        <small>查看小摊，确认再出发<ArrowUpRight :size="14" /></small>
+        <p v-if="stall.usual_hours">通常 {{ stall.usual_hours }} · 商家计划</p>
+        <ArrowUpRight class="resting-arrow" :size="18" aria-hidden="true" />
       </RouterLink>
     </div>
     <div class="empty-actions">
@@ -166,7 +160,8 @@ onUnmounted(() => {
   margin-top: 22px;
 }
 .resting-stalls a {
-  padding: 18px;
+  position: relative;
+  padding: 16px 38px 16px 16px;
   border: 1px solid #ede1d0;
   border-radius: 14px;
   background: #fffaf1;
@@ -189,11 +184,10 @@ onUnmounted(() => {
   margin-top: 8px;
   overflow-wrap: anywhere;
 }
-.resting-stalls small {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 44px;
+.resting-arrow {
+  position: absolute;
+  right: 12px;
+  top: 18px;
   color: #a9531d;
 }
 .resting-stalls svg {
@@ -201,19 +195,46 @@ onUnmounted(() => {
 }
 @media (max-width: 700px) {
   .discovery-empty {
-    padding: 20px;
+    padding: 18px;
   }
   .empty-intro {
     gap: 12px;
   }
   .empty-symbol {
-    padding: 10px;
+    padding: 7px;
+  }
+  .empty-symbol svg {
+    width: 21px;
+    height: 21px;
   }
   .empty-intro h3 {
     font-size: 18px;
   }
   .resting-stalls {
     grid-template-columns: 1fr;
+    gap: 0;
+    margin-top: 14px;
+  }
+  .resting-stalls a {
+    padding: 14px 26px 14px 0;
+    border: 0;
+    border-top: 1px solid var(--line);
+    border-radius: 0;
+    background: none;
+  }
+  .resting-stalls strong {
+    font-size: 16px;
+  }
+  .resting-stalls p {
+    margin-top: 4px;
+    font-size: 14px;
+  }
+  .resting-arrow {
+    right: 0;
+    top: 16px;
+  }
+  .empty-actions {
+    margin-top: 12px;
   }
   .empty-actions .btn {
     flex: 1;

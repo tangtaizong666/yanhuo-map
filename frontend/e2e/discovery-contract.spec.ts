@@ -136,6 +136,7 @@ async function fixture(page: Page) {
     if (path === "/orders/active-summary")
       return route.fulfill({
         json: {
+          user_id: user.id,
           orders: [],
           count: 0,
           status_counts: {},
@@ -233,11 +234,11 @@ test("lightweight map explicitly reports truncation and loads details only after
   await page.goto("/map");
   await expect(
     page.getByText(
-      "当前范围摊位较多，仅展示前 200 个。请放大地图或选择校园区域缩小范围。",
+      "当前范围摊位较多，仅展示前 200 个。请选择校园区域缩小范围。",
     ),
   ).toBeVisible();
   expect(requested).not.toContain("/stalls/1");
-  await page.getByRole("button", { name: "在地图中查看", exact: true }).click();
+  await page.getByRole("button", { name: "查看位置与路线", exact: true }).click();
   await expect(page.getByText("东门蓝色招牌")).toBeVisible();
   expect(requested).toContain("/stalls/1");
 });
@@ -245,7 +246,7 @@ test("lightweight map explicitly reports truncation and loads details only after
 test("selected map refresh replaces the entire arrival guidance after relocation", async ({ page }, info) => {
   const state = await selectedMapFixture(page);
   await page.goto("/map");
-  await page.getByRole("button", { name: "在地图中查看", exact: true }).click();
+  await page.getByRole("button", { name: "查看位置与路线", exact: true }).click();
   await expect(page.getByText("东门蓝色招牌", { exact: true })).toBeVisible();
   const selected = page.locator(".selected-stall");
   await expect(selected.locator(".selected-info p")).toHaveText("线下到访");
@@ -261,11 +262,11 @@ test("selected map refresh replaces the entire arrival guidance after relocation
   try {
     await page.getByRole("button", { name: "刷新摊位", exact: true }).click();
     await expect(selected.getByRole("status")).toHaveText("正在核对最新出摊信息…");
-    await expect(selected.locator(".stall-visit")).toHaveCount(0);
+    await expect(selected.locator(".stall-visit")).toBeHidden();
     await expect(selected.getByRole("link", { name: "查看路线", exact: true })).toHaveCount(0);
     release();
     await expect(selected.getByRole("alert")).toContainText("暂未同步最新到摊指引");
-    await expect(selected.locator(".stall-visit")).toHaveCount(0);
+    await expect(selected.locator(".stall-visit")).toBeHidden();
     await expect(selected.getByRole("link", { name: "查看路线", exact: true })).toHaveCount(0);
     state.beforeDetail = null;
     state.detailStatus = 200;
@@ -288,7 +289,7 @@ for (const dismiss of ["filter", "close"] as const) {
   test(`late map detail cannot restore a selection after ${dismiss}`, async ({ page }, info) => {
     const state = await selectedMapFixture(page);
     await page.goto("/map");
-    await page.getByRole("button", { name: "在地图中查看", exact: true }).click();
+    await page.getByRole("button", { name: "查看位置与路线", exact: true }).click();
     await expect(page.getByText("东门蓝色招牌", { exact: true })).toBeVisible();
     let release!: () => void, started!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve });
@@ -331,6 +332,8 @@ test("all dishes share a ten-portion cart allowance", async ({ page }) => {
     .getByRole("button", { name: /加入餐袋/ })
     .first()
     .click();
+  await expect(page.locator(".dish-purchase-panel").getByRole("link", { name: /去结算/ }).first()).toBeVisible();
+  await page.reload();
   await expect(
     page
       .getByRole("button", { name: "每单合计最多 10 份", exact: true })
@@ -355,7 +358,7 @@ test("discovery and map remain readable at four supported widths", async ({
     });
     await page.goto("/map");
     await expect(
-      page.getByRole("button", { name: "在地图中查看", exact: true }),
+      page.getByRole("button", { name: "查看位置与路线", exact: true }),
     ).toBeVisible();
     await assertNoHorizontalOverflow(page);
   }

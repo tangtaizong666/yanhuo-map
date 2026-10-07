@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import {
   Search,
   MapPin,
@@ -23,7 +23,7 @@ import StallCard from "../components/StallCard.vue";
 import DiscoveryFilters from "../components/DiscoveryFilters.vue";
 import StallVisitInfo from "../components/StallVisitInfo.vue";
 import StallShare from "../components/StallShare.vue";
-const route = useRoute();
+const route = useRoute(), router = useRouter();
 const bounds = ref("");
 const {
     stalls: allStalls,
@@ -37,6 +37,9 @@ const {
   } = useStalls<StallMap>("map", bounds),
   session = useSession(),
   mapNode = ref<HTMLDivElement | null>(null),
+  selectedPanel = ref<HTMLDivElement | null>(null),
+  selectedVisit = ref<HTMLDivElement | null>(null),
+  visitLoadingHeight = ref(0),
   selected = ref<Stall | null>(null),
   selectedId = ref<number | null>(null),
   selectionLoading = ref(false),
@@ -130,7 +133,13 @@ function syncBounds() {
 }
 let selectionSequence = 0,
   selectionController: AbortController | undefined;
+let selectionTrigger: HTMLElement | undefined;
+let selectionNeedsReveal = false;
+let selectionFocus: HTMLElement | null = null;
 function clearSelection() {
+  selectionNeedsReveal = false;
+  selectionFocus = null;
+  visitLoadingHeight.value = 0;
   selectionSequence++;
   selectionController?.abort();
   selectedId.value = null;
@@ -143,6 +152,13 @@ async function readSelectedStall(id: number) {
   selectionController?.abort();
   selectionController = new AbortController();
   const current = ++selectionSequence;
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && selectedVisit.value?.contains(active)) {
+    selectionFocus = active;
+  } else if (active !== document.body) {
+    selectionFocus = null;
+  }
+  if (!selectionLoading.value) visitLoadingHeight.value = selectedVisit.value?.getBoundingClientRect().height || 0;
   selectionLoading.value = true;
   selectionError.value = "";
   try {
@@ -164,12 +180,44 @@ async function readSelectedStall(id: number) {
   } finally {
     if (current === selectionSequence && !unmounted) selectionLoading.value = false;
   }
+  // A refresh can replace the first request without consuming the user's choice.
+  // Once shown, ordinary background updates keep reading position and focus.
+  if (selectionNeedsReveal && mapError.value && !selectionError.value &&
+      current === selectionSequence && !unmounted) {
+    await nextTick();
+    if (current !== selectionSequence || unmounted || !selectedPanel.value) return;
+    selectionNeedsReveal = false;
+    selectedPanel.value?.focus({ preventScroll: true });
+    selectedPanel.value?.scrollIntoView({ block: "start" });
+  } else if (selectionFocus && current === selectionSequence && !unmounted) {
+    await nextTick();
+    if (current !== selectionSequence || unmounted) return;
+    const target = selectionFocus;
+    selectionFocus = null;
+    // Hiding stale guidance can drop keyboard focus to the document. Restore it
+    // only if the user has not moved to another control while the read was pending.
+    if (document.activeElement === document.body) {
+      (target?.isConnected && target.getClientRects().length ? target : selectedPanel.value)?.focus({ preventScroll: true });
+    }
+  }
 }
-function selectStall(s: StallMap) {
+function selectStall(s: StallMap, event?: Event) {
+  selectionTrigger = event?.currentTarget instanceof HTMLElement ? event.currentTarget : undefined;
+  selectionNeedsReveal = true;
   if (selectedId.value !== s.id) selected.value = null;
   selectedId.value = s.id;
   if (map) map.panTo([s.longitude, s.latitude]);
   void readSelectedStall(s.id);
+}
+function closeSelection() {
+  clearSelection();
+  if (selectionTrigger?.isConnected) selectionTrigger.focus();
+}
+function showAllStalls() {
+  filters.q = "";
+  filters.category = "";
+  filters.status = "";
+  void router.push("/map");
 }
 function refreshSelected() {
   if (selectedId.value !== null) void readSelectedStall(selectedId.value);
@@ -208,7 +256,10 @@ watch(stalls, () => {
 watch(
   () => [filters.area, filters.q, filters.category, filters.status, filters.sort,
     session.user?.id, route.query.follow],
-  clearSelection,
+  (current, previous) => {
+    if (previous && current.every((value, index) => Object.is(value, previous[index]))) return;
+    clearSelection();
+  },
   { flush: "sync" },
 );
 watch(area, (a) => {
@@ -229,6 +280,7 @@ onUnmounted(() => {
         <h1>循着烟火，找到好味。</h1>
       </div>
       <button
+        v-if="session.config?.amap_key"
         class="btn btn-ghost locate-top"
         :disabled="locating"
         @click="findMe"
@@ -236,7 +288,7 @@ onUnmounted(() => {
         <LocateFixed :size="16" />{{ locating ? "正在定位" : "定位我的位置" }}
       </button>
     </div>
-    <div class="map-layout">
+    <div class="map-layout" :class="{ 'map-fallback': !!mapError }">
       <aside class="map-sidebar">
         <div class="map-list-controls">
           <div class="search-box">
@@ -275,7 +327,7 @@ onUnmounted(() => {
         <div class="map-results">
           <p v-if="truncated" class="error-message" role="status">
             当前范围摊位较多，仅展示前 200
-            个。请放大地图或选择校园区域缩小范围。
+            个。{{ mapError ? "请选择校园区域缩小范围。" : "请放大地图或选择校园区域缩小范围。" }}
           </p>
           <div v-if="error" class="error-message" role="status">
             暂未同步最新状态。{{
@@ -304,6 +356,7 @@ onUnmounted(() => {
           <div v-else-if="!stalls.length" class="empty-state">
             <Search :size="26" />
             <p>换个条件，找找其他好味道。</p>
+            <button v-if="filters.q || filters.category || filters.status || followOnly" class="btn btn-secondary" @click="showAllStalls">看看全部摊位</button>
           </div>
           <div
             v-for="s in stalls"
@@ -329,9 +382,10 @@ onUnmounted(() => {
               <div class="map-summary-actions">
                 <button
                   class="btn btn-secondary map-select"
-                  @click="selectStall(s)"
+                  :disabled="selectedId === s.id && selectionLoading"
+                  @click="selectStall(s, $event)"
                 >
-                  {{ selected?.id === s.id ? "已选中" : "在地图中查看" }}
+                  {{ selectedId === s.id && selectionLoading ? "正在核对…" : selected?.id === s.id ? "已选中" : mapError ? "查看位置与路线" : "在地图中查看" }}
                 </button>
                 <button
                   class="btn btn-ghost"
@@ -349,22 +403,17 @@ onUnmounted(() => {
       <section class="map-canvas" aria-label="摊位地图">
         <div ref="mapNode" class="map-container"></div>
         <div v-if="mapError" class="map-unavailable">
-          <div class="map-error-icon">
-            <MapIcon :size="37" :stroke-width="1.2" />
+          <MapIcon :size="23" aria-hidden="true" />
+          <div>
+            <h2>{{ mapError }}</h2>
+            <p>可从列表查看摊位地址与到摊指引。</p>
           </div>
-          <p class="eyebrow">LET'S FIND YOUR NEXT BITE</p>
-          <h2>{{ mapError }}</h2>
-          <p>
-            好味道还在这里。<br />先从摊位列表看看位置，或选择另一个校园区域。
-          </p>
           <button
             v-if="session.config?.amap_key"
             class="btn btn-secondary"
             @click="init"
           >
             <RefreshCw :size="15" />重新加载地图</button
-          ><span v-if="session.config?.demo_mode" class="map-config-hint"
-            >体验环境未配置地图密钥，不展示模拟地图</span
           >
         </div>
         <div v-if="mapLoading" class="map-loader">
@@ -377,6 +426,7 @@ onUnmounted(() => {
           >暂歇 / 待确认
         </div>
         <button
+          v-if="session.config?.amap_key"
           class="map-location icon-button"
           :disabled="locating"
           @click="findMe"
@@ -384,7 +434,7 @@ onUnmounted(() => {
         >
           <LocateFixed :size="20" />
         </button>
-        <div v-if="selected" class="selected-stall">
+        <div v-if="selected" ref="selectedPanel" class="selected-stall" tabindex="-1" role="region" :aria-label="`${selected.name}的位置与路线`">
           <img :src="selected.image" :alt="selected.name" />
           <div class="selected-info">
             <span v-if="!selectionLoading && !selectionError" :class="['badge', selected.status]">{{
@@ -403,18 +453,20 @@ onUnmounted(() => {
           </div>
           <button
             class="close-selection"
-            @click="clearSelection"
+            @click="closeSelection"
             aria-label="关闭选中摊位"
           >
             <X :size="15" />
           </button>
-          <div class="selected-visit">
+          <div ref="selectedVisit" class="selected-visit" :style="{ minHeight: selectionLoading ? `${visitLoadingHeight}px` : undefined }">
             <p v-if="selectionLoading" role="status">正在核对最新出摊信息…</p>
             <p v-else-if="selectionError" class="error-message" role="alert">
               暂未同步最新到摊指引，请重新核对后再出发。
               <button class="btn btn-secondary" @click="refreshSelected">重新核对</button>
             </p>
-            <StallVisitInfo v-else :stall="selected" compact />
+            <div v-show="!selectionLoading && !selectionError">
+              <StallVisitInfo :key="selected.id" :stall="selected" compact />
+            </div>
           </div>
           <div class="selected-actions">
             <RouterLink :to="`/stalls/${selected.id}`" class="btn btn-primary"
@@ -508,7 +560,7 @@ onUnmounted(() => {
   color: #8a7964;
   font-size: 11px;
   margin-left: auto;
-  min-height: 36px;
+  min-height: 44px;
   max-width: 88px;
 }
 .map-result-count {
@@ -520,8 +572,8 @@ onUnmounted(() => {
   margin-top: 15px;
 }
 .map-result-count button {
-  width: 30px;
-  height: 26px;
+  width: 44px;
+  height: 44px;
 }
 .map-results {
   overflow: auto;
@@ -545,11 +597,10 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 10px;
+  font-size: 13px;
   color: #a9794a;
-  margin: 0 12px 0 auto;
-  min-height: 30px;
-  padding-bottom: 8px;
+  margin: 0 auto 0 0;
+  min-height: 44px;
 }
 .map-canvas {
   position: relative;
@@ -564,56 +615,74 @@ onUnmounted(() => {
   inset: 0;
 }
 .map-unavailable {
-  position: absolute;
-  inset: 0;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  text-align: center;
-  padding: 35px;
-  background:
-    radial-gradient(ellipse at 30% 35%, #eee6d1aa, transparent 65%), #f1f0e7;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 20px;
+  color: #75624f;
 }
-.map-error-icon {
-  width: 86px;
-  height: 86px;
-  background: #fffaf0;
-  border-radius: 27px;
-  border: 1px solid #e9ddc4;
-  display: grid;
-  place-items: center;
-  color: #b49767;
-  margin-bottom: 23px;
-  transform: rotate(-6deg);
-}
-.map-error-icon svg {
-  transform: rotate(6deg);
-}
-.map-unavailable .eyebrow {
-  font-size: 8px;
-  color: #ab9671;
+.map-unavailable > svg {
+  flex-shrink: 0;
+  margin-top: 3px;
 }
 .map-unavailable h2 {
-  font-size: 19px;
-  color: #73684f;
+  font-size: 17px;
+  margin: 0;
 }
-.map-unavailable p:not(.eyebrow) {
-  font-size: 12px;
-  color: #9a8c70;
-  margin-top: 13px;
-  line-height: 2.1;
+.map-unavailable p {
+  font-size: 14px;
+  margin: 5px 0 0;
+  line-height: 1.7;
 }
 .map-unavailable .btn {
-  margin-top: 16px;
+  margin-left: auto;
 }
-.map-config-hint {
-  font-size: 10px;
-  color: #b0a489;
-  border: 1px solid #dfd8c5;
-  padding: 6px 11px;
-  border-radius: 6px;
-  margin-top: 22px;
+.map-fallback {
+  display: flex;
+  flex-direction: column-reverse;
+  height: auto;
+  min-height: 0;
+}
+.map-fallback .map-sidebar {
+  border: 0;
+  padding: 0 6px;
+}
+.map-fallback .map-canvas {
+  min-height: 0;
+  height: auto;
+  background: #fffaf1;
+}
+.map-fallback .map-container {
+  display: none;
+}
+.map-fallback .map-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  align-items: start;
+  gap: 12px;
+  max-height: none;
+}
+.map-fallback .map-results > .empty-state,
+.map-fallback .map-results > .error-message {
+  grid-column: 1 / -1;
+}
+.map-fallback .map-results > .empty-state {
+  min-height: 0;
+  padding: 32px 20px;
+}
+.map-fallback .selected-stall {
+  position: relative;
+  inset: auto;
+  max-height: none;
+  overflow: visible;
+  width: calc(100% - 32px);
+  max-width: 760px;
+  margin: 0 auto 16px;
+  scroll-margin-top: 90px;
+}
+.map-fallback .selected-stall :deep(.visit-photo img) {
+  object-fit: contain;
+  background: #f6efe4;
 }
 .map-location {
   position: absolute;
@@ -786,27 +855,25 @@ onUnmounted(() => {
     background: #fff;
   }
   .map-unavailable {
-    padding: 25px;
+    padding: 16px;
+    flex-wrap: wrap;
   }
-  .map-error-icon {
-    width: 59px;
-    height: 59px;
-    border-radius: 18px;
-    margin-bottom: 15px;
+  .map-unavailable > div {
+    flex: 1;
+    min-width: 180px;
   }
-  .map-error-icon svg {
-    width: 28px;
+  .map-fallback {
+    min-height: 0;
   }
-  .map-unavailable h2 {
-    font-size: 17px;
+  .map-fallback .map-results {
+    max-height: none;
   }
-  .map-unavailable p:not(.eyebrow) {
-    font-size: 11px;
-    margin-top: 10px;
+  .map-fallback .map-sidebar {
+    padding: 0;
   }
-  .map-config-hint {
-    font-size: 9px;
-    margin-top: 15px;
+  .map-fallback .selected-stall {
+    width: calc(100% - 20px);
+    margin: 0 10px 10px;
   }
   .selected-stall {
     left: 12px;
@@ -832,7 +899,7 @@ onUnmounted(() => {
     display: none;
   }
   .selected-actions .btn {
-    min-height: 33px;
+    min-height: 44px;
   }
   .map-footnote {
     font-size: 10px;
@@ -846,8 +913,8 @@ onUnmounted(() => {
     bottom: auto;
     top: 12px;
     right: 12px;
-    width: 37px;
-    height: 37px;
+    width: 44px;
+    height: 44px;
   }
 }
 </style>

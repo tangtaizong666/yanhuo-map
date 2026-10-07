@@ -603,7 +603,7 @@ test("stall and fallback map expose real arrival notes, dual status and four-wid
   await page
     .locator(".map-list-item")
     .filter({ hasText: "晚课烤串" })
-    .getByRole("button", { name: "在地图中查看" })
+    .getByRole("button", { name: "查看位置与路线" })
     .click();
   await expect(page.locator(".selected-stall")).toContainText(
     "绿色棚顶，靠近南门便利店",

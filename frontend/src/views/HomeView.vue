@@ -12,7 +12,6 @@ import {
   Sandwich,
   IceCreamBowl,
   Heart,
-  Leaf,
   Compass,
   Check,
   ArrowRight,
@@ -339,8 +338,8 @@ onMounted(() =>
       <div v-else-if="meals.length" class="dish-grid">
         <DishCard v-for="item in meals" :key="item.product.id" v-bind="item" />
       </div>
-      <div v-else class="empty-state card">
-        <Utensils :size="28" />
+      <div v-else class="empty-state card meal-empty">
+        <Utensils :size="24" />
         <h3>还没有找到这道餐点</h3>
         <p>
           {{
@@ -565,16 +564,6 @@ onMounted(() =>
         />
       </div>
     </section>
-    <section class="home-bottom-note">
-      <span class="note-icon"><Leaf :size="24" :stroke-width="1.3" /></span>
-      <div>
-        <h3>小摊有人情，好味不打烊。</h3>
-        <p>关注你喜欢的小摊，下次想吃，就来这里找它。</p>
-      </div>
-      <RouterLink to="/?follow=1"
-        >看看我的关注 <ArrowUpRight :size="17"
-      /></RouterLink>
-    </section>
     <p v-if="session.config?.demo_mode" class="image-credit-note">
       美食与夜市照片为示例配图，不代表虚构摊位实拍。<a
         href="/images/ATTRIBUTION.md"
@@ -592,6 +581,11 @@ onMounted(() =>
   </div>
 </template>
 <style scoped>
+.meal-empty {
+  min-height: 0;
+  padding: 22px;
+  gap: 8px;
+}
 .discovery-stale {
   display: flex;
   align-items: center;
@@ -969,42 +963,6 @@ onMounted(() =>
   color: #a77b50;
   padding-bottom: 4px;
 }
-.home-bottom-note {
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-  display: flex;
-  align-items: center;
-  gap: 17px;
-  padding: 24px 4px;
-  margin-top: 40px;
-}
-.note-icon {
-  width: 46px;
-  height: 46px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  background: #edf0e7;
-  color: #7e8a62;
-}
-.home-bottom-note h3 {
-  font-family: "Noto Serif SC", serif;
-  font-size: 16px;
-  color: #6e624e;
-}
-.home-bottom-note p {
-  font-size: 12px;
-  color: #a09078;
-  margin-top: 4px;
-}
-.home-bottom-note > a {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 12px;
-  color: #96724e;
-}
 .image-credit-note {
   font-size: 10px;
   color: #a89a89;
@@ -1218,26 +1176,6 @@ onMounted(() =>
   .map-shortcut {
     font-size: 12px;
     gap: 3px;
-  }
-  .home-bottom-note {
-    margin-top: 27px;
-    padding: 21px 0;
-    gap: 11px;
-    flex-wrap: wrap;
-  }
-  .home-bottom-note h3 {
-    font-size: 14px;
-  }
-  .home-bottom-note p {
-    font-size: 12px;
-  }
-  .note-icon {
-    width: 37px;
-    height: 37px;
-  }
-  .home-bottom-note > a {
-    font-size: 11px;
-    margin-left: 48px;
   }
   .image-credit-note {
     font-size: 12px;
