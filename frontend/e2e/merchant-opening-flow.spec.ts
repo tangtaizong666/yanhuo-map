@@ -484,6 +484,58 @@ test("resume and pause preserve position time and unfinished orders; explicit st
   expect(state.unexpected).toEqual([]);
 });
 
+test("compact receiving blockers explain the server result without changing location or existing orders", async ({ page }, info) => {
+  const state = await fixture(page);
+  const confirmed = state.stall.last_confirmed_at;
+  const originalOrders = JSON.stringify(state.orders);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/merchant");
+  const business = page.getByRole("region", { name: "营业与接单", exact: true });
+  await expect(business).toContainText("营业中");
+  await expect(business.locator(".compact-order-reason")).toHaveCount(0);
+  await page.getByRole("group", { name: "订单阶段" }).getByRole("button", { name: /制作中/ }).click();
+  for (const reason of [
+    "本场线上接单已截止，已下订单仍正常处理。",
+    "正在处理的订单已达上限，请稍后再试；出餐后会自动恢复名额。",
+  ]) {
+    state.stall.can_order = false;
+    state.stall.order_unavailable_reason = reason;
+    await page.getByRole("button", { name: "刷新工作台", exact: true }).click();
+    await expect(business).toContainText("出摊中 · 暂不接新单");
+    await expect(business.getByRole("status")).toHaveText(reason);
+    await expect(page.getByRole("button", { name: "做好了", exact: true })).toBeEnabled();
+  }
+  for (const width of [360, 390, 768, 1440]) {
+    await page.setViewportSize({ width, height: width <= 390 ? 844 : 900 });
+    await assertNoHorizontalOverflow(page);
+    await assertReachable(page.getByRole("button", { name: "做好了", exact: true }), page);
+    await page.screenshot({ path: info.outputPath(`merchant-receiving-blocked-${width}.png`), fullPage: true });
+  }
+  state.stall.accepting_orders = false;
+  state.stall.order_unavailable_reason = "商家正在忙碌，已暂停接收新订单；仍可查看摊位。";
+  await page.getByRole("button", { name: "刷新工作台", exact: true }).click();
+  await expect(business).toContainText("已暂停新单");
+  await expect(business.getByRole("button", { name: "恢复接单", exact: true })).toBeVisible();
+  for (const [status, label] of [["paused", "暂歇中"], ["closed", "已收摊"], ["stale", "位置过期，暂停新单"]]) {
+    state.stall.status = status;
+    await page.getByRole("button", { name: "刷新工作台", exact: true }).click();
+    await expect(business).toContainText(label!);
+    await expect(business.locator(".compact-order-reason")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "做好了", exact: true })).toBeEnabled();
+  }
+  state.stall.status = "open";
+  state.stall.can_order = true;
+  state.stall.accepting_orders = true;
+  state.stall.order_unavailable_reason = "";
+  await page.getByRole("button", { name: "刷新工作台", exact: true }).click();
+  await expect(business).toContainText("营业中");
+  await expect(business.locator(".compact-order-reason")).toHaveCount(0);
+  expect(state.writes).toEqual([]);
+  expect(state.stall.last_confirmed_at).toBe(confirmed);
+  expect(JSON.stringify(state.orders)).toBe(originalOrders);
+  expect(state.unexpected).toEqual([]);
+});
+
 test("collapsed settings retain unsaved capacity and profile drafts across a background refresh", async ({
   page,
 }) => {

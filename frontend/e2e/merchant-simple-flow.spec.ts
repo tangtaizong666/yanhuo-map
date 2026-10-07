@@ -54,6 +54,7 @@ async function fixture(
     accepting_orders: true,
     transaction_enabled: true,
     is_visible: true,
+    activation: { has_location: true, has_sellable_products: true },
     can_order: true,
     contact_phone: "",
     services: { mode: "live" },
@@ -445,6 +446,43 @@ test("cancellations and unresolved finances stay visible across all queues", asy
   await expect(
     page.locator(".merchant-order").filter({ hasText: "REFUND-ORDER" }),
   ).toContainText("退款异常");
+  expect(state.unexpected).toEqual([]);
+});
+
+test("history opens its tools and collapsed search filters remain visible without clearing the order stage", async ({ page }, info) => {
+  const state = await fixture(page);
+  state.orders.push(
+    { ...state.orders[0], id: "past-pickup", number: "PAST-PICKUP", status: "completed" },
+    { ...state.orders[0], id: "past-delivery", number: "PAST-DELIVERY", status: "completed", fulfillment_type: "delivery", payment_method: "wechat", payment_status: "paid", delivery_point_name: "南门交接点", delivery_point_address: "南门橙色棚旁" },
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/merchant/more");
+  await page.getByRole("link", { name: /历史订单/ }).click();
+  const tools = page.getByRole("button", { name: "查找 / 历史", exact: true });
+  await expect(tools).toHaveAttribute("aria-expanded", "true");
+  await page.getByRole("group", { name: "其他订单记录" }).getByRole("button", { name: /^已完成/ }).click();
+  await expect(page.locator(".merchant-order")).toHaveCount(2);
+  await page.getByRole("searchbox", { name: "搜索订单号" }).fill("PAST-DELIVERY");
+  await page.getByRole("group", { name: "取餐方式筛选" }).getByRole("button", { name: "商家自配送", exact: true }).click();
+  await tools.click();
+  const summary = page.getByRole("group", { name: "当前订单筛选", exact: true });
+  await expect(summary).toContainText("订单号含“PAST-DELIVERY”");
+  await expect(summary).toContainText("商家自配送");
+  await expect(page.locator(".merchant-order")).toHaveCount(1);
+  for (const width of [360, 390, 768, 1440]) {
+    await page.setViewportSize({ width, height: width <= 390 ? 844 : 900 });
+    await assertNoHorizontalOverflow(page);
+    await expect(summary.getByRole("button", { name: "清除筛选" })).toBeVisible();
+    await page.screenshot({ path: info.outputPath(`merchant-collapsed-filters-${width}.png`), fullPage: true });
+  }
+  await summary.getByRole("button", { name: "清除筛选", exact: true }).click();
+  await expect(summary).toHaveCount(0);
+  await expect(tools).toBeFocused();
+  await expect(tools).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator(".m-simple-list-label")).toContainText("已完成");
+  await expect(page.locator(".merchant-order")).toHaveCount(2);
+  await expect(page.locator(".merchant-order").filter({ hasText: "SIMPLE-ORDER" })).toHaveCount(0);
+  expect(state.actions).toEqual([]);
   expect(state.unexpected).toEqual([]);
 });
 

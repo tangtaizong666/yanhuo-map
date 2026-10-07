@@ -257,7 +257,9 @@ test("checkout food links retain optional fields in memory and logout clears the
   await page
     .getByRole("link", { name: `查看${product.name}详情`, exact: true })
     .click();
-  await page.getByRole("link", { name: "返回小摊", exact: true }).click();
+  await page.getByRole("link", { name: "返回订单确认", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/checkout/${stall.id}$`));
+  await page.getByRole("link", { name: "继续挑选", exact: true }).click();
   await page
     .getByRole("link", { name: `查看餐袋中${product.name}详情`, exact: true })
     .click();

@@ -47,6 +47,11 @@ const hasLocation = computed(
 );
 const pending = computed(() => props.orders.filter(acceptReady).length);
 const state = computed(() => props.stall.status);
+const compactBlockedReason = computed(() =>
+  state.value === "open" && props.stall.can_order === false
+    ? props.stall.order_unavailable_reason || "当前暂不能接收新订单，请查看营业设置。"
+    : "",
+);
 // This value is validated by the server, independent of the phone's clock.
 const openingClosesAt = computed(() => state.value === "closed" ? props.stall.opening_closes_at || null : null);
 async function status(value: string, confirmLocation = false) {
@@ -135,12 +140,13 @@ async function loadReports() {
 </script>
 <template>
   <section v-if="compact" class="m-business-compact" aria-label="营业与接单">
-    <div><strong>{{ stall.name }}</strong><span :class="{ 'is-open': state === 'open' && stall.accepting_orders !== false, 'is-paused': state !== 'open' || stall.accepting_orders === false }">{{ state === 'stale' ? '位置过期，暂停新单' : state === 'closed' ? '已收摊' : state === 'paused' ? '暂歇中' : stall.accepting_orders === false ? '已暂停新单' : '营业中' }}</span></div>
+    <div><strong>{{ stall.name }}</strong><span :class="{ 'is-open': state === 'open' && stall.accepting_orders !== false && !compactBlockedReason, 'is-paused': state !== 'open' || stall.accepting_orders === false || !!compactBlockedReason }">{{ state === 'stale' ? '位置过期，暂停新单' : state === 'closed' ? '已收摊' : state === 'paused' ? '暂歇中' : stall.accepting_orders === false ? '已暂停新单' : compactBlockedReason ? '出摊中 · 暂不接新单' : '营业中' }}</span></div>
     <button v-if="state === 'stale'" class="compact-open" :disabled="busy" @click="confirmHere">{{ hasLocation ? '确认仍在这里' : '设置位置' }}</button>
     <button v-else-if="state === 'closed'" class="compact-open" :disabled="busy" @click="status('open', true)">{{ hasLocation ? '开始营业' : '设置位置' }}</button>
     <button v-else-if="state === 'paused'" class="compact-open" :disabled="busy" @click="status('open')">恢复营业</button>
     <button v-else :disabled="busy" @click="accepting">{{ stall.accepting_orders === false ? '恢复接单' : '暂停接单' }}</button>
     <RouterLink to="/merchant/store" aria-label="营业设置"><Store :size="18" /><span>设置</span></RouterLink>
+    <p v-if="compactBlockedReason" class="compact-order-reason" role="status">{{ compactBlockedReason }}</p>
     <p v-if="state === 'closed' || state === 'stale'" class="compact-location"><MapPin :size="16" /><span>{{ hasLocation ? stall.address : '先确认实际取餐位置，再开始营业。' }}</span><RouterLink v-if="hasLocation" to="/merchant/store#location">更换位置</RouterLink></p>
     <p v-if="hasLocation && openingClosesAt" class="compact-location">本次预计 {{ formatTime(openingClosesAt) }} 收摊<RouterLink to="/merchant/store#location">调整时间</RouterLink></p>
     <p v-if="error" class="m-alert" role="alert">{{ error }}</p>
@@ -320,6 +326,7 @@ async function loadReports() {
 .m-business-compact button.compact-open { background: #e86a27; border-color: #e86a27; color: white; font-weight: 700; }
 .m-business-compact > a { padding: 0 8px; color: #766452; border-color: transparent; background: transparent; }
 .m-business-compact .m-alert { flex-basis: 100%; }
+.compact-order-reason { flex-basis: 100%; margin: 0; color: #795431; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
 .compact-location { display: flex; flex-basis: 100%; align-items: flex-start; gap: 7px; margin: 0; font-size: 14px; line-height: 1.6; color: #65533f; }
 .compact-location > svg { flex: none; margin-top: 4px; }
 .compact-location > span { flex: 1; overflow-wrap: anywhere; }

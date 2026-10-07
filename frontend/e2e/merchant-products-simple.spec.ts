@@ -220,6 +220,232 @@ test("editing price and menu visibility preserves current stock and manual suppl
   expect(state.unexpected).toEqual([]);
 });
 
+test("all editor close controls protect unsaved changes and keep keyboard focus inside the choice", async ({ page }, info) => {
+  const state = await fixture(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/merchant/products");
+  const edit = card(page, "香菇鸡肉饭").getByRole("button", { name: /^编辑商品：/ });
+  const dialog = page.getByRole("dialog", { name: "编辑商品", exact: true });
+  const warning = page.getByRole("alertdialog", { name: "放弃未保存的修改？", exact: true });
+  await edit.click();
+  await dialog.getByRole("spinbutton", { name: "单价（元）" }).fill("15.50");
+  for (const close of [
+    () => dialog.getByRole("button", { name: "关闭商品编辑", exact: true }).click(),
+    () => dialog.getByRole("button", { name: "取消", exact: true }).click(),
+    () => page.keyboard.press("Escape"),
+    () => page.mouse.click(10, 10),
+  ]) {
+    await close();
+    await expect(warning).toBeVisible();
+    await expect(warning.getByRole("button", { name: "继续编辑" })).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(warning.getByRole("button", { name: "放弃修改" })).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(warning.getByRole("button", { name: "继续编辑" })).toBeFocused();
+    await warning.getByRole("button", { name: "继续编辑", exact: true }).click();
+    await expect(warning).toHaveCount(0);
+    await expect(dialog.getByRole("spinbutton", { name: "单价（元）" })).toHaveValue("15.5");
+  }
+  await page.keyboard.press("Escape");
+  for (const width of [360, 390, 768, 1440]) {
+    await page.setViewportSize({ width, height: width <= 390 ? 844 : 900 });
+    await assertNoHorizontalOverflow(page);
+    for (const button of await warning.getByRole("button").all()) {
+      expect((await button.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      await expect(button).toBeInViewport({ ratio: 1 });
+    }
+    await page.screenshot({ path: info.outputPath(`merchant-discard-editor-${width}.png`), fullPage: true });
+  }
+  await page.keyboard.press("Escape");
+  await expect(warning).toHaveCount(0);
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  await warning.getByRole("button", { name: "放弃修改", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(edit).toBeFocused();
+  await edit.click();
+  await expect(dialog.getByRole("spinbutton", { name: "单价（元）" })).toHaveValue("12.00");
+  await dialog.getByRole("button", { name: "关闭商品编辑", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(warning).toHaveCount(0);
+  expect(state.patches).toEqual([]);
+  expect(state.unexpected).toEqual([]);
+});
+
+test("saving locks closing and a successful save does not ask to discard", async ({ page }) => {
+  const state = await fixture(page);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let writing = false;
+  await page.route("**/api/v1/merchant/products/982", async (route) => {
+    writing = true;
+    const body = route.request().postDataJSON();
+    await gate;
+    Object.assign(state.products[0], body);
+    state.patches.push({ id: 982, body });
+    await route.fulfill({ json: state.products[0] });
+  });
+  await page.goto("/merchant/products");
+  await card(page, "香菇鸡肉饭").getByRole("button", { name: /^编辑商品：/ }).click();
+  const dialog = page.getByRole("dialog", { name: "编辑商品", exact: true });
+  await dialog.getByRole("spinbutton", { name: "单价（元）" }).fill("15.50");
+  await dialog.getByRole("button", { name: "保存修改", exact: true }).click();
+  await expect.poll(() => writing).toBe(true);
+  await expect(dialog.getByRole("button", { name: "关闭商品编辑", exact: true })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: "取消", exact: true })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await page.mouse.click(10, 10);
+  await expect(dialog).toBeVisible();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  release();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  expect(state.patches).toEqual([{ id: 982, body: { price_cents: 1550 } }]);
+  expect(state.unexpected).toEqual([]);
+});
+
+for (const lostResult of ["abort", "5xx"] as const) {
+  test(`an applied edit with a lost ${lostResult} response closes with uncertainty and rereads the actual price`, async ({ page }) => {
+    const state = await fixture(page);
+    let attempts = 0;
+    await page.route("**/api/v1/merchant/products/982", async (route) => {
+      attempts++;
+      if (attempts > 1) return route.fulfill({ status: 403, json: { detail: "本次请求未提交", submitted: false } });
+      const body = route.request().postDataJSON();
+      Object.assign(state.products[0], body);
+      state.patches.push({ id: 982, body });
+      if (lostResult === "abort") return route.abort("failed");
+      return route.fulfill({ status: 503, json: { detail: "暂时不能核对保存结果" } });
+    });
+    await page.goto("/merchant/products");
+    const chicken = card(page, "香菇鸡肉饭");
+    await chicken.getByRole("button", { name: /^编辑商品：/ }).click();
+    const dialog = page.getByRole("dialog", { name: "编辑商品", exact: true });
+    await dialog.getByRole("spinbutton", { name: "单价（元）" }).fill("15.50");
+    await dialog.getByRole("button", { name: "保存修改", exact: true }).click();
+    await expect(dialog.getByRole("alert")).toContainText("服务器可能已经保存");
+    // A definite rejection on a later attempt says nothing about the first write.
+    if (lostResult === "abort") {
+      await dialog.getByRole("button", { name: "保存修改", exact: true }).click();
+      await expect.poll(() => attempts).toBe(2);
+      await expect(dialog.getByRole("alert")).toContainText("服务器可能已经保存");
+    }
+    if (lostResult === "5xx") {
+      // Reverting to the old local value does not undo the possibly saved PATCH.
+      await dialog.getByRole("spinbutton", { name: "单价（元）" }).fill("12");
+      await dialog.getByRole("button", { name: "保存修改", exact: true }).click();
+    } else await dialog.getByRole("button", { name: "取消", exact: true }).click();
+    const warning = page.getByRole("alertdialog", { name: "保存结果尚未确认", exact: true });
+    await expect(warning).toContainText("服务器可能已经保存");
+    await expect(warning).toContainText("关闭只放弃本地输入");
+    await expect(warning).not.toContainText("还没有保存");
+    await expect(warning.getByRole("button", { name: "放弃修改", exact: true })).toHaveCount(0);
+    const reread = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/v1/merchant/stalls" && response.request().method() === "GET");
+    await warning.getByRole("button", { name: "关闭并刷新", exact: true }).click();
+    await reread;
+    await expect(dialog).toHaveCount(0);
+    await expect(chicken.locator(".product-meta > strong")).toHaveText("¥15.5");
+    expect(state.patches).toEqual([{ id: 982, body: { price_cents: 1550 } }]);
+    expect(attempts).toBe(lostResult === "abort" ? 2 : 1);
+    expect(state.unexpected).toEqual([]);
+  });
+}
+
+test("a conclusively rejected edit still asks only about unsaved local changes", async ({ page }) => {
+  const state = await fixture(page);
+  await page.route("**/api/v1/merchant/products/982", (route) => route.fulfill({
+    status: 400, json: { detail: "本次价格未保存", submitted: false },
+  }));
+  await page.goto("/merchant/products");
+  const chicken = card(page, "香菇鸡肉饭");
+  await chicken.getByRole("button", { name: /^编辑商品：/ }).click();
+  const dialog = page.getByRole("dialog", { name: "编辑商品", exact: true });
+  await dialog.getByRole("spinbutton", { name: "单价（元）" }).fill("15.50");
+  await dialog.getByRole("button", { name: "保存修改", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toContainText("本次价格未保存");
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  const warning = page.getByRole("alertdialog", { name: "放弃未保存的修改？", exact: true });
+  await expect(warning).toContainText("这次填写的内容还没有保存");
+  await warning.getByRole("button", { name: "放弃修改", exact: true }).click();
+  await expect(chicken).toContainText("¥12");
+  expect(state.products[0].price_cents).toBe(1200);
+  expect(state.patches).toEqual([]);
+  expect(state.unexpected).toEqual([]);
+});
+
+test("new product drafts are protected but closing an unknown creation preserves the original request", async ({ page }) => {
+  const state = await fixture(page);
+  const bodies: any[] = [];
+  await page.route("**/api/v1/merchant/stalls/981/products", async (route) => {
+    const body = route.request().postDataJSON();
+    bodies.push(body);
+    if (bodies.length === 1) return route.abort("failed");
+    await route.fulfill({ json: { id: 990, ...body } });
+  });
+  await page.goto("/merchant/products");
+  await page.getByRole("button", { name: "添加商品", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "添加新商品", exact: true });
+  await dialog.getByRole("textbox", { name: "商品名称" }).fill("新菜单草稿");
+  await dialog.getByRole("spinbutton", { name: "单价（元）" }).fill("8");
+  await dialog.getByRole("spinbutton", { name: "线上剩余可卖份数" }).fill("4");
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  const warning = page.getByRole("alertdialog", { name: "放弃未保存的修改？", exact: true });
+  await expect(warning).toBeVisible();
+  await warning.getByRole("button", { name: "继续编辑" }).click();
+  await dialog.getByRole("button", { name: "添加商品", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toContainText("新增结果尚未确认");
+  await dialog.getByRole("button", { name: "关闭商品编辑", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(warning).toHaveCount(0);
+  const saved = await page.evaluate(() => sessionStorage.getItem("merchant-product-create:981:981"));
+  expect(JSON.parse(saved!).body).toEqual(bodies[0]);
+  await page.getByRole("button", { name: "确认上一笔新增", exact: true }).click();
+  await expect(dialog.getByRole("textbox", { name: "商品名称" })).toHaveValue("新菜单草稿");
+  await expect(dialog.getByRole("textbox", { name: "商品名称" })).toBeDisabled();
+  await dialog.getByRole("button", { name: "确认原新增结果", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(bodies).toHaveLength(2);
+  expect(bodies[1]).toEqual(bodies[0]);
+  expect(await page.evaluate(() => sessionStorage.getItem("merchant-product-create:981:981"))).toBeNull();
+  expect(state.unexpected).toEqual([]);
+});
+
+test("photo uploading locks all closing controls and its unsaved result is protected", async ({ page }) => {
+  const state = await fixture(page);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let uploading = false;
+  await page.route("**/api/v1/merchant/stalls/981/image", async (route) => {
+    uploading = true;
+    await gate;
+    await route.fulfill({ json: { url: "/media/merchant-test/photo.png" } });
+  });
+  await page.goto("/merchant/products");
+  await card(page, "香菇鸡肉饭").getByRole("button", { name: /^编辑商品：/ }).click();
+  const dialog = page.getByRole("dialog", { name: "编辑商品", exact: true });
+  await dialog.locator("summary").filter({ hasText: "照片、分类与介绍" }).click();
+  await dialog.locator('input[type="file"]').setInputFiles({
+    name: "fixture.png", mimeType: "image/png",
+    buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=", "base64"),
+  });
+  await expect.poll(() => uploading).toBe(true);
+  await expect(dialog.getByRole("button", { name: "关闭商品编辑", exact: true })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: "取消", exact: true })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await page.mouse.click(10, 10);
+  await expect(dialog).toBeVisible();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  release();
+  await expect(dialog.getByRole("button", { name: "关闭商品编辑", exact: true })).toBeEnabled();
+  await page.keyboard.press("Escape");
+  const warning = page.getByRole("alertdialog", { name: "放弃未保存的修改？", exact: true });
+  await expect(warning).toBeVisible();
+  await warning.getByRole("button", { name: "放弃修改" }).click();
+  expect(state.products[0].image).toBe("");
+  expect(state.patches).toEqual([]);
+  expect(state.unexpected).toEqual([]);
+});
+
 test("supply pause is independent of sold-out quantity and never changes stock", async ({
   page,
 }) => {

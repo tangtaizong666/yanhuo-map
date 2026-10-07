@@ -19,6 +19,8 @@ import {
   Map,
   RefreshCw,
   History,
+  SlidersHorizontal,
+  ChevronDown,
 } from "lucide-vue-next";
 import StallCard from "../components/StallCard.vue";
 import DishCard from "../components/DishCard.vue";
@@ -28,6 +30,7 @@ import ReorderDialog from "../components/ReorderDialog.vue";
 import MealBudget from "../components/MealBudget.vue";
 import { productAvailable } from "../lib/availability";
 import { useStalls, useMeals } from "../lib/discovery";
+import { useBrowseReturn } from "../lib/browseReturn";
 import { useSession } from "../stores/session";
 import { api, money } from "../lib/api";
 import type { Order, Product, Stall } from "../lib/types";
@@ -42,6 +45,7 @@ const {
     lastSyncedAt,
     next: nextStalls,
     loadMore: loadMoreStalls,
+    loadedPages: stallPages,
   } = useStalls(),
   session = useSession(),
   route = useRoute(),
@@ -66,6 +70,61 @@ const mealBudget = computed(() => {
 const mealSort = computed(() =>
   route.query.meal_sort === "price" ? "price" : "default",
 );
+const filterMedia = window.matchMedia("(min-width: 768px)");
+const searchFiltersExpanded = ref(filterMedia.matches);
+function syncFilterLayout(event: MediaQueryListEvent) {
+  searchFiltersExpanded.value = event.matches;
+}
+onMounted(() => filterMedia.addEventListener("change", syncFilterLayout));
+onUnmounted(() => filterMedia.removeEventListener("change", syncFilterLayout));
+const searchFilterSummary = computed(() => {
+  const labels = [
+    ...(filters.category ? [filters.category] : []),
+    followOnly.value
+      ? "我的关注"
+      : filters.status === "open"
+        ? "正在出摊"
+        : "全部摊位",
+  ];
+  if (resultType.value !== "dishes") {
+    labels.push(
+      filters.sort === "rating"
+        ? "摊位评分优先"
+        : filters.sort === "distance"
+          ? "摊位距离最近"
+          : "最近确认",
+    );
+  }
+  if (resultType.value !== "stalls") {
+    if (mealBudget.value) labels.push(`餐点 ${mealBudget.value / 100} 元以内`);
+    if (mealSort.value === "price") labels.push("餐点价格从低到高");
+  }
+  return labels.join(" · ");
+});
+const hasSearchFilters = computed(
+  () =>
+    !!(
+      filters.category ||
+      filters.status ||
+      followOnly.value ||
+      filters.sort !== "freshness" ||
+      mealBudget.value ||
+      mealSort.value !== "default"
+    ),
+);
+function clearSearchFilters() {
+  filters.category = "";
+  filters.status = "";
+  filters.sort = "freshness";
+  void router.replace({
+    query: {
+      ...route.query,
+      follow: undefined,
+      meal_budget: undefined,
+      meal_sort: undefined,
+    },
+  });
+}
 function setMealBudget(value: number) {
   void router.replace({
     query: { ...route.query, meal_budget: value || undefined },
@@ -86,9 +145,64 @@ const {
   next: nextMeals,
   load: loadMeals,
   loadMore: loadMoreMeals,
+  loadedPages: mealPages,
 } = useMeals(mealBudget, mealSort);
+useBrowseReturn({
+  capture: () => ({
+    pages: { stalls: stallPages.value, meals: mealPages.value },
+  }),
+  async restore(snapshot, control) {
+    const meal =
+      snapshot.region !== ".nearby-section" &&
+      snapshot.anchor.includes("/products/");
+    const pendingRead = meal ? mealsLoading : loading;
+    const problem = meal ? mealsError : error;
+    const next = meal ? nextMeals : nextStalls;
+    const pages = meal ? mealPages : stallPages;
+    const more = meal ? loadMoreMeals : loadMoreStalls;
+    const limit = snapshot.view.pages?.[meal ? "meals" : "stalls"] || 1;
+    const match = snapshot.anchor.match(
+      meal ? /\/products\/(\d+)$/ : /\/stalls\/(\d+)/,
+    );
+    const id = Number(match?.[1]);
+    const contains = () =>
+      meal
+        ? meals.value.some((item) => item.product.id === id)
+        : visible.value.some((item) => item.id === id);
+    if (
+      !(await control.wait(
+        () => !pendingRead.value && (pages.value > 0 || !!problem.value),
+      ))
+    )
+      return false;
+    while (control.active()) {
+      if (!(await control.wait(() => !pendingRead.value))) return false;
+      if (problem.value || contains() || !next.value || pages.value >= limit)
+        break;
+      await more();
+    }
+    return control.active() && !problem.value && contains();
+  },
+});
 const availableMeals = meals;
 const featuredMeals = computed(() => meals.value.slice(0, 4));
+const compactMealEmpty = computed(
+  () =>
+    searching.value &&
+    resultType.value === "all" &&
+    !mealsLoading.value &&
+    !mealsError.value &&
+    !meals.value.length,
+);
+const compactStallEmpty = computed(
+  () =>
+    searching.value &&
+    resultType.value === "all" &&
+    !loading.value &&
+    !error.value &&
+    !visible.value.length &&
+    meals.value.length > 0,
+);
 const recentOrders = ref<Order[]>([]);
 const recentError = ref("");
 const recentLoading = ref(false);
@@ -211,7 +325,7 @@ onMounted(() =>
 );
 </script>
 <template>
-  <div class="page home-page">
+  <div class="page home-page" :class="{ 'search-page': searching }">
     <div class="discovery-toolbar">
       <div class="welcome-note">
         <span class="little-sun">✳</span
@@ -261,7 +375,7 @@ onMounted(() =>
       </div>
       <div class="hero-index"><span>01</span> / 校园烟火记</div>
     </section>
-    <nav class="categories" aria-label="美食品类">
+    <nav v-if="!searching" class="categories" aria-label="美食品类">
       <button
         v-for="c in categories"
         :key="c.name"
@@ -305,13 +419,69 @@ onMounted(() =>
         餐点 <span>{{ meals.length }}</span>
       </button>
     </div>
-    <DiscoveryFilters v-if="searching" />
+    <section v-if="searching" class="search-filters" aria-label="搜索筛选">
+      <div class="search-filter-heading">
+        <p class="search-filter-summary" aria-label="当前筛选条件">
+          {{ searchFilterSummary }}
+        </p>
+        <button
+          type="button"
+          class="search-filter-toggle"
+          :aria-expanded="searchFiltersExpanded"
+          aria-controls="search-filter-controls"
+          @click="searchFiltersExpanded = !searchFiltersExpanded"
+        >
+          <SlidersHorizontal :size="16" />{{
+            searchFiltersExpanded ? "收起筛选" : "筛选"
+          }}
+          <ChevronDown
+            :size="15"
+            :class="{ expanded: searchFiltersExpanded }"
+          />
+        </button>
+        <button
+          v-if="hasSearchFilters"
+          type="button"
+          class="search-filter-clear"
+          @click="clearSearchFilters"
+        >
+          清除筛选
+        </button>
+      </div>
+      <div
+        v-show="searchFiltersExpanded"
+        id="search-filter-controls"
+        class="search-filter-controls"
+      >
+        <nav class="search-categories" aria-label="美食品类">
+          <button
+            v-for="c in categories"
+            :key="c.name"
+            type="button"
+            :class="{ selected: filters.category === c.value }"
+            :aria-pressed="filters.category === c.value"
+            @click="filters.category = c.value"
+          >
+            {{ c.name }}
+          </button>
+        </nav>
+        <DiscoveryFilters :show-sort="resultType !== 'dishes'" />
+        <MealBudget
+          v-if="resultType !== 'stalls'"
+          :budget="mealBudget"
+          :sort="mealSort"
+          @update:budget="setMealBudget"
+          @update:sort="setMealSort"
+        />
+      </div>
+    </section>
     <section
       v-if="searching && resultType !== 'stalls'"
       class="meal-search-section"
+      :class="{ 'has-compact-empty': compactMealEmpty }"
       aria-label="餐点搜索结果"
     >
-      <div class="section-heading">
+      <div v-if="!compactMealEmpty" class="section-heading">
         <div>
           <p class="eyebrow">FIND YOUR NEXT BITE</p>
           <h2>
@@ -320,12 +490,6 @@ onMounted(() =>
         </div>
         <span class="section-caption">点开餐点，看看详细介绍</span>
       </div>
-      <MealBudget
-        :budget="mealBudget"
-        :sort="mealSort"
-        @update:budget="setMealBudget"
-        @update:sort="setMealSort"
-      />
       <div v-if="mealsLoading" class="skeleton-grid">
         <div v-for="n in 4" :key="n" class="skeleton skeleton-card"></div>
       </div>
@@ -338,6 +502,17 @@ onMounted(() =>
       <div v-else-if="meals.length" class="dish-grid">
         <DishCard v-for="item in meals" :key="item.product.id" v-bind="item" />
       </div>
+      <p v-else-if="compactMealEmpty" class="search-empty-inline" role="status">
+        {{
+          mealBudget
+            ? "当前餐费预算内没有匹配餐点。"
+            : "暂未找到匹配的可售餐点。"
+        }}
+        <button v-if="mealBudget" type="button" @click="setMealBudget(0)">
+          清除餐费预算
+        </button>
+        <span v-else>可调整筛选，或继续查看摊位。</span>
+      </p>
       <div v-else class="empty-state card meal-empty">
         <Utensils :size="24" />
         <h3>还没有找到这道餐点</h3>
@@ -370,7 +545,7 @@ onMounted(() =>
       v-if="!searching || resultType !== 'dishes'"
       class="nearby-section"
     >
-      <div class="section-heading">
+      <div v-if="!compactStallEmpty" class="section-heading">
         <div>
           <p class="eyebrow">
             {{
@@ -423,6 +598,13 @@ onMounted(() =>
         <p>{{ error }}</p>
         <button class="btn btn-secondary" @click="load">重新加载</button>
       </div>
+      <p
+        v-else-if="compactStallEmpty"
+        class="search-empty-inline"
+        role="status"
+      >
+        当前条件下没有匹配摊位；可调整筛选，或查看上方餐点。
+      </p>
       <DiscoveryEmpty
         v-else-if="!visible.length"
         :area="filters.area"
@@ -581,6 +763,94 @@ onMounted(() =>
   </div>
 </template>
 <style scoped>
+.search-filters {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fffaf3;
+  margin-bottom: 22px;
+}
+.search-filter-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0 12px;
+  padding: 6px 14px;
+}
+.search-filter-summary {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #735b43;
+  overflow-wrap: anywhere;
+}
+.search-filter-toggle,
+.search-filter-clear {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex-shrink: 0;
+  font-size: 13px;
+  color: #9a4923;
+}
+.search-filter-toggle .expanded {
+  transform: rotate(180deg);
+}
+.search-filter-clear {
+  color: #756450;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.search-filter-controls {
+  padding: 4px 14px 14px;
+  border-top: 1px solid var(--line);
+}
+.search-categories {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+  padding: 10px 0;
+}
+.search-categories button {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-size: 13px;
+  color: #735b43;
+}
+.search-categories .selected {
+  color: #a74714;
+  background: #fff0de;
+  border-color: #ecc6a4;
+}
+.search-filter-controls :deep(.discovery-filters) {
+  margin-bottom: 0;
+}
+.search-filter-controls :deep(.meal-budget) {
+  margin: 12px 0 0;
+}
+.search-empty-inline {
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #f5eee4;
+  color: #73604c;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.search-empty-inline button {
+  min-height: 44px;
+  color: #9a4923;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.meal-search-section.has-compact-empty {
+  margin-bottom: 0;
+}
 .meal-empty {
   min-height: 0;
   padding: 22px;
@@ -992,6 +1262,47 @@ onMounted(() =>
   }
 }
 @media (max-width: 767px) {
+  .search-page .result-switch {
+    margin-bottom: 12px;
+  }
+  .search-page .meal-search-section .eyebrow {
+    display: none;
+  }
+  .search-page .meal-search-section .section-heading {
+    margin-bottom: 12px;
+  }
+  .search-filters {
+    margin-bottom: 16px;
+  }
+  .search-filter-heading {
+    gap: 0 8px;
+    padding: 5px 10px;
+  }
+  .search-filter-clear {
+    min-width: 52px;
+  }
+  .search-filter-controls {
+    padding: 4px 10px 10px;
+  }
+  .search-filter-controls :deep(.discovery-filters) {
+    flex-wrap: wrap;
+    gap: 0 8px;
+  }
+  .search-filter-controls :deep(.sort-control) {
+    margin-left: auto;
+  }
+  .search-filter-controls :deep(.sort-control select) {
+    max-width: none;
+  }
+  .search-filter-controls :deep(.filter-chips) {
+    flex-wrap: wrap;
+  }
+  .search-categories {
+    gap: 4px;
+  }
+  .search-categories button {
+    padding-inline: 9px;
+  }
   .discovery-stale {
     align-items: flex-start;
     flex-wrap: wrap;

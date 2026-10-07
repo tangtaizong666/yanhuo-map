@@ -221,6 +221,8 @@ export function useStalls<T extends StallSummary | StallMap = StallSummary>(
   const next = ref<string | null>(null),
     truncated = ref(false);
   const lastSyncedAt = ref<Date | null>(null);
+  const loadedPages = ref(0);
+  const loadedBounds = ref("");
   const followState = useFollowState((id, followed) => {
     const current = stalls.value.find((stall) => stall.id === id);
     if (current) current.is_followed = followed;
@@ -256,8 +258,10 @@ export function useStalls<T extends StallSummary | StallMap = StallSummary>(
           append ? mergeDiscoveryRows(stalls.value as T[], rows) : rows
         ) as typeof stalls.value;
         next.value = result.next || null;
+        loadedPages.value = append ? loadedPages.value + 1 : 1;
         truncated.value = !!result.truncated;
         lastSyncedAt.value = new Date();
+        loadedBounds.value = q.get("bounds") || "";
       }
     } catch (cause) {
       if (current === seq) error.value = (cause as Error).message;
@@ -287,6 +291,7 @@ export function useStalls<T extends StallSummary | StallMap = StallSummary>(
       controller?.abort();
       clearTimeout(timer);
       next.value = null;
+      loadedPages.value = 0;
       if (kind === "list") stalls.value = [];
       timer = setTimeout(() => load(), 180);
     },
@@ -325,6 +330,8 @@ export function useStalls<T extends StallSummary | StallMap = StallSummary>(
     lastSyncedAt,
     next,
     truncated,
+    loadedPages,
+    loadedBounds,
     load: () => load(),
     loadMore: () => load(true),
     follow: followState.follow,
@@ -355,6 +362,7 @@ export function useMeals(budget: Ref<number>, sort: Ref<string>) {
     loading = ref(true),
     error = ref(""),
     next = ref<string | null>(null);
+  const loadedPages = ref(0);
   let sequence = 0,
     controller: AbortController | undefined,
     timer: ReturnType<typeof setTimeout> | undefined;
@@ -387,6 +395,7 @@ export function useMeals(budget: Ref<number>, sort: Ref<string>) {
             ]
           : result.results;
         next.value = result.next;
+        loadedPages.value = append ? loadedPages.value + 1 : 1;
       }
     } catch (cause) {
       if (current === sequence) error.value = (cause as Error).message;
@@ -418,6 +427,7 @@ export function useMeals(budget: Ref<number>, sort: Ref<string>) {
       clearTimeout(timer);
       meals.value = [];
       next.value = null;
+      loadedPages.value = 0;
       timer = setTimeout(() => load(), 180);
     },
     { immediate: true },
@@ -436,6 +446,7 @@ export function useMeals(budget: Ref<number>, sort: Ref<string>) {
     loading,
     error,
     next,
+    loadedPages,
     load: () => load(),
     loadMore: () => load(true),
   };

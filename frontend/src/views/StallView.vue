@@ -36,6 +36,7 @@ import { useCart } from "../stores/cart";
 import type { Stall, Product } from "../lib/types";
 import StallVisitInfo from "../components/StallVisitInfo.vue";
 import StallShare from "../components/StallShare.vue";
+import { useBrowseReturn, useDetailReturn } from "../lib/browseReturn";
 import ReceivingNotice from "../components/ReceivingNotice.vue";
 import {
   productAvailable,
@@ -49,6 +50,15 @@ const route = useRoute(),
   error = ref(""),
   tab = ref("menu");
 const id = computed(() => Number(route.params.id));
+useBrowseReturn({
+  capture: () => ({}),
+  async restore(snapshot, control) {
+    if (!await control.wait(() => !loading.value)) return false;
+    const productId = snapshot.anchor.match(/\/products\/(\d+)$/)?.[1];
+    return !error.value && !!stall.value && (!productId || stall.value.products.some(product => product.id === Number(productId)));
+  },
+});
+const { target: returnTarget, label: returnLabel, go: returnToSource } = useDetailReturn(() => "/", "返回附近摊位");
 const mobileQuery = window.matchMedia("(max-width: 767px)");
 const mobileLayout = ref(mobileQuery.matches);
 const updateLayout = () => {
@@ -146,8 +156,8 @@ onUnmounted(() => {
 </script>
 <template>
   <div class="page stall-page">
-    <RouterLink class="back-link" to="/"
-      ><ArrowLeft :size="16" />返回附近摊位</RouterLink
+    <a class="back-link" :href="returnTarget" @click="returnToSource"
+      ><ArrowLeft :size="16" />{{ returnLabel }}</a
     >
     <div v-if="loading" class="skeleton skeleton-banner"></div>
     <div v-else-if="error && !stall" class="empty-state card">
@@ -554,6 +564,9 @@ onUnmounted(() => {
   </div>
 </template>
 <style scoped>
+.stall-page > .back-link {
+  min-height: 44px;
+}
 .stall-arrival > summary {
   display: none;
 }
@@ -1085,7 +1098,7 @@ onUnmounted(() => {
   }
   .back-link {
     font-size: 11px;
-    margin-bottom: 12px;
+    margin-bottom: 0;
   }
   .stall-hero {
     height: 148px;

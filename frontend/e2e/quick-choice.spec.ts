@@ -178,6 +178,11 @@ test("meal budget boundary, price sorting and browser return retain URL state", 
   await fixture(page);
   await page.goto("/search?type=dishes&meal_budget=1500&meal_sort=price");
   const section = page.getByRole("region", { name: "餐点搜索结果" });
+  const searchFilters = page.getByRole("region", { name: "搜索筛选" });
+  async function revealFilters() {
+    const toggle = searchFilters.getByRole("button", { name: "筛选", exact: true });
+    if (await toggle.isVisible()) await toggle.click();
+  }
   await expect(section.locator(".dish-card h3")).toHaveText([
     "热豆花",
     "原味煎饼",
@@ -189,9 +194,10 @@ test("meal budget boundary, price sorting and browser return retain URL state", 
   await expect(page).toHaveURL(/meal_budget=1500.*meal_sort=price/);
   await expect(page.locator(".stall-card")).toHaveCount(2);
   await switches.getByRole("button", { name: /^餐点/ }).click();
-  await expect(section.getByLabel("餐点排序")).toHaveValue("price");
+  await revealFilters();
+  await expect(searchFilters.getByLabel("餐点排序")).toHaveValue("price");
   await expect(
-    section.getByRole("button", { name: "15 元以内", exact: true }),
+    searchFilters.getByRole("button", { name: "15 元以内", exact: true }),
   ).toHaveAttribute("aria-pressed", "true");
   await section
     .getByRole("link", { name: "查看双蛋煎饼详情，南门煎饼" })
@@ -202,10 +208,11 @@ test("meal budget boundary, price sorting and browser return retain URL state", 
   ).toBeVisible();
   await page.goBack();
   await expect(page).toHaveURL(/meal_budget=1500.*meal_sort=price/);
+  await revealFilters();
   await expect(
-    section.getByRole("button", { name: "15 元以内", exact: true }),
+    searchFilters.getByRole("button", { name: "15 元以内", exact: true }),
   ).toHaveAttribute("aria-pressed", "true");
-  await expect(section.getByLabel("餐点排序")).toHaveValue("price");
+  await expect(searchFilters.getByLabel("餐点排序")).toHaveValue("price");
   await page.reload();
   await expect(section.locator(".dish-card h3")).toHaveText([
     "热豆花",

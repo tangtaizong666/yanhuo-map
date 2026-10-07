@@ -214,7 +214,8 @@ function filterCount(value: string) {
   );
 }
 const lookupOrder = ref<any>(null);
-const toolsOpen = ref(false);
+const toolsOpen = ref(["all", "completed", "cancelled"].includes(props.initialFilter));
+const searchToolsButton = ref<HTMLButtonElement>();
 const lookupOpen = ref(false);
 function selectStage(value: string) {
   filter.value = value;
@@ -224,6 +225,12 @@ function selectStage(value: string) {
 }
 const query = ref("");
 const fulfillment = ref("all");
+const hasSearchFilters = computed(() => !!query.value.trim() || fulfillment.value !== "all");
+function clearSearchFilters() {
+  query.value = "";
+  fulfillment.value = "all";
+  nextTick(() => searchToolsButton.value?.focus({ preventScroll: true }));
+}
 const cancellationOnly = ref(props.initialFilter === "cancellation");
 const busyIds = reactive(new Set<string>());
 const isBusy = (order: any) => !!order && busyIds.has(String(order.id));
@@ -1142,6 +1149,7 @@ function timeline(order: any) {
 watch(
   () => props.initialFilter,
   (value) => {
+    if (["all", "completed", "cancelled"].includes(value)) toolsOpen.value = true;
     cancellationOnly.value = value === "cancellation";
     filter.value = [...filters, ...primaryStages].some(
       (item) => item.value === value,
@@ -1280,6 +1288,7 @@ onUnmounted(() => {
       </button>
       <button
         type="button"
+        ref="searchToolsButton"
         :aria-expanded="toolsOpen"
         aria-controls="merchant-secondary-tools"
         @click="toolsOpen = !toolsOpen"
@@ -1336,6 +1345,11 @@ onUnmounted(() => {
           }}<span>{{ ordersReady ? filterCount(item.value) : "—" }}</span>
         </button>
       </div>
+    </div>
+    <div v-if="hasSearchFilters" class="m-active-search-filters" role="group" aria-label="当前订单筛选">
+      <span v-if="query.trim()">订单号含“{{ query.trim() }}”</span>
+      <span v-if="fulfillment !== 'all'">{{ fulfillment === 'delivery' ? '商家自配送' : '到摊自取' }}</span>
+      <button type="button" @click="clearSearchFilters">清除筛选</button>
     </div>
     <p v-if="syncError" class="m-orders-warning" role="status">
       订单暂未同步，当前显示上次结果。请刷新后核对。
@@ -3577,6 +3591,25 @@ onUnmounted(() => {
   border-radius: 12px;
   background: #fff8ee;
   margin: 4px 0 12px;
+}
+.m-active-search-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 4px 0;
+  color: #72533d;
+  font-size: 14px;
+}
+.m-active-search-filters span { overflow-wrap: anywhere; min-width: 0; }
+.m-active-search-filters button {
+  min-height: 44px;
+  padding: 6px 10px;
+  border: 1px solid #e7d7c3;
+  border-radius: 10px;
+  color: #85401d;
+  background: #fff8ee;
+  font-size: 14px;
 }
 .m-simple-search-panel .m-orders-search {
   min-height: 46px;

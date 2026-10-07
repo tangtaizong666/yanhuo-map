@@ -115,6 +115,11 @@ const shown = computed(() =>
   }),
 );
 const modal = ref(false);
+const discardOpen = ref(false);
+const editSaveUncertain = ref(false);
+const discardPanel = ref<HTMLElement>();
+const continueButton = ref<HTMLButtonElement>();
+let closeRequestFocus: HTMLElement | null = null;
 const editingId = ref<number | null>(null);
 const saving = ref(false);
 const uploading = ref(false);
@@ -155,7 +160,9 @@ watch(
     closeEditor(true);
   },
 );
-function startEditor(product?: Product) {
+function startEditor(product?: Product, trigger?: EventTarget | null) {
+  discardOpen.value = false;
+  editSaveUncertain.value = false;
   editingId.value = product?.id ?? null;
   Object.assign(
     form,
@@ -178,7 +185,7 @@ function startEditor(product?: Product) {
   );
   original = JSON.parse(JSON.stringify(form));
   formError.value = "";
-  returnFocus = document.activeElement as HTMLElement;
+  returnFocus = trigger instanceof HTMLElement ? trigger : document.activeElement as HTMLElement;
   previousOverflow = document.body.style.overflow;
   document.body.style.overflow = "hidden";
   modal.value = true;
@@ -186,9 +193,30 @@ function startEditor(product?: Product) {
 }
 function closeEditor(force = false) {
   if (!modal.value || (!force && (saving.value || uploading.value))) return;
+  // A submitted creation has its own persistent recovery flow. Closing this
+  // editor must never be presented as discarding that possibly saved request.
+  if (!force && !(editingId.value == null && pendingCreation.value) &&
+      (editSaveUncertain.value || JSON.stringify(form) !== JSON.stringify(original))) {
+    if (!discardOpen.value) {
+      closeRequestFocus = modalElement.value?.contains(document.activeElement)
+        ? document.activeElement as HTMLElement : nameInput.value || null;
+      discardOpen.value = true;
+      nextTick(() => continueButton.value?.focus());
+    }
+    return;
+  }
+  discardOpen.value = false;
   modal.value = false;
   document.body.style.overflow = previousOverflow;
   nextTick(() => returnFocus?.focus());
+}
+function continueEditing() {
+  discardOpen.value = false;
+  nextTick(() => closeRequestFocus?.focus());
+}
+function discardLocalEdits() {
+  closeEditor(true);
+  if (editSaveUncertain.value) emit("refresh");
 }
 onBeforeUnmount(() => {
   if (modal.value) document.body.style.overflow = previousOverflow;
@@ -196,11 +224,12 @@ onBeforeUnmount(() => {
 function modalKeys(event: KeyboardEvent) {
   if (event.key === "Escape") {
     event.preventDefault();
-    closeEditor();
+    if (discardOpen.value) continueEditing();
+    else closeEditor();
   }
   if (event.key !== "Tab") return;
   const nodes = Array.from(
-    modalElement.value?.querySelectorAll<HTMLElement>(
+    (discardOpen.value ? discardPanel.value : modalElement.value)?.querySelectorAll<HTMLElement>(
       'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]',
     ) || [],
   ).filter((el) => el.getClientRects().length);
@@ -316,7 +345,7 @@ async function saveEditor(continueAdding = false) {
             ),
           );
     if (!Object.keys(data).length) {
-      closeEditor();
+      closeEditor(!editSaveUncertain.value);
       return;
     }
     if (editingId.value == null && !pendingCreation.value) {
@@ -373,17 +402,23 @@ async function saveEditor(continueAdding = false) {
     } else closeEditor(true);
   } catch (error) {
     // A definite 4xx/409 means the server answered; only network/5xx outcomes stay unconfirmed.
-    if (
+    const definitelyRejected =
       error instanceof ApiError &&
       (error.data?.submitted === false ||
-        [400, 403, 404, 409, 422].includes(error.status))
-    ) {
+        [400, 403, 404, 409, 422].includes(error.status));
+    // A later rejection or local validation error cannot resolve an earlier
+    // unknown PATCH. Keep that uncertainty until the merchant rereads the menu.
+    if (editingId.value != null && saving.value && !definitelyRejected)
+      editSaveUncertain.value = true;
+    if (definitelyRejected) {
       pendingCreation.value = null;
       removeStorage(creationKey, "session");
     }
     formError.value =
       editingId.value == null && pendingCreation.value
         ? "新增结果尚未确认。请确认原请求结果；将使用相同标识和内容重试，不会重复新增。"
+        : editSaveUncertain.value
+          ? "保存结果尚未确认，服务器可能已经保存。关闭并刷新菜单后，请核对商品资料。"
         : (error as Error).message;
   } finally {
     saving.value = false;
@@ -448,7 +483,7 @@ function tasteValues(groups: Draft["taste_options"]) {
           :to="`/stalls/${stall.id}`"
           @click="session.setConsumerPreview(true)"
           >预览菜单</RouterLink
-        ><button class="catalog-primary" @click="startEditor()">
+        ><button class="catalog-primary" @click="startEditor(undefined, $event.currentTarget)">
           <Plus :size="18" />添加商品
         </button>
       </div>
@@ -457,7 +492,7 @@ function tasteValues(groups: Draft["taste_options"]) {
     <p v-if="pendingCreation" class="m-info-banner" role="status">
       上一笔新增商品结果待确认。<button
         class="btn btn-secondary"
-        @click="startEditor()"
+        @click="startEditor(undefined, $event.currentTarget)"
       >
         确认上一笔新增
       </button>
@@ -517,7 +552,7 @@ function tasteValues(groups: Draft["taste_options"]) {
             class="product-edit"
             :disabled="busy[product.id]"
             :aria-label="`编辑商品：${product.name}`"
-            @click="startEditor(product)"
+            @click="startEditor(product, $event.currentTarget)"
           >
             <div class="product-photo">
               <img
@@ -598,7 +633,7 @@ function tasteValues(groups: Draft["taste_options"]) {
       <button
         v-if="!products.length"
         class="catalog-primary"
-        @click="startEditor()"
+        @click="startEditor(undefined, $event.currentTarget)"
       >
         <Plus :size="16" />添加第一件商品</button
       ><button
@@ -618,7 +653,7 @@ function tasteValues(groups: Draft["taste_options"]) {
     ><div
       v-if="modal"
       class="product-modal-backdrop"
-      @mousedown.self="closeEditor()"
+      @mousedown.self.prevent="closeEditor()"
     >
       <section
         ref="modalElement"
@@ -628,7 +663,7 @@ function tasteValues(groups: Draft["taste_options"]) {
         aria-labelledby="product-editor-title"
         @keydown="modalKeys"
       >
-        <header>
+        <header :inert="discardOpen">
           <div>
             <span class="eyebrow">MENU EDITOR</span>
             <h2 id="product-editor-title">
@@ -644,7 +679,7 @@ function tasteValues(groups: Draft["taste_options"]) {
             <X :size="22" />
           </button>
         </header>
-        <form class="product-editor" @submit.prevent="saveEditor(false)">
+        <form class="product-editor" :inert="discardOpen" @submit.prevent="saveEditor(false)">
           <p v-if="pendingCreation && editingId == null" class="m-info-banner">
             原请求已保留，请先确认新增结果，再修改商品资料。
             <button type="button" class="m-text-link" @click="abandonCreation">
@@ -866,6 +901,16 @@ function tasteValues(groups: Draft["taste_options"]) {
             </button>
           </footer>
         </form>
+        <div v-if="discardOpen" class="editor-discard-backdrop">
+          <section ref="discardPanel" class="editor-discard-panel" role="alertdialog" aria-modal="true" aria-labelledby="discard-editor-title" aria-describedby="discard-editor-description">
+            <h3 id="discard-editor-title">{{ editSaveUncertain ? '保存结果尚未确认' : '放弃未保存的修改？' }}</h3>
+            <p id="discard-editor-description">{{ editSaveUncertain ? '服务器可能已经保存。关闭只放弃本地输入，将刷新菜单供你核对。' : '这次填写的内容还没有保存。' }}</p>
+            <div>
+              <button type="button" class="catalog-outline" @click="discardLocalEdits">{{ editSaveUncertain ? '关闭并刷新' : '放弃修改' }}</button>
+              <button ref="continueButton" type="button" class="catalog-primary" @click="continueEditing">继续编辑</button>
+            </div>
+          </section>
+        </div>
       </section>
     </div></Teleport
   >
@@ -1221,6 +1266,7 @@ function tasteValues(groups: Draft["taste_options"]) {
   padding: 16px;
 }
 .product-editor-panel {
+  position: relative;
   background: #fffcf7;
   border: 1px solid #fff8f0;
   border-radius: 24px;
@@ -1231,6 +1277,29 @@ function tasteValues(groups: Draft["taste_options"]) {
   flex-direction: column;
   box-shadow: -20px 0 80px #2f1c121f;
 }
+.editor-discard-backdrop {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  border-radius: inherit;
+  background: #25180f66;
+}
+.editor-discard-panel {
+  width: 100%;
+  max-width: 370px;
+  box-sizing: border-box;
+  padding: 22px;
+  border: 1px solid #e7d7c3;
+  border-radius: 18px;
+  background: #fffcf7;
+  color: #473b30;
+}
+.editor-discard-panel h3 { margin: 0; font-size: 19px; }
+.editor-discard-panel p { margin: 12px 0 20px; font-size: 14px; line-height: 1.6; }
+.editor-discard-panel > div { display: flex; gap: 10px; flex-wrap: wrap; }
+.editor-discard-panel button { flex: 1; }
 .product-editor-panel > header {
   display: flex;
   align-items: center;

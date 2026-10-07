@@ -27,6 +27,7 @@ import {
 } from "../lib/availability";
 import { useCart } from "../stores/cart";
 import { useSession } from "../stores/session";
+import { useDetailReturn } from "../lib/browseReturn";
 
 const route = useRoute();
 const cart = useCart();
@@ -39,6 +40,7 @@ const selected = ref(1);
 const portions = ref<Portion[]>([]);
 const justAdded = ref(false);
 const stallId = computed(() => Number(route.params.id));
+const { target: returnTarget, label: returnLabel, go: returnToSource } = useDetailReturn(() => `/stalls/${stallId.value}`, "返回小摊");
 const productId = computed(() => Number(route.params.productId));
 const product = computed(() =>
   stall.value?.products.find((item) => item.id === productId.value),
@@ -189,8 +191,8 @@ onUnmounted(() => {
 <template>
   <div class="page dish-page">
     <nav class="dish-breadcrumb" aria-label="餐点导航">
-      <RouterLink :to="`/stalls/${stallId}`"
-        ><ArrowLeft :size="16" />返回小摊</RouterLink
+      <a :href="returnTarget" @click="returnToSource"
+        ><ArrowLeft :size="16" />{{ returnLabel }}</a
       >
       <span v-if="stall"
         ><span class="breadcrumb-divider">/</span>{{ stall.name }}</span

@@ -23,6 +23,7 @@ import StallCard from "../components/StallCard.vue";
 import DiscoveryFilters from "../components/DiscoveryFilters.vue";
 import StallVisitInfo from "../components/StallVisitInfo.vue";
 import StallShare from "../components/StallShare.vue";
+import { returnViewState, useBrowseReturn } from "../lib/browseReturn";
 const route = useRoute(), router = useRouter();
 const bounds = ref("");
 const {
@@ -34,6 +35,8 @@ const {
     pendingFollows,
     filters,
     truncated,
+    lastSyncedAt,
+    loadedBounds,
   } = useStalls<StallMap>("map", bounds),
   session = useSession(),
   mapNode = ref<HTMLDivElement | null>(null),
@@ -79,11 +82,12 @@ async function init() {
     await nextTick();
     if (unmounted || !mapNode.value) return;
     map?.destroy();
+    const restoredMap = returnViewState("/map")?.map;
     map = new AMap.Map(mapNode.value, {
-      zoom: 15,
-      center: area.value
+      zoom: restoredMap?.zoom || 15,
+      center: restoredMap?.center || (area.value
         ? [area.value.longitude, area.value.latitude]
-        : [126.632, 45.752],
+        : [126.632, 45.752]),
       viewMode: "2D",
       mapStyle: "amap://styles/whitesmoke",
     });
@@ -264,6 +268,35 @@ watch(
 );
 watch(area, (a) => {
   if (a && map) map.setZoomAndCenter(15, [a.longitude, a.latitude]);
+});
+useBrowseReturn({
+  capture() {
+    const center = map?.getCenter();
+    return {
+      selectedId: selectedId.value,
+      ...(center ? { map: { center: [center.lng, center.lat] as [number, number], zoom: map.getZoom(), selectedId: selectedId.value } } : {}),
+    };
+  },
+  async restore(snapshot, control) {
+    if (!await control.wait(() => !mapLoading.value && !loading.value &&
+      (!!error.value || (!!lastSyncedAt.value && loadedBounds.value === bounds.value)))) return false;
+    if (error.value) return false;
+    const id = snapshot.view.selectedId;
+    if (id == null) return true;
+    if (!stalls.value.some((stall) => stall.id === id)) return false;
+    const abortSelection = () => clearSelection();
+    control.signal.addEventListener("abort", abortSelection, { once: true });
+    try {
+      selectedId.value = id;
+      // Restore an identity, not the old directions or the pan/reveal side effects
+      // of a new user click. The details must pass the normal fresh-read gate.
+      selectionNeedsReveal = false;
+      await readSelectedStall(id);
+      return control.active() && !selectionError.value && selected.value?.id === id;
+    } finally {
+      control.signal.removeEventListener("abort", abortSelection);
+    }
+  },
 });
 onMounted(init);
 onUnmounted(() => {
