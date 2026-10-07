@@ -17,11 +17,16 @@ import {
   refundNeedsFollowUp,
 } from "../lib/orderFollowUp";
 
-const props = defineProps<{ order: Order }>();
+const props = defineProps<{
+  order: Order;
+  suspended?: boolean;
+  suspensionBusy?: boolean;
+}>();
 const emit = defineEmits<{
   updated: [order: Order];
   changing: [];
   settled: [];
+  confirmCancellation: [];
 }>();
 const session = useSession();
 const userId = session.user?.id;
@@ -32,6 +37,20 @@ const qrError = ref(false);
 const uncertain = ref(false);
 const now = ref(Date.now());
 const lastRead = ref("");
+const queryWait = ref(0);
+let queryDeadline = 0;
+watch(
+  () => props.order,
+  (order) => {
+    queryDeadline =
+      performance.now() +
+      Math.max(0, order.payment_query_after_seconds || 0) * 1000;
+    queryWait.value = Math.ceil(
+      Math.max(0, queryDeadline - performance.now()) / 1000,
+    );
+  },
+  { immediate: true },
+);
 let disposed = false;
 let timer: ReturnType<typeof setInterval> | undefined;
 let ticks = 0;
@@ -44,6 +63,9 @@ const mobile = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
 const payment = computed(() => props.order.payment);
 const isSimulation = computed(() => props.order.mode === "simulation");
 const isDelivery = computed(() => props.order.fulfillment_type === "delivery");
+const onlineSupported = computed(
+  () => isSimulation.value || props.order.wechat_payment?.supported !== false,
+);
 const financialFollowUp = computed(() => needsFinancialFollowUp(props.order));
 const refundFollowUp = computed(() => refundNeedsFollowUp(props.order));
 const refundProblem = computed(
@@ -68,9 +90,53 @@ const active = computed(
     !!payment.value &&
     ["creating", "pending", "reconcile"].includes(payment.value.status),
 );
+// Before pickup is ready there is no payment action to take. Keep the payment
+// options visible without giving an unavailable cashier most of the screen.
+const compactPickup = computed(
+  () =>
+    !isDelivery.value &&
+    !props.suspended &&
+    ["pending", "preparing"].includes(props.order.status) &&
+    props.order.payment_status === "unpaid" &&
+    !payment.value &&
+    !props.order.refund &&
+    !props.order.refunds?.length &&
+    !financialFollowUp.value &&
+    !props.order.cancel_requested &&
+    !uncertain.value,
+);
 const review = computed(
   () =>
     props.order.payment_review_required || payment.value?.status === "review",
+);
+const offlineInformation = computed(
+  () =>
+    !isDelivery.value &&
+    !props.suspended &&
+    props.order.payment_status === "unpaid" &&
+    ["pending", "preparing", "ready"].includes(props.order.status) &&
+    !props.order.cancel_requested &&
+    !financialFollowUp.value &&
+    !props.order.refund &&
+    !props.order.refunds?.length &&
+    !active.value &&
+    (!payment.value || payment.value.status === "closed") &&
+    !uncertain.value &&
+    !review.value,
+);
+// The server owns permission; also fail closed if a stale response contains a
+// code alongside a cancellation, rehearsal or unresolved financial state.
+const showStallPaymentQr = computed(
+  () =>
+    props.order.offline_payment_available === true &&
+    props.order.mode === "live" &&
+    props.order.fulfillment_type === "pickup" &&
+    props.order.status === "ready" &&
+    props.order.payment_method === "offline" &&
+    !busy.value &&
+    offlineInformation.value &&
+    (!payment.value || payment.value.status === "closed") &&
+    !!props.order.stall_payment_qr_image,
 );
 const visible = computed(
   () =>
@@ -99,13 +165,19 @@ const remaining = computed(
 const canStart = computed(
   () =>
     allows(props.order, "pay", true) &&
+    !props.suspended &&
     payableStage.value &&
     !deliveryWindowClosing.value &&
     props.order.payment_status === "unpaid" &&
     !props.order.cancel_requested &&
     !active.value &&
+    (!payment.value || payment.value.status === "closed") &&
     !uncertain.value &&
     !review.value &&
+    !financialFollowUp.value &&
+    !props.order.refund &&
+    !props.order.refunds?.length &&
+    onlineSupported.value &&
     props.order.wechat_payment?.available,
 );
 const channels = computed(() => props.order.wechat_payment?.channels || []);
@@ -126,8 +198,11 @@ const browserSupported = computed(() =>
 const canRetry = computed(
   () =>
     allows(props.order, "pay", true) &&
+    !props.suspended &&
     active.value &&
     !isSimulation.value &&
+    onlineSupported.value &&
+    props.order.wechat_payment?.available === true &&
     !review.value &&
     orderUnpaid() &&
     remaining.value > 60 &&
@@ -138,6 +213,7 @@ const canRetry = computed(
 const canSimulate = computed(
   () =>
     allows(props.order, "simulate_payment", true) &&
+    !props.suspended &&
     isSimulation.value &&
     session.config?.services_simulation_enabled !== false &&
     payment.value?.mode === "simulation" &&
@@ -226,7 +302,12 @@ async function action(
   )
     return;
   if (kind === "sync" && !allows(props.order, "sync_payment", true)) return;
-  if (kind === "sync" && Date.now() - lastSync < 3000) return;
+  if (
+    (kind === "sync" || (kind === "wechat" && active.value)) &&
+    queryWait.value > 0
+  )
+    return;
+  if (kind === "sync" && Date.now() - lastSync < 5000) return;
   if (kind === "simulate" && (!outcome || !canSimulate.value)) return;
   if (
     kind === "wechat" &&
@@ -295,6 +376,9 @@ function refreshVisible() {
 onMounted(() => {
   timer = setInterval(() => {
     now.value = Date.now();
+    queryWait.value = Math.ceil(
+      Math.max(0, queryDeadline - performance.now()) / 1000,
+    );
     if (++ticks % 10 === 0) refreshVisible();
   }, 1000);
   document.addEventListener("visibilitychange", refreshVisible);
@@ -315,22 +399,37 @@ onUnmounted(() => {
     v-if="visible"
     id="payment"
     class="card student-payment"
+    :class="{ 'payment-before-pickup': compactPickup }"
     aria-labelledby="payment-heading"
   >
     <header>
       <span class="payment-symbol"><CreditCard :size="23" /></span>
       <div>
-        <span class="eyebrow">PAY & PICK UP</span>
         <h2 id="payment-heading">支付方式</h2>
+        <span v-if="isSimulation" class="payment-mode">模拟 · 不会扣款</span>
       </div>
       <strong>¥{{ money(order.total_cents) }}</strong>
     </header>
     <p v-if="order.financial_hold_reason" class="error-message" role="status">
       {{ order.financial_hold_reason }}
     </p>
-    <p v-if="isSimulation" class="simulation-label" role="note">
-      模拟体验 · 不会扣款，也不会产生真实退款
-    </p>
+    <div v-if="suspended" class="payment-message attention" role="status">
+      <div>
+        <strong>正在确认取消结果</strong>
+        <p>
+          付款入口已暂时收起，请勿另行付款。请刷新订单状态，或再次提交同一取消申请。
+        </p>
+        <div class="payment-actions">
+          <button
+            class="btn btn-secondary"
+            :disabled="suspensionBusy"
+            @click="emit('confirmCancellation')"
+          >
+            确认取消结果
+          </button>
+        </div>
+      </div>
+    </div>
     <div v-if="review" class="payment-message attention" role="status">
       <strong>这笔款项需要核对</strong>
       <p>请联系商家处理，暂时不要重复付款。订单不会自动核销。</p>
@@ -427,6 +526,10 @@ onUnmounted(() => {
         <template
           v-if="
             allows(order, 'pay', true) &&
+            !suspended &&
+            !isSimulation &&
+            onlineSupported &&
+            order.wechat_payment?.available === true &&
             orderUnpaid() &&
             payment?.status === 'pending' &&
             remaining > 0 &&
@@ -474,7 +577,11 @@ onUnmounted(() => {
             <p>
               请先核对这笔款项，不要另行付款。过期或关闭的二维码不能继续使用。
             </p>
-            <p v-if="payment?.status === 'pending'">
+            <p v-if="!order.wechat_payment?.available">
+              当前已暂停新的微信付款，仍可核对或关闭既有支付。
+              {{ order.wechat_payment?.reason }}
+            </p>
+            <p v-else-if="payment?.status === 'pending'">
               付款入口未就绪时，可先关闭本次微信支付，再重新发起。系统会先核对是否已付款。
             </p>
           </div>
@@ -483,16 +590,22 @@ onUnmounted(() => {
       <div class="payment-actions">
         <button
           class="btn btn-secondary"
-          :disabled="!!busy || !allows(order, 'sync_payment', true)"
+          :disabled="
+            !!busy || queryWait > 0 || !allows(order, 'sync_payment', true)
+          "
           @click="action('sync')"
         >
           <RefreshCw :size="16" />{{
-            busy === "sync" ? "正在核对…" : "刷新付款状态"
+            busy === "sync"
+              ? "正在核对…"
+              : queryWait > 0
+                ? `${queryWait} 秒后可再次核对`
+                : "刷新付款状态"
           }}</button
         ><button
           v-if="canRetry"
           class="btn btn-secondary"
-          :disabled="!!busy"
+          :disabled="!!busy || queryWait > 0"
           @click="action('wechat')"
         >
           {{ busy === "wechat" ? "正在恢复…" : "重试获取付款入口" }}</button
@@ -525,10 +638,15 @@ onUnmounted(() => {
       v-else-if="
         ['pending_payment', 'pending', 'preparing', 'ready'].includes(
           order.status,
-        ) && !order.cancel_requested
+        ) &&
+        !suspended &&
+        !order.cancel_requested &&
+        !financialFollowUp &&
+        !order.refund &&
+        !order.refunds?.length
       "
     >
-      <div class="payment-choice">
+      <div v-if="onlineSupported" class="payment-choice">
         <div>
           <strong>{{
             isSimulation
@@ -542,22 +660,27 @@ onUnmounted(() => {
           ><span class="online-label">线上支付</span>
           <p>
             {{
-              isSimulation
+              compactPickup
                 ? order.wechat_payment?.available
-                  ? isDelivery
-                    ? "点击进入模拟收银台，体验付款后商家接单的流程。"
-                    : "商家出餐后可以模拟微信付款，也可体验到摊付款。"
-                  : "商家暂未开启模拟线上支付。可以联系商家在经营服务中开启。"
-                : order.wechat_payment?.available
-                  ? isDelivery
-                    ? "请先完成付款，商家确认接单后开始制作并配送至交接点。"
-                    : order.status === "ready"
-                      ? "在线付款后，向商家出示取餐码即可。也可以在取餐时直接向商家付款。"
-                      : "商家出餐后，在这里使用微信付款。现在无需付款。"
-                  : isDelivery
-                    ? "微信支付当前不可用，配送订单不能改为线下付款。请稍后重试或取消订单。"
-                    : order.wechat_payment?.reason ||
-                      "当前支持到摊付款，请向商家确认支付方式。"
+                  ? "出餐后可微信付款，现在无需提前支付。"
+                  : order.wechat_payment?.reason ||
+                    "到摊扫摊主收款码付款，平台不经手款项。"
+                : isSimulation
+                  ? order.wechat_payment?.available
+                    ? isDelivery
+                      ? "点击进入模拟收银台，体验付款后商家接单的流程。"
+                      : "商家出餐后可以模拟微信付款，也可体验到摊付款。"
+                    : "商家暂未开启模拟线上支付。可以联系商家在经营服务中开启。"
+                  : order.wechat_payment?.available
+                    ? isDelivery
+                      ? "请先完成付款，商家确认接单后开始制作并配送至交接点。"
+                      : order.status === "ready"
+                        ? "在线付款后，向商家出示取餐码即可。也可以在取餐时直接向商家付款。"
+                        : "商家出餐后，在这里使用微信付款。现在无需付款。"
+                    : isDelivery
+                      ? "微信支付当前不可用，配送订单不能改为线下付款。请稍后重试或取消订单。"
+                      : order.wechat_payment?.reason ||
+                        "到摊扫摊主收款码付款，平台不经手款项。"
             }}
           </p>
         </div>
@@ -579,6 +702,20 @@ onUnmounted(() => {
           }}
         </button>
       </div>
+      <div v-else class="payment-message">
+        <div>
+          <strong>{{ isDelivery ? "配送暂时无法付款" : "到摊付款" }}</strong>
+          <p>
+            {{
+              isDelivery
+                ? "该商户当前无法发起线上支付。配送不能改为线下付款，请稍后重试或取消订单。"
+                : order.status === "ready"
+                  ? "请到摊核对餐点和金额，再向摊主本人付款，平台不经手款项。"
+                  : "先等商家出餐，取餐时再向摊主本人付款，无需提前支付。"
+            }}
+          </p>
+        </div>
+      </div>
       <p v-if="deliveryWindowClosing" class="payment-footnote">
         剩余时间不足以发起新支付，请取消本单后重新下单。已发起的支付请先核对结果。
       </p>
@@ -595,12 +732,19 @@ onUnmounted(() => {
                 : "该商家暂未开通电脑扫码支付。请用手机系统浏览器打开本单，或到摊付款。"
         }}
       </p>
-      <p v-else class="payment-footnote">
+      <p v-else-if="onlineSupported && !compactPickup" class="payment-footnote">
         <ShieldCheck :size="14" />付款状态以服务端核验结果为准
       </p>
     </template>
     <p v-else-if="order.cancel_requested" class="payment-footnote">
       取消申请正在处理中，暂时不能发起付款。
+    </p>
+    <p v-if="compactPickup && onlineSupported" class="compact-offline-note">
+      {{
+        isSimulation
+          ? "出餐后也可演练商家确认模拟收款，不要支付真实款项。"
+          : "也可出餐后到摊付款，无需提前支付。"
+      }}
     </p>
     <div
       v-if="financialFollowUp && (!active || review || refundFollowUp)"
@@ -626,22 +770,33 @@ onUnmounted(() => {
       </p>
     </div>
     <p
-      v-if="
-        !isDelivery &&
-        order.payment_status === 'unpaid' &&
-        !financialFollowUp &&
-        !active &&
-        !uncertain &&
-        !review &&
-        !order.cancel_requested &&
-        ['pending', 'preparing', 'ready'].includes(order.status)
-      "
+      v-if="onlineSupported && !compactPickup && offlineInformation"
       class="offline-option"
     >
       <ShieldCheck :size="16" /><span
-        ><strong>也可到摊付款</strong>取餐时直接向商家付款，无需提前支付。</span
+        ><strong>{{
+          isSimulation ? "也可演练到摊付款" : "也可到摊付款"
+        }}</strong
+        >{{
+          isSimulation
+            ? "由商家确认模拟收款，不要支付真实款项。"
+            : "取餐时扫摊主收款码付款，无需提前支付。"
+        }}</span
       >
     </p>
+    <figure v-if="showStallPaymentQr" class="stall-qr">
+      <img
+        :src="order.stall_payment_qr_image"
+        :alt="`${order.stall_name}摊主自有收款码`"
+        loading="lazy"
+        width="220"
+        height="220"
+      />
+      <figcaption>
+        <strong>摊主收款码 · 应付 ¥{{ money(order.total_cents) }}</strong>
+        到摊后扫码付给摊主本人，平台不经手款项。付款后请向摊主出示取餐码，由摊主确认收款。
+      </figcaption>
+    </figure>
     <p v-if="error" class="error-message" role="alert">{{ error }}</p>
   </section>
 </template>
@@ -669,6 +824,18 @@ onUnmounted(() => {
   overflow: hidden;
   scroll-margin-top: 100px;
 }
+.payment-mode {
+  display: block;
+  margin-top: 3px;
+  color: #886329;
+  font-size: 11px;
+}
+.compact-offline-note {
+  margin: 10px 0 0;
+  color: #716552;
+  font-size: 12px;
+  line-height: 1.6;
+}
 .simulation-label {
   padding: 11px 13px;
   border-radius: 10px;
@@ -687,6 +854,34 @@ onUnmounted(() => {
   border-radius: 5px;
   padding: 2px 6px;
   vertical-align: middle;
+}
+.stall-qr {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px 18px;
+  margin: 18px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid #ece7dc;
+}
+.stall-qr img {
+  width: 180px;
+  height: 180px;
+  object-fit: contain;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid #ece7dc;
+}
+.stall-qr figcaption {
+  flex: 1 1 200px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #6b6251;
+}
+.stall-qr strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 14px;
 }
 .offline-option {
   display: flex;
@@ -859,13 +1054,20 @@ onUnmounted(() => {
 }
 @media (max-width: 600px) {
   .student-payment {
-    padding: 23px 19px;
+    padding: 16px;
   }
   .student-payment header {
     gap: 10px;
+    margin-bottom: 14px;
+  }
+  .payment-symbol {
+    height: 34px;
+    width: 34px;
+    border-radius: 10px;
   }
   .student-payment h2 {
-    font-size: 15px;
+    font-size: 16px;
+    margin-top: 0;
   }
   .student-payment header > strong {
     font-size: 21px;
@@ -873,7 +1075,39 @@ onUnmounted(() => {
   .payment-choice {
     flex-direction: column;
     align-items: stretch;
-    padding: 16px;
+    gap: 12px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+  .payment-before-pickup .payment-choice {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: start;
+  }
+  .payment-before-pickup .payment-choice p {
+    font-size: 12px;
+    line-height: 1.65;
+    margin-top: 5px;
+  }
+  .payment-before-pickup .online-label {
+    display: none;
+  }
+  .payment-before-pickup .pay-button {
+    padding: 10px;
+    font-size: 12px;
+  }
+  .payment-message {
+    padding: 12px;
+  }
+  .offline-option {
+    margin-top: 12px;
+    padding-top: 10px;
+  }
+  .payment-footnote {
+    margin-top: 10px;
   }
   .payment-actions {
     flex-direction: column;

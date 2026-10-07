@@ -91,7 +91,9 @@ def main():
         settings = temporary / "pilot_integration_settings.py"
         settings.write_text(
             "from config.settings import *\n"
-            f"DATABASES = {{'default': {{'ENGINE': 'django.db.backends.sqlite3', 'NAME': {str(temporary / 'integration.sqlite3')!r}, 'OPTIONS': {{'timeout': 20}}}}}}\n"
+            # Match development transaction locking: deferred SQLite transactions
+            # cannot upgrade a read lock while the receiving heartbeat writes.
+            f"DATABASES = {{'default': {{'ENGINE': 'django.db.backends.sqlite3', 'NAME': {str(temporary / 'integration.sqlite3')!r}, 'OPTIONS': {{'timeout': 20, 'transaction_mode': 'IMMEDIATE'}}}}}}\n"
             f"MEDIA_ROOT = {str(temporary / 'media')!r}\n"
             "WECHAT_PAY_ENABLED = False\nWECHAT_PAY_CONFIG_FILE = ''\nWECHAT_PAY_PUBLIC_ORIGIN = ''\n"
             "CACHES = {'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}}\n",
@@ -120,10 +122,13 @@ def main():
         vite_script = temporary / "vite-integration.mjs"
         vite_script.write_text(
             f"import {{createServer}} from {json.dumps((FRONTEND / 'node_modules/vite/dist/node/index.js').as_uri())};\n"
+            "process.env.CI = 'true'; // Keep Vite alive if the launching terminal closes stdin.\n"
+            "process.on('exit', code => console.log('Integration Vite exit', code));\n"
             f"const server = await createServer({{root: {json.dumps(str(FRONTEND))}, configFile: {json.dumps(str(FRONTEND / 'vite.config.ts'))}, "
             f"server: {{host:'127.0.0.1', port:{FRONTEND_PORT}, strictPort:true, proxy: Object.fromEntries(['/api','/admin','/static','/media'].map(path=>[path,{{target:'http://127.0.0.1:{BACKEND_PORT}',changeOrigin:false}}]))}}}});\n"
             "await server.listen(); server.printUrls();\n"
-            "process.stdin.setEncoding('utf8'); process.stdin.resume(); process.stdin.once('data', async()=>{await server.close();process.exit(0)});\n",
+            "let input = ''; process.stdin.setEncoding('utf8'); process.stdin.resume();\n"
+            "process.stdin.on('data', async chunk => {input += chunk; if (input.split(/\\r?\\n/).slice(0, -1).includes('stop')) {await server.close();process.exit(0)}});\n",
             encoding="utf-8")
         with (artifacts / "django-server.log").open("w", encoding="utf-8") as django_log, (artifacts / "vite-server.log").open("w", encoding="utf-8") as vite_log:
             django = subprocess.Popen([sys.executable, "manage.py", "runserver", f"127.0.0.1:{BACKEND_PORT}", "--noreload"],
@@ -138,8 +143,30 @@ def main():
                     config = json.load(response)
                 if not config.get("demo_mode") or not config.get("services_simulation_enabled"):
                     raise RuntimeError("Isolated proxy did not report the required rehearsal configuration.")
+                def public_json(path):
+                    with urllib.request.urlopen(env["E2E_BASE_URL"] + "/api/v1" + path, timeout=10) as response:
+                        return json.load(response)
+                discovery = public_json("/stalls")
+                if not isinstance(discovery, dict) or not {"results", "next"} <= discovery.keys():
+                    raise RuntimeError("Public discovery did not return a bounded page.")
+                for stall in discovery["results"]:
+                    if len(stall.get("products", [])) > 2 or any(key in stall for key in (
+                        "contact_phone", "order_count", "prep_capacity", "prep_active_orders", "receiving_seen_at")):
+                        raise RuntimeError("Public summary exposed operating details or an unbounded menu.")
+                    for product in stall.get("products", []):
+                        if "stock" in product or "stock_version" in product or not {"availability", "max_order_quantity"} <= product.keys():
+                            raise RuntimeError("Public product did not use the availability contract.")
+                markers = public_json("/stalls/map")
+                if not isinstance(markers, dict) or len(markers.get("results", [])) > 200 or any("products" in row for row in markers.get("results", [])):
+                    raise RuntimeError("Map projection is unbounded or contains full menus.")
+                (artifacts / "public-contract.json").write_text(json.dumps({
+                    "status": "passed", "summary_count": len(discovery["results"]),
+                    "map_count": len(markers["results"]), "exact_stock_exposed": False,
+                }, indent=2), encoding="utf-8")
                 run("browser-integration", [node, "node_modules/@playwright/test/cli.js", "test",
                     "e2e/counter-integration.spec.ts", "e2e/simulation-live.spec.ts",
+                    "e2e/product-details.spec.ts", "e2e/checkout.spec.ts", "e2e/reorder.spec.ts",
+                    "e2e/mobile-usability.spec.ts", "e2e/identity-cookie-integration.spec.ts",
                     "--reporter=list", f"--output={artifacts / 'browser-results'}"], FRONTEND, timeout=540)
             finally:
                 if vite:

@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $statePath = Join-Path $projectRoot '.runtime\processes.json'
 if (-not (Test-Path -LiteralPath $statePath)) { Write-Host 'No processes started by start-dev.ps1 were recorded.'; exit }
-$state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+$state = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
 if ($state.root -ne $projectRoot) { throw 'Process record belongs to another workspace.' }
 foreach ($record in $state.processes) {
     $process = Get-Process -Id $record.id -ErrorAction SilentlyContinue

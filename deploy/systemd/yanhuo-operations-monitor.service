@@ -1,0 +1,19 @@
+[Unit]
+Description=Read-only Yanhuo operational checks and durable HTTPS alerts
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+ExecStart=/usr/bin/python3 /srv/yanhuo/scripts/operations_monitor.py check --config /etc/yanhuo/operations.json
+TimeoutStartSec=180
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/yanhuo-monitor
+# The Docker socket grants host-level access. This tool only inspects containers
+# and executes the fixed read-only check_operations management command.
+

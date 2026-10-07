@@ -25,6 +25,9 @@ from .wechatpay import GatewayError
 
 class SimulationSetup:
     def setUp(self):
+        pacing = override_settings(PAYMENT_QUERY_INTERVAL_SECONDS=0, PAYMENT_QUERY_FAILURE_DELAYS=(0,),
+            CHECKOUT_MAX_ACTIVE_PER_STALL=100, CHECKOUT_MAX_ACTIVE_TOTAL=100)
+        pacing.enable(); self.addCleanup(pacing.disable)
         self.student, self.other, self.vendor, self.stall, self.product = fixtures()
         self.stall.is_demo = True
         self.stall.simulation_payment_enabled = self.stall.simulation_delivery_enabled = True

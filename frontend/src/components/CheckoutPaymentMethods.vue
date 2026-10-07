@@ -1,8 +1,24 @@
 <script setup lang="ts">
 import { CreditCard, Wallet, Clock3, ChevronDown } from "lucide-vue-next";
+import { computed } from "vue";
 import type { PaymentReadiness } from "../lib/types";
 
-defineProps<{ readiness?: PaymentReadiness; delivery?: boolean }>();
+const props = defineProps<{
+  readiness?: PaymentReadiness;
+  delivery?: boolean;
+}>();
+const onlineSupported = computed(
+  () =>
+    props.readiness?.mode === "simulation" ||
+    props.readiness?.supported !== false,
+);
+const offlinePickup = computed(
+  () =>
+    !props.delivery &&
+    onlineSupported.value &&
+    !props.readiness?.available &&
+    props.readiness?.mode !== "simulation",
+);
 </script>
 
 <template>
@@ -14,13 +30,18 @@ defineProps<{ readiness?: PaymentReadiness; delivery?: boolean }>();
       <h2 id="checkout-payment-heading">支付方式</h2>
       <p>
         {{
-          delivery
-            ? "配送先付款，付款成功后商家才会接单。"
-            : "先下单，商家出餐后再付款。"
+          !onlineSupported
+            ? "该商户提供找摊与菜品信息，暂不接受线上订单。"
+            : delivery
+              ? "配送先付款，付款成功后商家才会接单。"
+              : "先下单，商家出餐后再付款。"
         }}
       </p>
     </header>
-    <div class="method-row wechat-method">
+    <div
+      v-if="onlineSupported && !offlinePickup"
+      class="method-row wechat-method"
+    >
       <span class="method-icon"><CreditCard :size="22" /></span>
       <div class="method-copy">
         <h3>
@@ -39,7 +60,7 @@ defineProps<{ readiness?: PaymentReadiness; delivery?: boolean }>();
                   : "出餐后在订单页付款。"
                 : delivery
                   ? "微信支付尚未开通，暂时无法提交配送订单。"
-                  : "暂不能在线扣款，可到摊付款。"
+                  : "暂不能在线扣款，到摊扫摊主收款码付款。"
           }}
         </p>
       </div>
@@ -51,7 +72,11 @@ defineProps<{ readiness?: PaymentReadiness; delivery?: boolean }>();
           : "尚未开通"
       }}</span>
     </div>
-    <div v-if="!delivery" class="method-row offline-method">
+    <div
+      v-if="!delivery && onlineSupported"
+      class="method-row offline-method"
+      :class="{ 'single-method': offlinePickup }"
+    >
       <span class="method-icon"><Wallet :size="22" /></span>
       <div class="method-copy">
         <h3>到摊付款</h3>
@@ -59,13 +84,16 @@ defineProps<{ readiness?: PaymentReadiness; delivery?: boolean }>();
           {{
             readiness?.mode === "simulation"
               ? "可演练商家确认模拟收款后取餐。"
-              : "取餐时付款，由商家确认收款。"
+              : "取餐时扫摊主本人的收款码付款，平台不经手款项。"
           }}
         </p>
       </div>
-      <span class="method-state available">可使用</span>
+      <span v-if="!offlinePickup" class="method-state available">可使用</span>
     </div>
-    <details v-if="!readiness?.available" class="payment-explanation">
+    <p v-if="!onlineSupported" class="payment-timing">
+      找到摊位后，请现场向摊主确认餐点和付款方式。
+    </p>
+    <details v-else-if="!readiness?.available" class="payment-explanation">
       <summary>
         {{
           readiness?.mode === "simulation"
@@ -74,7 +102,9 @@ defineProps<{ readiness?: PaymentReadiness; delivery?: boolean }>();
         }}<ChevronDown :size="16" />
       </summary>
       <p>
-        {{ readiness?.reason || "该商家暂未开通微信支付，当前支持到摊付款。" }}
+        {{
+          readiness?.reason || "该商家暂未开通微信支付，到摊扫摊主收款码付款。"
+        }}
       </p>
       <p>
         {{
@@ -127,6 +157,10 @@ header p {
 }
 .method-row + .method-row {
   margin-top: 11px;
+}
+.single-method {
+  padding: 0;
+  border: 0;
 }
 .wechat-method {
   background: #f4f8f0;

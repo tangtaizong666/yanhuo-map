@@ -44,7 +44,7 @@ class FinancialHistoryMigrationTests(TransactionTestCase):
         finally:
             # Leave the test database at the current schema even on fixture failure.
             executor = MigrationExecutor(connection)
-            executor.migrate(self.migrate_to)
+            executor.migrate(executor.loader.graph.leaf_nodes())
         apps = executor.loader.project_state(self.migrate_to).apps
         self.assertEqual(apps.get_model('market', 'Product').objects.get(pk=product.pk).stock, 19)
         self.assertEqual(apps.get_model('market', 'Stall').objects.get(pk=stall.pk).image, '/media/merchant-owned-photo.jpg')

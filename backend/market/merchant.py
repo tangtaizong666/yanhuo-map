@@ -26,7 +26,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from .errors import BusinessError
-from .models import DeliveryPoint, Event, Follow, MerchantProfile, Order, OrderItem, PaymentRefund, Product, Review, Stall
+from .models import DeliveryPoint, Event, Follow, MerchantProfile, Order, OrderItem, PaymentRefund, Product, Review, SiteConfiguration, Stall
 from .serializers import ProductSerializer, ReviewSerializer, StallSerializer
 from .services import audit
 from .views import merchant_stall, stall_context
@@ -51,19 +51,14 @@ class ImageAddress(serializers.CharField):
 
     def to_internal_value(self, data):
         value = super().to_internal_value(data)
-        if value:
-            try:
-                parsed = urlsplit(value)
-            except ValueError:
-                raise serializers.ValidationError('图片地址格式不正确。')
-            local = value.startswith(('/images/', '/media/')) and not parsed.netloc
-            remote = parsed.scheme == 'https' and bool(parsed.netloc) and not parsed.username
-            if not (local or remote) or '\\' in value:
-                raise serializers.ValidationError('请上传图片，或使用 HTTPS 图片地址。')
+        from .media_policy import public_image
+        if value and not public_image(value):
+            raise serializers.ValidationError('请上传图片或选择本站素材，不支持外部图片地址。')
         return value
 
 
 class ProductInput(StrictInput):
+    display_availability = serializers.ChoiceField(choices=['', 'available', 'sold_out', 'paused'], required=False)
     sale_paused = serializers.BooleanField(required=False, default=False)
     taste_options = TasteOptionsField(required=False, default=list)
     name = serializers.CharField(max_length=80)
@@ -80,10 +75,12 @@ class ProductCreateInput(ProductInput):
 
 
 class StallProfileInput(StrictInput):
+    public_phone_enabled = serializers.BooleanField(required=False)
     prep_capacity = serializers.IntegerField(min_value=1, max_value=100, allow_null=True, required=False)
     usual_hours = serializers.CharField(max_length=100, allow_blank=True, required=False)
     arrival_note = serializers.CharField(max_length=200, allow_blank=True, required=False)
     arrival_image = ImageAddress(required=False)
+    payment_qr_image = ImageAddress(required=False)
     location_draft_address = serializers.CharField(max_length=200, allow_blank=True, required=False)
     accepting_orders = serializers.BooleanField(required=False)
     name = serializers.CharField(max_length=80, required=False)
@@ -110,6 +107,7 @@ class DeliveryInput(StrictInput):
 
 
 def service_settings(stall):
+    from .admission import capabilities
     from .simulation import eligible
     from .serializers import public_payment_readiness
     from .delivery import delivery_settings, service_enabled
@@ -117,7 +115,7 @@ def service_settings(stall):
     return {'mode': 'simulation' if simulated else 'live', 'simulation_available': simulated,
         'online_payment_enabled': stall.simulation_payment_enabled if simulated else public_payment_readiness(stall, {})['available'],
         'delivery_enabled': service_enabled(stall), 'wechat_payment': public_payment_readiness(stall, {}),
-        'delivery': delivery_settings(stall, merchant=True)}
+        'delivery': delivery_settings(stall, merchant=True), 'capabilities': capabilities(stall)}
 
 
 class ServicesInput(StrictInput):
@@ -137,8 +135,10 @@ def services(request, stall_id):
         if not eligible(stall):
             raise BusinessError('快捷开关目前用于模拟经营；正式服务需由运营完成接入后启用。', 'simulation_unavailable')
         values = form.validated_data
-        if any(value is True for value in values.values()) and (not stall.transaction_enabled or not stall.merchant.is_verified):
-            raise BusinessError('此摊位当前没有在线接单资格，不能开启模拟交易。', 'stall_unavailable')
+        from .admission import pickup_eligibility_reason
+        admission_reason = pickup_eligibility_reason(stall)
+        if any(value is True for value in values.values()) and admission_reason:
+            raise BusinessError(admission_reason, 'stall_unavailable')
         if values.get('delivery_enabled') is True:
             prepare_stall(stall)
         for key, value in values.items():
@@ -161,6 +161,10 @@ def delivery(request, stall_id):
     with transaction.atomic():
         stall = merchant_stall(stall_id, request.user, locked=True, permission='market.change_stall')
         point_ids = values.pop('point_ids', None)
+        from .admission import delivery_eligibility_reason
+        admission_reason = delivery_eligibility_reason(stall)
+        if values.get('enabled') is True and admission_reason:
+            raise BusinessError(admission_reason, 'delivery_unavailable')
         for key, value in values.items(): setattr(stall, 'simulation_delivery_enabled' if key == 'enabled' and eligible(stall) else 'delivery_' + key, value)
         if stall.delivery_starts_at >= stall.delivery_ends_at:
             raise BusinessError('配送时间需为同日开始时间早于结束时间的区间。', 'invalid_delivery_window', status=400)
@@ -258,6 +262,10 @@ def profile(request, stall_id):
     with transaction.atomic():
         stall = merchant_stall(stall_id, request.user, locked=True, permission='market.change_stall')
         values = dict(form.validated_data)
+        from .admission import pickup_eligibility_reason
+        admission_reason = pickup_eligibility_reason(stall)
+        if values.get('accepting_orders') is True and admission_reason:
+            raise BusinessError(admission_reason, 'stall_unavailable')
         if 'contact_phone' in values:
             require_stall_permission(stall, request.user, 'market.change_merchantprofile')
             # A merchant's public phone is shared by all their stalls.
@@ -370,6 +378,7 @@ def metrics(request):
     query = query.filter(mode=mode)
     events = owned(Event.objects.all(), request.user, permission='market.view_order')
     stall_query = owned(Stall.objects.select_related('current_session'), request.user, prefix='', permission='market.view_order')
+    site_config = SiteConfiguration.current()
     if stall:
         query, events, stall_query = query.filter(stall=stall), events.filter(stall=stall), stall_query.filter(pk=stall.pk)
     recent = query.filter(created_at__gte=start, created_at__lte=now)
@@ -420,7 +429,9 @@ def metrics(request):
         refunded_at=Subquery(latest_refund.values('completed_at')[:1]))[:20])
     for payment in payments:
         payment['refunded'] = payment['refund_status'] == 'success'
+    from .pilot_metrics import evidence
     return Response({'mode': mode, 'period_days': days, 'stall_views': views, 'orders_created': total, 'orders_completed': completed,
+        'pilot_evidence': evidence(query, stall_query, start, now, mode),
         'source_counts': source_counts,
         'completed_customer_count': completed_customers, 'returning_customer_count': returning_customers,
         'returning_customer_rate': round(returning_customers / completed_customers, 3) if completed_customers else None,
@@ -429,7 +440,7 @@ def metrics(request):
         'pending_orders': query.filter(status='pending').count(),
         'uncollected_orders': query.filter(Q(fulfillment_type='pickup', status='ready', ready_at__lt=now - timedelta(hours=1)) | Q(fulfillment_type='delivery', status='arrived', arrived_at__lt=now - timedelta(hours=1))).count(),
         'expired_orders': recent_events.filter(type='order_expired').count(),
-        'stale_stalls': sum(s.effective_status() == 'stale' for s in stall_query),
+        'stale_stalls': sum(s.effective_status(site_config) == 'stale' for s in stall_query),
         **net_receipts(gross, refund_cents),
         'average_order_cents': round(revenue / paid_count) if paid_count else 0,
         'followers': Follow.objects.filter(stall__in=stall_query).count(),

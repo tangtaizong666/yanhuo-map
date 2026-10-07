@@ -31,12 +31,21 @@ export interface Product {
   description: string;
   image: string;
   price_cents: number;
-  stock: number;
+  availability: "available" | "sold_out" | "paused" | "unavailable";
+  max_order_quantity: number;
+  display_only?: boolean;
   sale_paused?: boolean;
-  stock_version?: number;
   is_active?: boolean;
   category?: string;
   taste_options?: { name: string; choices: string[] }[];
+}
+export interface MerchantProduct extends Omit<
+  Product,
+  "availability" | "max_order_quantity"
+> {
+  stock: number;
+  stock_version: number;
+  display_availability?: "" | "available" | "sold_out" | "paused";
 }
 export interface Portion {
   options: Record<string, string>;
@@ -53,7 +62,20 @@ export interface Review {
   merchant_reply?: string;
   replied_at?: string | null;
 }
+export interface ServiceCapability {
+  eligible: boolean;
+  available: boolean;
+  reason: string;
+}
+export interface StallCapabilities {
+  mode: "live" | "simulation";
+  public_listing: { available: boolean; reason: string };
+  pickup_orders: ServiceCapability;
+  online_payment: ServiceCapability;
+  delivery_orders: ServiceCapability;
+}
 export interface Stall {
+  capabilities?: StallCapabilities;
   delivery?: DeliverySettings;
   wechat_payment?: PaymentReadiness;
   id: number;
@@ -64,15 +86,12 @@ export interface Stall {
   address: string;
   arrival_note?: string;
   arrival_image?: string;
-  location_draft_address?: string;
+  payment_qr_image?: string;
   accepting_orders?: boolean;
   usual_hours?: string;
-  prep_capacity?: number | null;
-  prep_active_orders?: number;
   stop_orders_at?: string | null;
-  receiving_seen_at?: string | null;
   receiving_status?: "unknown" | "recent" | "stale";
-  receiving_age_seconds?: number | null;
+  receiving_valid_for_seconds?: number;
   business_session_id?: number | null;
   order_unavailable_reason?: string;
   session_status?: "open" | "paused" | "closed";
@@ -98,6 +117,74 @@ export interface Stall {
   products: Product[];
   reviews: Review[];
 }
+export type StallSummary = Pick<
+  Stall,
+  | "id"
+  | "name"
+  | "description"
+  | "category"
+  | "image"
+  | "address"
+  | "latitude"
+  | "longitude"
+  | "area_id"
+  | "area_name"
+  | "status"
+  | "last_confirmed_at"
+  | "prep_minutes"
+  | "transaction_enabled"
+  | "can_order"
+  | "rating"
+  | "review_count"
+  | "distance_m"
+  | "is_followed"
+  | "products"
+  | "accepting_orders"
+  | "order_unavailable_reason"
+  | "usual_hours"
+  | "receiving_status"
+  | "receiving_valid_for_seconds"
+>;
+export type StallMap = Omit<
+  StallSummary,
+  | "description"
+  | "rating"
+  | "review_count"
+  | "distance_m"
+  | "products"
+  | "usual_hours"
+>;
+export interface MerchantStall extends Omit<Stall, "products"> {
+  location_draft_address?: string;
+  products: MerchantProduct[];
+  public_phone_enabled: boolean;
+  prep_capacity?: number | null;
+  prep_active_orders: number;
+  receiving_seen_at?: string | null;
+  receiving_age_seconds?: number | null;
+  activation: {
+    is_visible: boolean;
+    has_location: boolean;
+    verified: boolean;
+    has_sellable_products: boolean;
+    blockers: string[];
+    steps: {
+      key: string;
+      label: string;
+      status: "done" | "pending" | "optional";
+      owner: "merchant" | "operator";
+      reason: string;
+    }[];
+  };
+}
+export interface DiscoveryPage<T> {
+  results: T[];
+  next: string | null;
+}
+export interface DiscoveredMeal {
+  product: Product;
+  stall: StallMap;
+}
 export interface MerchantApplication {
   id: number;
   status: "draft" | "submitted" | "needs_changes" | "approved" | "rejected";
@@ -117,6 +204,8 @@ export interface CartItem {
   product: Product;
   quantity: number;
   portions?: Portion[];
+  // Local draft identity only; never sent to the order API.
+  portionKeys?: string[];
 }
 export type OrderStatus =
   | "pending_payment"
@@ -148,18 +237,20 @@ export interface DeliverySettings {
   eta_max_minutes: number;
   starts_at: string;
   ends_at: string;
-  capacity: number;
+  capacity?: number;
   points: DeliveryPoint[];
   point_ids: number[];
   available_points?: DeliveryPoint[];
 }
 export interface PaymentReadiness {
+  supported?: boolean;
   mode?: "simulation" | "live";
   available: boolean;
   reason: string;
   channels: ("native" | "h5" | "simulation")[];
 }
 export interface WechatPayment {
+  next_query_at?: string | null;
   mode?: "simulation" | "live";
   id: string;
   status: "creating" | "pending" | "paid" | "closed" | "reconcile" | "review";
@@ -170,6 +261,7 @@ export interface WechatPayment {
   error_message: string;
 }
 export interface PaymentRefund {
+  next_query_at?: string | null;
   resolved_at?: string | null;
   mode?: "simulation" | "live";
   id: string;
@@ -182,6 +274,7 @@ export interface PaymentRefund {
   error_message: string;
 }
 export interface Order {
+  payment_query_after_seconds?: number;
   allowed_actions?: string[];
   financial_hold_reason?: string;
   refunds?: PaymentRefund[];
@@ -232,6 +325,8 @@ export interface Order {
   contact_phone: string;
   cancel_requested: boolean;
   merchant_contact_phone?: string;
+  stall_payment_qr_image?: string;
+  offline_payment_available?: boolean;
   cancel_reason: string;
   review: Review | null;
   items: {

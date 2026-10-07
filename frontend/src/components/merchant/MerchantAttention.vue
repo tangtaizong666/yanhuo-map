@@ -20,6 +20,8 @@ const props = defineProps<{
   ready: boolean;
   syncError?: string;
   compactPending?: boolean;
+  showControls?: boolean;
+  showTasks?: boolean;
 }>();
 const emit = defineEmits<{ expired: []; refresh: [] }>();
 const now = ref(Date.now());
@@ -205,9 +207,10 @@ onUnmounted(() => {
 
 <template>
   <section
+    v-show="showControls !== false || !online || syncError || activeArrivals.length || soundError || (showTasks !== false && (pending.length || cancellations.length || followUp.length))"
     class="m-attention"
     :class="{
-      'has-orders': pending.length || cancellations.length || followUp.length,
+      'has-orders': showTasks !== false && (pending.length || cancellations.length || followUp.length),
     }"
     aria-label="接单提醒"
     :data-pending-count="pending.length"
@@ -230,7 +233,7 @@ onUnmounted(() => {
       </div>
     </div>
     <div
-      v-if="(!compactPending && pending.length) || cancellations.length"
+      v-if="showTasks !== false && ((!compactPending && pending.length) || cancellations.length)"
       class="m-attention-tasks"
     >
       <div class="m-attention-summary">
@@ -265,7 +268,7 @@ onUnmounted(() => {
         /></RouterLink>
       </div>
     </div>
-    <div v-if="followUp.length" class="m-attention-followup">
+    <div v-if="showTasks !== false && followUp.length" class="m-attention-followup">
       <div class="m-attention-summary">
         <span class="m-attention-icon"><ClipboardCheck :size="20" /></span>
         <div>
@@ -297,7 +300,7 @@ onUnmounted(() => {
         <X :size="16" />
       </button>
     </div>
-    <div class="m-attention-tools">
+    <div v-show="showControls !== false" class="m-attention-tools">
       <p>
         <b v-if="compactPending && pending.length" class="sound-readiness">{{
           expiryText

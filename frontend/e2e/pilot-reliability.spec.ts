@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { fulfillCsrf, assertNoHorizontalOverflow } from "./helpers";
+import { publicProduct, publicResponse, mealResponse } from "./public-contracts";
 
 // Every API request is intercepted. No business server, account or payment is used.
 const product = {
@@ -115,7 +116,7 @@ async function fixture(page: Page, merchant = false) {
       url = new URL(req.url()),
       path = url.pathname.replace("/api/v1", "");
     state.requests.push(path + url.search);
-    const send = (json: any) => r.fulfill({ json });
+    const send = (json: any) => r.fulfill({ json: publicResponse(path, json) });
     if (path === "/auth/csrf") return fulfillCsrf(r);
     if (path === "/config")
       return send({
@@ -128,6 +129,7 @@ async function fixture(page: Page, merchant = false) {
     if (path === "/auth/me") return send(state.user);
     if (path === "/events") return send({});
     if (path === "/stalls") return send([state.stall]);
+    if (path === "/products") return send(mealResponse([state.stall], url.searchParams));
     if (path === "/stalls/701") return send(state.stall);
     if (path === "/orders/active-summary")
       return send({ counts: { total: 0 }, next_order: null });
@@ -290,7 +292,7 @@ test("storage denial leaves student and merchant shells usable", async ({
   state.user = { ...state.user, is_merchant: true };
   await page.goto("/merchant/products");
   await expect(
-    page.getByRole("heading", { name: "每一份好味，都在这里" }),
+    page.getByRole("heading", { name: /我的菜品/ }),
   ).toBeVisible();
 });
 
@@ -315,7 +317,7 @@ test("account carts isolate portion notes; guest merging is explicit and legacy 
       JSON.stringify({ 701: [{ product: p, quantity: 1 }] }),
     );
     sessionStorage.setItem("pilot-seeded", "yes");
-  }, product);
+  }, publicProduct(product));
   await page.goto("/cart");
   await expect(page.getByText("旧版私人备注")).toHaveCount(0);
   await expect(page.locator(".cart-groups")).toHaveCount(0);
@@ -325,7 +327,7 @@ test("account carts isolate portion notes; guest merging is explicit and legacy 
     (await import(path))
       .useCart()
       .setQuantity(701, p, 1, [{ options: {}, note: "仅A可见" }]);
-  }, product);
+  }, publicProduct(product));
   await expect(page.getByText(/仅A可见/)).toBeVisible();
   state.user = { ...state.user, id: 702 };
   await syncIdentity(page);
@@ -369,17 +371,23 @@ test("a catalog save queues refresh and discards a held older read", async ({
 }) => {
   const state = await fixture(page, true);
   await page.goto("/merchant/products");
-  const price = page.getByRole("spinbutton", { name: "试点煎饼售价" });
+  const product = page.locator('article.merchant-product').filter({ has: page.getByRole('heading', { name: '试点煎饼', exact: true }) });
+  await product.getByRole('button', { name: '编辑商品：试点煎饼', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '编辑商品', exact: true });
+  const price = dialog.getByRole('spinbutton', { name: /单价（元）/ });
   await expect(price).toHaveValue("10.00");
   state.holdStalls = true;
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect.poll(() => !!state.heldStalls).toBe(true);
   await price.fill("18");
-  await page.locator(".quick-save").click();
+  await dialog.getByRole('button', { name: '保存修改', exact: true }).click();
   await expect.poll(() => state.stall.products[0].price_cents).toBe(1800);
+  await expect(dialog).toHaveCount(0);
   await state.heldStalls!.fulfill({ json: state.heldSnapshot });
+  await expect(product.locator('.product-info strong')).toHaveText('¥18');
+  await product.getByRole('button', { name: '编辑商品：试点煎饼', exact: true }).click();
   await expect(price).toHaveValue("18.00");
-  await expect(page.locator(".product-info strong").first()).toHaveText("¥18");
+  await expect(product.locator('.product-info strong')).toHaveText('¥18');
 });
 
 test("cancel dialog traps keyboard focus and returns it without cancelling", async ({
@@ -463,11 +471,12 @@ test("merchant attention beyond one page remains actionable and server financial
     )
     .toBe(true);
   await expect(
-    page.getByRole("button", { name: "确认接单", exact: true }),
-  ).toHaveCount(35);
+    page.getByRole("button", { name: "接单开始做", exact: true }),
+  ).toHaveCount(34);
   await expect(
-    page.locator("button:disabled").filter({ hasText: "确认接单" }),
-  ).toHaveCount(1);
+    page.locator("button:disabled").filter({ hasText: "接单开始做" }),
+  ).toHaveCount(0);
+  await expect(page.locator(".merchant-order").filter({ hasText: "付款等待运营核验" })).toHaveCount(1);
   await page.setViewportSize({ width: 390, height: 844 });
   await assertNoHorizontalOverflow(page);
 });
@@ -486,7 +495,7 @@ for (const width of [360, 390, 768, 1440]) {
     ]) {
       state.user = { ...state.user, is_merchant: url.startsWith("/merchant") };
       await page.goto(url);
-      await expect(page.locator("main h1").first()).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
       await assertNoHorizontalOverflow(page);
       const filename = `${width}-${url.replaceAll("/", "-")}.png`;
       await page.screenshot({
@@ -522,7 +531,7 @@ test("production startup tolerates a denied storage getter", async ({
   state.user = { ...state.user, is_merchant: true };
   await page.goto("/merchant/products");
   await expect(
-    page.getByRole("heading", { name: "每一份好味，都在这里" }),
+    page.getByRole("heading", { name: /我的菜品/ }),
   ).toBeVisible();
 });
 

@@ -46,6 +46,12 @@ def _key(scope, identity):
     return salted_hmac('login-failures', f'{scope}:{identity}', algorithm='sha256').hexdigest()
 
 
+def clear_account_failures(username):
+    """Call after a password-change transaction commits; never reset the IP budget."""
+    AuthenticationFailureBucket.objects.filter(pk=_key('account', username.casefold())).update(
+        failures=0, window_started_at=timezone.now(), updated_at=timezone.now())
+
+
 def login_attempt(request, username, authenticate_callback):
     """Serialize checks and failures across workers; successful attempts cost zero.
 
@@ -53,8 +59,9 @@ def login_attempt(request, username, authenticate_callback):
     failure is re-raised after committing counters, never inside the transaction.
     """
     window = timedelta(seconds=settings.AUTH_FAILURE_WINDOW_SECONDS)
+    account_key = _key('account', username.casefold())
     candidates = sorted([
-        (_key('account', username.casefold()), settings.AUTH_FAILURE_ACCOUNT_LIMIT),
+        (account_key, settings.AUTH_FAILURE_ACCOUNT_LIMIT),
         (_key('ip', client_ip(request)), settings.AUTH_FAILURE_IP_LIMIT),
     ])
     validation_error = None
@@ -68,9 +75,15 @@ def login_attempt(request, username, authenticate_callback):
             if row.window_started_at + window <= now:
                 row.failures, row.window_started_at = 0, now
             if row.failures >= limit:
-                wait = max(1, math.ceil((row.window_started_at + window - now).total_seconds()))
-                logger.warning('login_rate_limited bucket=%s', key[:12])
-                raise LoginRateLimited(wait)
+                if key == account_key:
+                    # Cross-IP short cooldown; rejected requests never move updated_at.
+                    delay = (5, 10, 20, 30)[min(row.failures-limit, 3)]
+                    wait = math.ceil((row.updated_at + timedelta(seconds=delay)-now).total_seconds())
+                else:
+                    wait = math.ceil((row.window_started_at + window-now).total_seconds())
+                if wait > 0:
+                    logger.warning('login_rate_limited bucket=%s', key[:12])
+                    raise LoginRateLimited(wait)
             rows.append(row)
         try:
             result = authenticate_callback()
@@ -82,6 +95,11 @@ def login_attempt(request, username, authenticate_callback):
                 row.updated_at = now
                 row.save(update_fields=['failures', 'window_started_at', 'updated_at'])
             logger.info('login_failed account_bucket=%s', _key('account', username.casefold())[:12])
+        else:
+            for row in rows:
+                if row.key == account_key:
+                    row.failures, row.window_started_at, row.updated_at = 0, now, now
+                    row.save(update_fields=['failures', 'window_started_at', 'updated_at'])
     if validation_error is not None:
         raise validation_error
     return result

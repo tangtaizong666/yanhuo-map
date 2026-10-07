@@ -27,6 +27,18 @@ python -m venv .venv
 
 ## 接口约定
 
+### 服务能力与展示供应（2026-10-05）
+
+摊位详情、商户摊位响应及商户 `/services` 返回 `capabilities`：`mode`、`public_listing`、`pickup_orders`、`online_payment`、`delivery_orders`。展示项含 `available/reason`，交易项另含 `eligible`。`eligible` 用于判断工作台模式，`available` 包含当前营业与服务配置条件。停业、暂停新单或售罄不改变商户的资格类型；实际下单、开关和支付请求都再次验证。
+
+`transaction_enabled` 在响应中代表有效交易资格；运营保存的原开通标志保留在模型，资质失效不会清空历史订单。未获准的真实流动摊位只提供信息展示；示例演练订单明确保存 `mode=simulation`。禁止用线下收款代替线上下单准入。
+
+真实实体门店还必须有非空白 `license_number` 和明确的 `license_valid_until`（含到期当日）；日期为空按尚未核验处理，不能表示长期有效。未核验商户可逐步补齐证照，撤销核验与关闭服务不受缺证照阻碍；后台新增交易／配送授权使用相同资格规则。许可证号及地址的 Unicode 空白判断在对象与数据库筛选中一致，不会自动补写任何真实商户资料。
+
+找摊菜品新增 `display_availability`（`available` 今天有、`sold_out` 卖完了、`paused` 暂时不卖、空值沿用原状态），商家创建／PATCH 可维护。此字段不修改 `stock`、`stock_version` 或交易用的 `sale_paused`。公开餐点的 `display_only=true` 时按展示状态返回 `availability`，`max_order_quantity=0`；恢复交易资格后重新按线上库存与停售开关判断。旧数据不自动填充“今天有”。
+
+订单 `offline_payment_available` 是当前展示现场付款入口的明确授权；真实自取待取餐、未付款、无线下／线上资金冲突及取消申请时才可能为 true。`stall_payment_qr_image` 在其他状态返回空字符串，模拟订单始终为空。资质失效后的旧线上支付入口收起，查询、关闭和必要售后仍可执行；前端不能仅凭图片地址或旧链接展示付款入口。
+
 ### 试点安全与分页接口（2026-10-03）
 
 订单响应新增 `financial_hold_reason`（无资金限制时空字符串）和 `allowed_actions`。动作列表同时结合当前状态与请求用户权限，供页面控制按钮；每次服务端写操作仍独立检查操作者、状态、款项、库存与模式。只读运营不会拿到写入或退款能力。款项未核清时隐藏取餐码并禁止核销，退款 CLOSED 不再能恢复正常履约。原 `refund` 提供当前未结案尝试或最新摘要；`refunds` 保留尝试历史及 `resolved_at`。原付款、退款编号和模式快照不覆盖。
@@ -138,7 +150,7 @@ prep_minutes 为 1–180 的整数，reason 不超过 200 字，idempotency_key 
 商品的 stock 表示**尚未被订单预留的线上可售份数**，不是包含已接订单的现场总余量。商家应单独划分线上份数；现场售出后按实际未预留余量盘点，不能把正在制作或待付款订单的份数重新计入线上库存。
 
 - `Product.sale_paused` 默认 false，可通过商品 PATCH 独立修改。暂停不清零库存、不取消已有订单；恢复只解除该标记，仍检查库存、上下架、摊位营业与交易权限。下单遇到暂停商品返回 409 `product_sale_paused`，附 product_id。
-- `Product.stock_version` 默认 0，商品响应均返回。每次下单预留、取消/超时归还、增量补货、成功盘点更正都会递增；幂等重放和重复释放不再递增。编辑价格、口味、暂停供应等资料不变更库存版本。
+- `Product.stock_version` 默认 0，仅所属商家的商品响应返回；公开商品仅返回 `availability` 和 `max_order_quantity`，不返回精确 `stock` 或版本。每次下单预留、取消/超时归还、增量补货、成功盘点更正都会递增；幂等重放和重复释放不再递增。编辑价格、口味、暂停供应等资料不变更库存版本。
 - 商品 PATCH 含 stock 时整次拒绝，返回 400 `stock_edit_requires_correction`；新建商品仍可设置初始库存。`POST /merchant/stalls/:id/restock` 继续按新增份数补货，不接受绝对覆盖。
 - `POST /merchant/products/:id/stock-correction` 接收 `{stock,expected_stock_version,idempotency_key,reason}`。stock 为 0–100000 的整数，版本为非负整数，key 长度 8–128，reason 为必填说明、不超过 200 字。成功返回 `{product,replayed}`。
 - 更正在摊位、商品锁内先检查已成功的幂等记录，再检查版本。同 key、同内容返回当前最新商品且 `replayed:true`；同 key 不同内容返回 409 `idempotency_conflict`。版本不符返回 409 `stock_version_conflict` 并附最新 product，此时没有执行更正；客户端须让商家重新盘点确认，不能自动用新版本覆盖重试。

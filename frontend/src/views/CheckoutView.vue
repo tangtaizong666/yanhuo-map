@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   ArrowLeft,
@@ -19,6 +19,7 @@ import { useCart } from "../stores/cart";
 import { useSession } from "../stores/session";
 import { useCheckoutDrafts } from "../stores/checkoutDrafts";
 import { notify } from "../lib/notify";
+import { useBrowseReturn } from "../lib/browseReturn";
 import CheckoutPaymentMethods from "../components/CheckoutPaymentMethods.vue";
 import CheckoutFulfillment from "../components/CheckoutFulfillment.vue";
 import SimulationNotice from "../components/SimulationNotice.vue";
@@ -57,8 +58,33 @@ const stall = ref<any>(null);
 const loading = ref(true);
 const busy = ref(false);
 const error = ref("");
+useBrowseReturn({
+  capture: () => ({}),
+  async restore(snapshot, control) {
+    if (!await control.wait(() => !loading.value)) return false;
+    const productId = snapshot.anchor.match(/\/products\/(\d+)$/)?.[1];
+    return !error.value && !!stall.value && (!productId || stall.value.products.some((product: Product) => product.id === Number(productId)));
+  },
+});
+const relatedOrderIds = ref<string[]>([]);
 const priceChanged = ref(false);
 const keyboardInset = ref(0);
+const checkoutPage = ref<HTMLElement>();
+const actionBar = ref<HTMLElement>();
+const actionBarHeight = ref(86);
+watch(actionBar, (element, _previous, onCleanup) => {
+  if (!element) {
+    actionBarHeight.value = 0;
+    return;
+  }
+  const measure = () => {
+    actionBarHeight.value = Math.ceil(element.getBoundingClientRect().height);
+  };
+  const observer = new ResizeObserver(measure);
+  observer.observe(element);
+  measure();
+  onCleanup(() => observer.disconnect());
+});
 function updateViewport() {
   const viewport = window.visualViewport;
   const active = document.activeElement as HTMLElement | null;
@@ -76,8 +102,7 @@ function updateViewport() {
     requestAnimationFrame(() => {
       if (disposed || document.activeElement !== active) return;
       const actionHeight =
-        document.querySelector(".checkout-action-bar")?.getBoundingClientRect()
-          .height || 86;
+        actionBar.value?.getBoundingClientRect().height || 86;
       const bottom =
         (viewport?.height || window.innerHeight) +
         (viewport?.offsetTop || 0) -
@@ -123,6 +148,12 @@ const recipient = computed({
   set: (value: string) => drafts.update(stallId, { recipient: value }),
 });
 const isDelivery = computed(() => fulfillment.value === "delivery");
+const contactExpanded = ref(false);
+const contactSummary = computed(
+  () =>
+    [phone.value.trim(), note.value.trim()].filter(Boolean).join(" · ") ||
+    "手机号、整单备注均可不填",
+);
 const isSimulation = computed(
   () => stall.value?.wechat_payment?.mode === "simulation",
 );
@@ -168,8 +199,7 @@ function productProblem(item: CartItem) {
     return product.sale_paused
       ? "商家暂停了这道餐点的销售，请移除或稍后再来。"
       : "这道餐点暂不可售，请移除后继续。";
-  if (product.stock < item.quantity)
-    return `目前只剩 ${product.stock} 份，请调整数量。`;
+  if (cart.count(stallId) > 10) return "每单合计最多 10 份，请调整数量。";
   return "";
 }
 const unavailableItems = computed(
@@ -230,6 +260,99 @@ const keyName = `yanhuo-checkout-${pageUserId}-${stallId}`;
 const submission = ref<CheckoutSubmission | null>(null);
 const unresolved = computed(() => !!submission.value);
 const editingLocked = computed(() => busy.value || unresolved.value);
+type CheckoutProblem = {
+  reason: string;
+  target:
+    | "stall"
+    | "item"
+    | "taste"
+    | "fulfillment"
+    | "minimum"
+    | "point"
+    | "recipient"
+    | "phone";
+  productId?: number;
+};
+// This explains the existing submit guards; it does not change admission or writes.
+const firstProblem = computed<CheckoutProblem | null>(() => {
+  if (!stall.value) return null;
+  if (!stall.value.can_order)
+    return {
+      target: "stall",
+      reason:
+        stall.value.order_unavailable_reason ||
+        (!stall.value.transaction_enabled
+          ? "该摊位暂未开放在线点单。"
+          : "摊位当前无法接单，请确认最新营业状态。"),
+    };
+  const unavailable = items.value.find((item) => productProblem(item));
+  if (unavailable)
+    return {
+      target: "item",
+      productId: unavailable.product.id,
+      reason: `${unavailable.product.name}：${productProblem(unavailable)}`,
+    };
+  const taste = items.value.find((item) =>
+    invalidPortions(currentProduct(item), item.portions, item.quantity),
+  );
+  if (taste)
+    return {
+      target: "taste",
+      productId: taste.product.id,
+      reason: `${taste.product.name}的口味选项已变更，请重新选择。`,
+    };
+  if (!isDelivery.value) return null;
+  if (!stall.value.delivery?.available)
+    return {
+      target: "fulfillment",
+      reason: stall.value.delivery?.reason || "配送尚未开放，可改为到摊自取。",
+    };
+  if (total.value < stall.value.delivery.min_order_cents)
+    return {
+      target: "minimum",
+      reason: `餐费还差 ¥${money(stall.value.delivery.min_order_cents - total.value)} 达到起送金额。`,
+    };
+  if (!selectedPoint.value)
+    return { target: "point", reason: "请选择校园交接点。" };
+  if (!recipient.value.trim())
+    return { target: "recipient", reason: "请填写收餐人称呼。" };
+  if (!deliveryCanSubmit.value)
+    return { target: "phone", reason: "请填写有效的配送联系号码。" };
+  return null;
+});
+async function goToProblem() {
+  const problem = firstProblem.value;
+  if (editingLocked.value || !problem || problem.target === "stall") return;
+  if (["item", "taste", "minimum"].includes(problem.target))
+    mealsExpanded.value = true;
+  if (problem.target === "recipient" || problem.target === "phone")
+    contactExpanded.value = true;
+  await nextTick();
+  if (!isCurrentPage() || editingLocked.value) return;
+  const selectors = {
+    item: `[data-checkout-product="${problem.productId}"] .quantity-control button`,
+    taste: `[data-checkout-product="${problem.productId}"] .portion-open`,
+    fulfillment: ".fulfillment-options button",
+    minimum: ".checkout-product .quantity-control button:last-child",
+    point: ".fulfillment-card select",
+    recipient: '[data-checkout-field="recipient"]',
+    phone: '[data-checkout-field="phone"]',
+  };
+  const target = checkoutPage.value?.querySelector<HTMLElement>(
+    selectors[problem.target],
+  );
+  if (!target) return;
+  target.scrollIntoView({ block: "center", behavior: "instant" });
+  target.focus({ preventScroll: true });
+  if (problem.target === "taste") {
+    target.click();
+    await nextTick();
+    const invalidChoice = checkoutPage.value?.querySelector<HTMLElement>(
+      ".portion-dialog[open] .portion-removed button",
+    );
+    invalidChoice?.focus();
+  }
+}
 function restoreSubmission() {
   const saved = readSubmission(keyName, stallId);
   if (!saved) return;
@@ -257,6 +380,7 @@ function prepareSubmission() {
     key,
     fingerprint: fingerprint.value,
     cart: cartFingerprint.value,
+    cartPortions: cart.capturePortions(stallId),
     note: note.value,
     phone: phone.value,
     fulfillment: fulfillment.value,
@@ -325,8 +449,12 @@ function updateQuantity(item: any, quantity: number) {
   const current = stall.value?.products?.find(
     (p: any) => p.id === item.product.id,
   );
-  if (quantity > (current?.stock ?? 99)) {
-    notify("当前库存不足", "info");
+  if (
+    quantity > item.quantity &&
+    (!productAvailable(current) ||
+      cart.remaining(stallId) < quantity - item.quantity)
+  ) {
+    notify("每个摊位一单合计最多 10 份", "info");
     return;
   }
   cart.setQuantity(stallId, item.product, quantity);
@@ -357,6 +485,7 @@ async function confirmSubmission() {
 async function sendSubmission(record: CheckoutSubmission, recovering = false) {
   busy.value = true;
   error.value = "";
+  relatedOrderIds.value = [];
   try {
     const order = await api<any>("/orders", {
       method: "POST",
@@ -368,9 +497,11 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
       throw new ApiError("订单返回信息不完整，请确认原订单结果。", 502, null);
     const unchangedCart = record.cart === cartFingerprint.value;
     const unchangedDraft = record.fingerprint === fingerprint.value;
-    if (unchangedCart) cart.clear(stallId);
+    if (record.cartPortions)
+      cart.consumePortions(stallId, record.cartPortions, pageUserId!);
+    else if (unchangedCart) cart.clear(stallId);
     forgetSubmission();
-    if (unchangedDraft) drafts.clear(stallId);
+    if (unchangedDraft && !cart.count(stallId)) drafts.clear(stallId);
     notify(
       order.fulfillment_type === "delivery"
         ? "配送订单已创建，请完成微信付款"
@@ -379,8 +510,28 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
     );
     await router.replace(`/orders/${order.id}`);
   } catch (e) {
-    if (!isCurrentPage()) return;
+    if (!isCurrentPage()) {
+      // Identity verification may unmount this page before the first write is
+      // ever sent. Do not leave a phantom recovery request for the old account;
+      // an actual retry still retains its original uncertain operation.
+      if (
+        !recovering &&
+        e instanceof ApiError &&
+        e.data?.submitted === false &&
+        readSubmission(keyName, stallId)?.key === record.key
+      )
+        removeSubmission(keyName);
+      return;
+    }
     error.value = (e as Error).message;
+    if (e instanceof ApiError && Array.isArray(e.data?.order_ids)) {
+      relatedOrderIds.value = e.data.order_ids
+        .filter(
+          (id: unknown) =>
+            typeof id === "string" && /^[a-f0-9-]{36}$/i.test(id),
+        )
+        .slice(0, 10);
+    }
     // During recovery, CSRF/auth/schema failures only describe this retry, not
     // the original write. Only business checks after server-side duplicate
     // lookup prove there is no committed original order to recover.
@@ -399,6 +550,10 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
       "product_sale_paused",
       "prep_capacity_reached",
       "ordering_stopped",
+      "stall_reservation_limit",
+      "active_reservation_limit",
+      "order_quantity_limit",
+      "checkout_rate_limited",
     ]);
     const rejected =
       e instanceof ApiError &&
@@ -461,8 +616,12 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
 
 <template>
   <div
+    ref="checkoutPage"
     class="page checkout-page"
-    :style="{ '--checkout-keyboard-inset': `${keyboardInset}px` }"
+    :style="{
+      '--checkout-keyboard-inset': `${keyboardInset}px`,
+      '--checkout-action-height': `${actionBarHeight}px`,
+    }"
   >
     <RouterLink :to="`/stalls/${stallId}`" class="back-link"
       ><ArrowLeft :size="18" /> 继续挑选</RouterLink
@@ -542,6 +701,7 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
             v-for="item in shownMeals"
             :key="item.product.id"
             class="checkout-product"
+            :data-checkout-product="item.product.id"
           >
             <RouterLink
               class="checkout-product-photo"
@@ -659,21 +819,31 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
           :readiness="stall.wechat_payment"
           :delivery="isDelivery"
         />
-        <section
+        <details
           class="card checkout-card checkout-contact-card"
           aria-label="联系与备注"
+          :open="isDelivery || contactExpanded"
+          @toggle="contactExpanded = ($event.target as HTMLDetailsElement).open"
         >
-          <div class="section-heading">
-            <h2>
+          <summary @click="isDelivery && $event.preventDefault()">
+            <span class="contact-heading">
               联系与备注
               <span class="muted small">{{
                 fulfillment === "delivery" ? "方便交接" : "自取选填"
               }}</span>
-            </h2>
-          </div>
+            </span>
+            <span v-if="!isDelivery" class="contact-summary">{{
+              contactSummary
+            }}</span>
+            <span v-if="!isDelivery" class="contact-expand"
+              >{{ contactExpanded ? "收起" : "填写或修改"
+              }}<ChevronRight :size="16"
+            /></span>
+          </summary>
           <label v-if="isDelivery" class="field"
             >收餐人称呼<input
               v-model="recipient"
+              data-checkout-field="recipient"
               class="input"
               :disabled="editingLocked"
               required
@@ -689,6 +859,7 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
             ><input
               class="input"
               v-model="phone"
+              data-checkout-field="phone"
               type="tel"
               inputmode="tel"
               maxlength="20"
@@ -712,7 +883,7 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
             ></textarea
             ><span class="character-count">{{ note.length }}/200</span></label
           >
-        </section>
+        </details>
       </div>
       <aside class="checkout-summary card">
         <span class="eyebrow">YOUR LITTLE HAPPINESS</span>
@@ -731,7 +902,10 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
           <span>{{ isSimulation ? "模拟应付金额" : "应付金额" }}</span
           ><strong>¥{{ money(total + deliveryFee) }}</strong>
         </div>
-        <div class="pay-at-stall">
+        <div
+          v-if="isSimulation || isDelivery || stall.wechat_payment?.available"
+          class="pay-at-stall"
+        >
           <Wallet :size="22" />
           <div>
             <strong>{{
@@ -749,12 +923,16 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
                     ? "提交后需在订单页完成微信付款。餐费和配送费一次支付，商家拒单或接单超时将发起全额退款。"
                     : stall.wechat_payment?.available
                       ? "商家出餐后，可在订单页微信支付，也可到摊付款。提交订单不会扣款。"
-                      : "微信支付尚未开通，当前支持到摊付款。商家确认接单后才开始制作。"
+                      : "到摊扫摊主收款码付款，平台不经手款项。商家确认接单后才开始制作。"
               }}
             </p>
           </div>
         </div>
-        <p v-if="!stall.can_order" class="error-message" role="alert">
+        <p
+          v-if="!stall.can_order && unresolved"
+          class="error-message"
+          role="alert"
+        >
           {{
             stall.order_unavailable_reason ||
             (!stall.transaction_enabled
@@ -765,8 +943,21 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
         <p v-if="error && !unresolved" class="error-message" role="alert">
           {{ error }}
         </p>
+        <nav
+          v-if="relatedOrderIds.length && !unresolved"
+          class="recovery-actions"
+          aria-label="已有订单"
+        >
+          <RouterLink
+            v-for="(id, index) in relatedOrderIds"
+            :key="id"
+            :to="`/orders/${id}`"
+            class="btn btn-secondary"
+            >查看已有订单 {{ index + 1 }}</RouterLink
+          >
+        </nav>
         <p
-          v-if="isDelivery && !deliveryCanSubmit"
+          v-if="isDelivery && !deliveryCanSubmit && unresolved"
           class="error-message"
           role="status"
         >
@@ -776,7 +967,25 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
               : "请核对交接点、收餐人、有效联系号码及起送金额。"
           }}
         </p>
-        <div class="checkout-action-bar" aria-label="确认金额并提交">
+        <div
+          v-if="!unresolved || busy"
+          ref="actionBar"
+          class="checkout-action-bar"
+          aria-label="确认金额并提交"
+        >
+          <div v-if="!editingLocked && firstProblem" class="checkout-guidance">
+            <p id="checkout-guidance-reason" role="status">
+              {{ firstProblem.reason }}
+            </p>
+            <RouterLink
+              v-if="firstProblem.target === 'stall'"
+              :to="`/stalls/${stallId}`"
+              >查看摊位</RouterLink
+            >
+            <button v-else type="button" @click="goToProblem">
+              去修改<ChevronRight :size="16" />
+            </button>
+          </div>
           <div class="mobile-checkout-total">
             <small>{{ isSimulation ? "模拟应付" : "合计" }}</small
             ><strong>¥{{ money(total + deliveryFee) }}</strong
@@ -784,6 +993,11 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
           </div>
           <button
             class="btn btn-primary checkout-submit"
+            :aria-describedby="
+              !editingLocked && firstProblem
+                ? 'checkout-guidance-reason'
+                : undefined
+            "
             :disabled="
               editingLocked ||
               !stall.can_order ||
@@ -1034,6 +1248,47 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
   margin-top: 22px;
   position: relative;
 }
+.checkout-contact-card > summary {
+  list-style: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px 12px;
+  min-height: 44px;
+  cursor: pointer;
+}
+.checkout-contact-card > summary::-webkit-details-marker {
+  display: none;
+}
+.contact-heading {
+  font-size: 16px;
+  font-weight: 600;
+}
+.contact-heading > span {
+  margin-left: 6px;
+  font-weight: 400;
+}
+.contact-summary {
+  grid-column: 1;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #796852;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.contact-expand {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  color: #a14f25;
+}
+.checkout-contact-card[open] .contact-expand svg {
+  transform: rotate(90deg);
+}
 .field > .muted {
   font-size: 11px;
   font-weight: 400;
@@ -1146,6 +1401,38 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
   width: 100%;
   justify-content: center;
 }
+.checkout-guidance {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  grid-column: 1 / -1;
+  margin-bottom: 10px;
+  color: #804724;
+}
+.checkout-guidance p {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.checkout-guidance button,
+.checkout-guidance a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  min-height: 44px;
+  gap: 3px;
+  padding: 0 8px;
+  border: 1px solid #d9baa0;
+  border-radius: 9px;
+  background: #fff4e5;
+  color: #803c19;
+  font-size: 13px;
+  font-weight: 600;
+}
 .summary-note {
   font-size: 11px;
   line-height: 1.9;
@@ -1155,7 +1442,9 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
 }
 @media (max-width: 800px) {
   .checkout-page {
-    padding-bottom: calc(140px + env(safe-area-inset-bottom));
+    padding-bottom: calc(
+      var(--checkout-action-height, 86px) + 54px + env(safe-area-inset-bottom)
+    );
   }
   .checkout-action-bar {
     position: fixed;
@@ -1166,7 +1455,8 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     align-items: center;
-    gap: 20px;
+    column-gap: 20px;
+    row-gap: 10px;
     padding: 12px max(18px, env(safe-area-inset-right))
       calc(12px + env(safe-area-inset-bottom))
       max(18px, env(safe-area-inset-left));
@@ -1179,6 +1469,9 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
     font-size: 13px;
     padding: 12px;
     white-space: normal;
+  }
+  .checkout-action-bar .checkout-guidance {
+    margin: 0;
   }
   .mobile-checkout-total {
     display: grid;
@@ -1221,16 +1514,33 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
     padding-top: 18px;
   }
   .checkout-product {
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr);
     gap: 12px;
   }
+  .checkout-product-photo {
+    grid-row: 1 / 3;
+    align-self: start;
+  }
+  .checkout-product > .portion-editor,
+  .checkout-product-problem {
+    grid-column: 1 / -1;
+  }
   .checkout-product img {
-    width: 68px;
-    height: 68px;
+    width: 64px;
+    height: 64px;
   }
   .product-text p {
-    font-size: 10px;
+    display: none;
+  }
+  .product-text h3 a {
+    min-height: 0;
+    padding: 0 0 6px;
+    line-height: 1.5;
   }
   .quantity-control {
+    grid-column: 2;
+    justify-self: start;
     gap: 5px;
   }
   .checkout-card > .section-heading {

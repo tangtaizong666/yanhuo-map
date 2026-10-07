@@ -1,31 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import {
-  Store,
-  LayoutDashboard,
-  ClipboardList,
-  Utensils,
-  ChartNoAxesCombined,
-  MessageSquare,
-  Settings2,
-  ArrowUpRight,
-  LogOut,
-  RefreshCw,
-  MapPin,
-  ChevronDown,
-  Bell,
-  ShieldCheck,
-  ArrowRight,
-  CircleCheck,
-  ChefHat,
-  AlertCircle,
-} from "lucide-vue-next";
-import { api, statusText, confirmedText } from "../lib/api";
+import { Store, MapPin, ClipboardList, Utensils, Settings2, ArrowUpRight, LogOut, RefreshCw, ArrowRight } from "lucide-vue-next";
+import { api } from "../lib/api";
 import { useSession } from "../stores/session";
 import { attentionOrders, type OrderCounts } from "../lib/orderPages";
 import { notify } from "../lib/notify";
-import MerchantDashboard from "../components/merchant/MerchantDashboard.vue";
+import MerchantMore from "../components/merchant/MerchantMore.vue";
 import MerchantAnalytics from "../components/merchant/MerchantAnalytics.vue";
 import MerchantStore from "../components/merchant/MerchantStore.vue";
 import MerchantOrders from "../components/merchant/MerchantOrders.vue";
@@ -34,30 +15,26 @@ import MerchantReviews from "../components/merchant/MerchantReviews.vue";
 import MerchantAttention from "../components/merchant/MerchantAttention.vue";
 import MerchantOnboarding from "../components/merchant/MerchantOnboarding.vue";
 import MerchantOperations from "../components/merchant/MerchantOperations.vue";
-import StallShare from "../components/StallShare.vue";
 import SessionNotifications from "../components/SessionNotifications.vue";
 import { acceptReady } from "../components/merchant/delivery";
+import { hasPickupEligibility } from "../components/merchant/mode";
 import "../merchant.css";
 const route = useRoute(),
   router = useRouter(),
   session = useSession();
-const nav = [
-  { id: "", label: "经营首页", short: "首页", icon: LayoutDashboard },
-  { id: "orders", label: "订单处理", short: "订单", icon: ClipboardList },
-  { id: "products", label: "商品管理", short: "商品", icon: Utensils },
-  {
-    id: "analytics",
-    label: "经营数据",
-    short: "数据",
-    icon: ChartNoAxesCombined,
-  },
-  { id: "reviews", label: "顾客评价", short: "评价", icon: MessageSquare },
-  { id: "store", label: "店铺设置", short: "店铺", icon: Settings2 },
-];
+const nav = computed(() => [
+  { id: "", label: discoveryOnly.value ? "今天出摊" : "接单台", short: discoveryOnly.value ? "出摊" : "接单", icon: discoveryOnly.value ? MapPin : ClipboardList },
+  { id: "products", label: "菜品管理", short: "菜品", icon: Utensils },
+  { id: "more", label: "更多", short: "更多", icon: Settings2 },
+]);
 const section = computed(() => String(route.params.section || ""));
-const current = computed(
-  () => nav.find((n) => n.id === section.value) || nav[0],
-);
+const orderWorkspace = computed(() => section.value === "orders" || (section.value === "" && !discoveryOnly.value));
+const discoveryHome = computed(() => section.value === "" && discoveryOnly.value);
+const sectionLabels: Record<string, string> = {
+  orders: "接单台", store: "店铺与营业", analytics: "经营数据", reviews: "顾客评价",
+};
+const current = computed(() => ({ label: sectionLabels[section.value] || nav.value.find(n => n.id === section.value)?.label || "商家工作台" }));
+const activeNav = computed(() => section.value === "" || (orderWorkspace.value && !discoveryOnly.value) ? "" : section.value === "products" ? "products" : "more");
 const allowed = computed(
   () => !!session.user && (session.user.is_merchant || session.user.is_staff),
 );
@@ -72,11 +49,12 @@ const loading = ref(true),
   metricsError = ref(""),
   ordersReady = ref(false),
   metricsLoading = ref(false),
-  days = ref(7),
-  confirmedBusy = ref(false);
+  days = ref(7);
 const stall = computed(() =>
   stalls.value.find((s) => s.id === selectedId.value),
 );
+const discoveryOnly = computed(() => !!stall.value && !hasPickupEligibility(stall.value));
+const hasOrderHistory = computed(() => orders.value.length > 0 || (orderCounts.value.all || 0) > 0);
 const pending = computed(
   () => orders.value.filter((o) => o.status === "pending").length,
 );
@@ -106,6 +84,7 @@ let heartbeatController: AbortController | undefined;
 async function recordReceivingHeartbeat(id: number, context: number) {
   if (document.hidden || !currentContext(context) || selectedId.value !== id)
     return;
+  if (discoveryOnly.value && !orders.value.length) return;
   // Older servers do not expose receiving status or the heartbeat endpoint.
   if (
     !["unknown", "recent", "stale"].includes(
@@ -158,11 +137,6 @@ async function applicationApproved() {
   await router.replace("/merchant");
   if (allowed.value) await refresh();
 }
-const dateText = new Date().toLocaleDateString("zh-CN", {
-  month: "long",
-  day: "numeric",
-  weekday: "long",
-});
 let timer: ReturnType<typeof setInterval> | undefined,
   disposed = false,
   mounted = false,
@@ -182,14 +156,8 @@ function mutationRefresh() {
 function currentContext(context: number) {
   return !disposed && allowed.value && context === contextSeq;
 }
-function navigate(page: string, filter?: string) {
-  router.push({
-    path: page ? `/merchant/${page}` : "/merchant",
-    query: filter ? { filter } : {},
-  });
-}
 async function loadMetrics() {
-  if (!selectedId.value) return;
+  if (!selectedId.value || section.value !== "analytics") return;
   const seq = ++metricSeq,
     id = selectedId.value,
     context = contextSeq;
@@ -365,7 +333,7 @@ watch(
   { flush: "sync" },
 );
 watch(section, () => {
-  if (!nav.some((n) => n.id === section.value) && section.value !== "apply") {
+  if (!["", "orders", "products", "more", "analytics", "reviews", "store", "apply"].includes(section.value)) {
     void router.replace("/merchant");
     return;
   }
@@ -374,38 +342,6 @@ watch(section, () => {
 function changePeriod(value: number) {
   days.value = value;
   void loadMetrics();
-}
-async function confirmLocation() {
-  if (!stall.value || confirmedBusy.value) return;
-  if (
-    !stall.value.address ||
-    stall.value.latitude == null ||
-    stall.value.longitude == null
-  ) {
-    await router.push("/merchant/store#location");
-    notify("请先设置实际取餐位置，再确认出摊。", "info");
-    return;
-  }
-  confirmedBusy.value = true;
-  try {
-    await api(`/merchant/stalls/${stall.value.id}/status`, {
-      method: "POST",
-      body: {
-        status:
-          stall.value.status === "closed"
-            ? "closed"
-            : stall.value.session_status ||
-              (stall.value.status === "stale" ? "paused" : stall.value.status),
-        confirm_location: true,
-      },
-    });
-    mutationRefresh();
-    notify("位置已确认", "success");
-  } catch (e) {
-    notify((e as Error).message, "error");
-  } finally {
-    confirmedBusy.value = false;
-  }
 }
 async function logout() {
   try {
@@ -457,332 +393,67 @@ onUnmounted(() => {
 </script>
 <template>
   <div v-if="!allowed || section === 'apply'" class="m-application-page">
-    <RouterLink class="brand" to="/merchant"
-      ><span class="brand-mark"><Store :size="25" /></span
-      ><span>烟火地图<small>商家入驻</small></span></RouterLink
-    >
-    <MerchantOnboarding
-      :key="session.user?.id || 'guest'"
-      @approved="applicationApproved"
-    />
-    <RouterLink
-      to="/"
-      class="m-text-link"
-      @click="session.setConsumerPreview(true)"
-      >去学生端逛逛 <ArrowUpRight :size="14"
-    /></RouterLink>
+    <RouterLink class="brand" to="/merchant"><span class="brand-mark"><Store :size="25" /></span><span>烟火地图<small>商家入驻</small></span></RouterLink>
+    <MerchantOnboarding :key="session.user?.id || 'guest'" @approved="applicationApproved" />
+    <RouterLink to="/" class="m-text-link" @click="session.setConsumerPreview(true)">去学生端逛逛 <ArrowUpRight :size="14" /></RouterLink>
   </div>
-  <div
-    v-else
-    class="m-shell"
-    :class="{ 'm-orders-workspace': section === 'orders' }"
-  >
+  <div v-else class="m-shell" :class="{ 'm-orders-workspace': orderWorkspace }">
     <aside class="m-sidebar">
-      <RouterLink to="/merchant" class="m-brand"
-        ><span><Store :size="27" /></span>
-        <div>烟火地图<small>商家工作台</small></div></RouterLink
-      >
-      <p class="m-nav-caption">把好手艺，做成好生意</p>
+      <RouterLink to="/merchant" class="m-brand"><span><Store :size="27" /></span><div>烟火地图<small>商家工作台</small></div></RouterLink>
       <nav aria-label="商家导航">
-        <RouterLink
-          v-for="n in nav"
-          :key="n.id"
-          :to="n.id ? `/merchant/${n.id}` : '/merchant'"
-          :class="{ active: section === n.id }"
-          ><component :is="n.icon" :size="20" /><span>{{ n.label }}</span
-          ><b v-if="n.id === 'orders' && pending">{{ pending }}</b></RouterLink
-        >
+        <RouterLink v-for="n in nav" :key="n.id" :to="n.id ? `/merchant/${n.id}` : '/merchant'" :class="{ active: activeNav === n.id }">
+          <component :is="n.icon" :size="21" /><span>{{ n.label }}</span><b v-if="n.id === '' && pending">{{ pending }}</b>
+        </RouterLink>
       </nav>
       <div class="m-sidebar-bottom">
-        <div class="m-sidebar-note">
-          <ChefHat :size="25" /><strong>小小摊位，也有大生意</strong>
-          <p>认真对待每一份热乎的期待。</p>
-        </div>
-        <RouterLink to="/" @click="session.setConsumerPreview(true)"
-          ><ArrowUpRight :size="17" /> 预览学生端</RouterLink
-        ><button @click="logout"><LogOut :size="17" /> 退出登录</button>
+        <RouterLink to="/" @click="session.setConsumerPreview(true)"><ArrowUpRight :size="17" />预览学生端</RouterLink>
+        <button @click="logout"><LogOut :size="17" />退出登录</button>
       </div>
     </aside>
     <div class="m-workspace">
       <header class="m-topbar">
-        <div class="m-mobile-brand">
-          <Store :size="23" /><b>烟火地图</b><span>商家版</span>
-        </div>
-        <div class="m-breadcrumb">
-          商家工作台 <span>/</span> <strong>{{ current.label }}</strong>
-        </div>
+        <div class="m-mobile-brand"><Store :size="23" /><h1>{{ current.label }}</h1></div>
+        <div class="m-breadcrumb">烟火地图 <span>/</span><strong>{{ current.label }}</strong></div>
         <div class="m-topbar-right">
-          <span class="m-desktop-date">{{ dateText }}</span
-          ><button
-            class="m-bell"
-            @click="navigate('orders', 'pending')"
-            aria-label="查看待接单订单"
-          >
-            <Bell :size="20" /><i v-if="pending" /></button
-          ><button
-            class="m-avatar"
-            @click="navigate('store')"
-            aria-label="店铺设置"
-          >
-            {{ session.user?.display_name.slice(0, 1) }}
-          </button>
+          <span v-if="session.config?.demo_mode" class="m-preview-label">{{ session.config.services_simulation_enabled ? '模拟体验' : '示例环境' }}</span>
+          <button class="m-refresh-button" :disabled="refreshing" @click="refresh" aria-label="刷新工作台"><RefreshCw :size="18" :class="{ 'm-spinning': refreshing }" /><span>刷新</span></button>
         </div>
       </header>
-      <div v-if="session.config?.demo_mode" class="m-demo-strip">
-        <ShieldCheck :size="13" /> 商家体验站 ·
-        示例数据，模拟支付与配送不涉及真实交易
-      </div>
       <div class="m-content">
         <div class="m-page-heading">
-          <div>
-            <span class="m-eyebrow">{{
-              section ? "让经营的每一步，都更从容" : "今天，也好好出摊"
-            }}</span>
-            <h1>{{ current.label }}<span>.</span></h1>
-          </div>
-          <button
-            class="btn btn-secondary m-refresh"
-            @click="refresh"
-            :disabled="refreshing"
-          >
-            <RefreshCw :size="16" :class="{ 'm-spinning': refreshing }" /><span
-              >刷新工作台</span
-            >
-          </button>
+          <h1>{{ current.label }}</h1>
+          <RouterLink v-if="!['', 'products', 'more'].includes(section)" to="/merchant/more" class="m-back-link">返回更多</RouterLink>
         </div>
-        <div v-if="loading" class="m-panel m-empty">
-          <span class="spinner" />
-          <p>正在准备商家工作台…</p>
-        </div>
-        <template v-else
-          ><p v-if="error" class="m-alert" role="alert">{{ error }}</p>
-          <MerchantOnboarding
-            v-if="!stall"
-            :key="session.user!.id"
-            @approved="applicationApproved" />
-          <template v-else
-            ><section class="m-stall-bar">
-              <img :src="stall.image" :alt="stall.name" />
-              <div class="m-stall-bar-info">
-                <label class="m-stall-selector"
-                  ><select v-model="selectedId" aria-label="选择管理的摊位">
-                    <option v-for="s in stalls" :key="s.id" :value="s.id">
-                      {{ s.name }}
-                    </option></select
-                  ><ChevronDown :size="15"
-                /></label>
-                <div>
-                  <span :class="['m-status', stall.status]">{{
-                    statusText(stall.status)
-                  }}</span
-                  ><span class="m-stall-address"
-                    ><MapPin :size="12" />{{ stall.area_name }}</span
-                  >
-                </div>
-              </div>
-              <div class="m-stall-confirm">
-                <span>{{ confirmedText(stall.last_confirmed_at) }}</span
-                ><button @click="confirmLocation" :disabled="confirmedBusy">
-                  <CircleCheck :size="15" /> 我还在这里
-                </button>
-              </div>
-            </section>
-            <div v-if="stall.status === 'stale'" class="m-alert">
-              <AlertCircle :size="18" />
-              位置确认已过期，新订单暂停。请核对实际位置后确认“我还在这里”。
+        <div v-if="loading" class="m-panel m-empty"><span class="spinner" /><p>正在读取工作台…</p></div>
+        <template v-else>
+          <p v-if="error" class="m-alert" role="alert">{{ error }}</p>
+          <MerchantOnboarding v-if="!stall" :key="session.user!.id" @approved="applicationApproved" />
+          <template v-else>
+            <label v-if="stalls.length > 1" class="m-work-stall-selector"><span>当前摊位</span><select v-model="selectedId" aria-label="选择管理的摊位"><option v-for="s in stalls" :key="s.id" :value="s.id">{{ s.name }}</option></select></label>
+            <MerchantOperations v-if="discoveryHome || (orderWorkspace && !discoveryOnly)" :compact="!discoveryHome" :discovery-only="discoveryOnly" :key="`${session.user!.id}:${stall.id}`" :stall="stall" :orders="orders" :ready="ordersReady" @refresh="mutationRefresh" @location="router.push('/merchant/store#location')" />
+            <p v-if="orderWorkspace && !discoveryOnly && (!stall.is_visible || !stall.activation?.has_location)" class="m-setup-link"><span>完成开摊准备后，才能接到新订单。</span><RouterLink to="/merchant/more#activation">查看准备事项 <ArrowRight :size="16" /></RouterLink></p>
+            <p v-else-if="orderWorkspace && locationDue" class="m-setup-link"><span>位置即将过期，请核对后确认。</span><RouterLink to="/merchant/store">确认位置 <ArrowRight :size="16" /></RouterLink></p>
+            <p v-if="heartbeatError" class="m-alert" role="status">{{ heartbeatError }}</p>
+            <MerchantOrders v-if="orderWorkspace" :key="`${session.user!.id}:${stall.id}:${route.query.filter || 'active'}`" :stall="stall" :orders="orders" :orders-ready="ordersReady" :sync-error="error" :loading="refreshing" :initial-filter="String(route.query.filter || 'active')" :counts="orderCounts" @refresh="orderChanged" />
+            <MerchantProducts v-else-if="section === 'products'" :key="stall.id" :stall="stall" :discovery-only="discoveryOnly" @refresh="mutationRefresh" />
+            <MerchantMore v-else-if="section === 'more'" :stall="stall" :sellable="!!sellable" :discovery-only="discoveryOnly" @logout="logout" />
+            <MerchantAnalytics v-else-if="section === 'analytics'" :metrics="metrics" :days="days" :error="metricsError" :loading="metricsLoading" @period="changePeriod" />
+            <MerchantReviews v-else-if="section === 'reviews'" :key="stall.id" :stall="stall" @refresh="mutationRefresh" />
+            <MerchantStore v-else-if="section === 'store'" :key="`${session.user!.id}:${stall.id}`" :stall="stall" :orders="orders" :orders-ready="ordersReady" :discovery-only="discoveryOnly" @refresh="mutationRefresh" />
+            <div id="notifications" :class="{ 'm-reminder-settings': section === 'more' }">
+              <h2 v-if="section === 'more' && (!discoveryOnly || hasOrderHistory)">{{ discoveryOnly ? '已有订单提醒' : '新订单提醒' }}</h2>
+              <MerchantAttention :key="session.user!.id" :scope="`${session.user!.id}:${stall.id}`" :orders="orders" :ready="ordersReady" :sync-error="error" :compact-pending="orderWorkspace" :show-controls="section === 'more' && (!discoveryOnly || hasOrderHistory)" :show-tasks="!orderWorkspace" @expired="refresh" @refresh="mutationRefresh" />
+              <SessionNotifications v-show="section === 'more' && (!discoveryOnly || hasOrderHistory)" :key="`${session.user!.id}:${stall.id}`" :user-id="session.user!.id" :events="notificationEvents" :ready="ordersReady && !error" />
             </div>
-            <div v-else-if="locationDue" class="m-info-banner" role="status">
-              <MapPin :size="18" /> 位置将在 10
-              分钟内需要重新确认。仍在原处时，点击“我还在这里”，避免同学跑空。
-            </div>
-            <div v-if="!stall.transaction_enabled" class="m-info-banner">
-              <ShieldCheck :size="17" />
-              当前摊位仅展示，在线接单需由运营核验后开通。
-            </div>
-            <MerchantOperations
-              v-if="section === ''"
-              :key="`${session.user!.id}:${stall.id}`"
-              :stall="stall"
-              :orders="orders"
-              :ready="ordersReady"
-              @refresh="mutationRefresh"
-              @location="router.push('/merchant/store#location')"
-            />
-            <MerchantAttention
-              :key="session.user!.id"
-              :scope="`${session.user!.id}:${stall.id}`"
-              :orders="orders"
-              :ready="ordersReady"
-              :sync-error="error"
-              :compact-pending="
-                section === 'orders' ||
-                (section === '' && stall.status === 'open')
-              "
-              @expired="refresh"
-              @refresh="mutationRefresh"
-            />
-            <p
-              v-if="
-                heartbeatError ||
-                stall.receiving_status === 'stale' ||
-                stall.receiving_status === 'unknown'
-              "
-              class="m-info-banner"
-              role="status"
-            >
-              {{
-                heartbeatError ||
-                "接单端最近未同步，请确认有人照看订单。营业展示和新单开关不会因这个提示自动改变。"
-              }}
-            </p>
-            <SessionNotifications
-              :key="`${session.user!.id}:${stall.id}`"
-              :user-id="session.user!.id"
-              :events="notificationEvents"
-              :ready="ordersReady && !error"
-            />
-            <template v-if="section === ''">
-              <section
-                v-if="!sellable || !stall.address || !stall.transaction_enabled"
-                class="m-panel m-preparation"
-                aria-label="开摊准备"
-              >
-                <h2>先准备好，再让同学来找你</h2>
-                <p>资料可以分步完善。营业展示与线上接单分别核验。</p>
-                <div>
-                  <RouterLink to="/merchant/products"
-                    >{{
-                      sellable ? "✓ 菜单已有可售商品" : "1. 添加第一道可售商品"
-                    }}
-                    <ArrowRight :size="16" /></RouterLink
-                  ><RouterLink to="/merchant/store#location"
-                    >{{
-                      stall.address ? "✓ 核对今天的取餐位置" : "2. 设置取餐位置"
-                    }}
-                    <ArrowRight :size="16" /></RouterLink
-                  ><span>{{
-                    stall.transaction_enabled
-                      ? "✓ 线上接单已获核验"
-                      : "3. 线上接单等待运营核验；不会自动开通"
-                  }}</span>
-                </div>
-              </section>
-              <StallShare :stall="stall" compact />
-            </template>
-            <MerchantDashboard
-              v-if="section === ''"
-              :stall="stall"
-              :orders="orders"
-              :metrics="metrics"
-              :metrics-error="metricsError"
-              :orders-ready="ordersReady"
-              :sync-error="error"
-              @navigate="navigate"
-            />
-            <MerchantOrders
-              v-else-if="section === 'orders'"
-              :key="`${stall.id}:${route.query.filter || 'active'}`"
-              :stall="stall"
-              :orders="orders"
-              :orders-ready="ordersReady"
-              :sync-error="error"
-              :loading="refreshing"
-              :initial-filter="String(route.query.filter || 'active')"
-              :counts="orderCounts"
-              @refresh="orderChanged"
-            />
-            <MerchantProducts
-              v-else-if="section === 'products'"
-              :key="stall.id"
-              :stall="stall"
-              @refresh="mutationRefresh"
-            />
-            <MerchantAnalytics
-              v-else-if="section === 'analytics'"
-              :metrics="metrics"
-              :days="days"
-              :error="metricsError"
-              :loading="metricsLoading"
-              @period="changePeriod"
-            />
-            <MerchantReviews
-              v-else-if="section === 'reviews'"
-              :key="stall.id"
-              :stall="stall"
-              @refresh="mutationRefresh"
-            />
-            <MerchantStore
-              v-else-if="section === 'store'"
-              :key="`${session.user!.id}:${stall.id}`"
-              :stall="stall"
-              :orders="orders"
-              :orders-ready="ordersReady"
-              @refresh="mutationRefresh"
-            /> </template
-        ></template>
-        <footer class="m-workspace-footer">
-          <div class="m-mobile-account">
-            <RouterLink to="/merchant/reviews">顾客评价</RouterLink
-            ><RouterLink to="/" @click="session.setConsumerPreview(true)"
-              >预览学生端</RouterLink
-            ><button @click="logout">退出登录</button>
-          </div>
-          烟火地图 · 好手艺，值得被看见
-        </footer>
+          </template>
+        </template>
       </div>
       <nav class="m-mobile-nav" aria-label="商家底部导航">
-        <RouterLink
-          v-for="n in nav.filter((n) => n.id !== 'reviews')"
-          :key="n.id"
-          :to="n.id ? `/merchant/${n.id}` : '/merchant'"
-          :class="{
-            active:
-              section === n.id || (n.id === 'store' && section === 'reviews'),
-          }"
-          ><component :is="n.icon" :size="20" /><span>{{ n.short }}</span
-          ><i v-if="n.id === 'orders' && pending">{{ pending }}</i></RouterLink
-        >
+        <RouterLink v-for="n in nav" :key="n.id" :to="n.id ? `/merchant/${n.id}` : '/merchant'" :class="{ active: activeNav === n.id }"><component :is="n.icon" :size="23" /><span>{{ n.short }}</span><i v-if="n.id === '' && pending">{{ pending }}</i></RouterLink>
       </nav>
     </div>
   </div>
 </template>
 <style scoped>
-.m-application-page {
-  max-width: 920px;
-  margin: 0 auto;
-  padding: 28px 18px;
-}
-.m-preparation {
-  margin-bottom: 20px;
-}
-.m-preparation h2 {
-  font-size: 20px;
-  margin-top: 0;
-}
-.m-preparation p {
-  color: #7a6552;
-  line-height: 1.7;
-  font-size: 14px;
-}
-.m-preparation > div {
-  display: grid;
-  gap: 8px;
-}
-.m-preparation a,
-.m-preparation > div > span {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
-  min-height: 48px;
-  padding: 10px 14px;
-  border-radius: 12px;
-  background: #fff5e9;
-  color: #765238;
-  font-size: 14px;
-  box-sizing: border-box;
-}
-.m-preparation > div > span {
-  background: #f6f2eb;
-}
+.m-application-page { max-width: 920px; margin: 0 auto; padding: 28px 18px; }
 </style>

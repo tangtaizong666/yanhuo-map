@@ -19,3 +19,14 @@ class ProductCreation(models.Model):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=['stall', 'idempotency_key'], name='unique_product_creation_key')]
+
+
+class MerchantOrderOperation(models.Model):
+    order = models.ForeignKey('market.Order', on_delete=models.CASCADE, related_name='merchant_operations')
+    idempotency_key = models.CharField(max_length=128)
+    action = models.CharField(max_length=32)
+    request_hash = models.CharField(max_length=64)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['order', 'idempotency_key'], name='unique_merchant_order_operation')]

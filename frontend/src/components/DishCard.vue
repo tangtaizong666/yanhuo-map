@@ -2,7 +2,7 @@
 import { ref, watch } from "vue";
 import { ArrowUpRight, Store, Utensils, Clock3 } from "lucide-vue-next";
 import { money, statusText } from "../lib/api";
-import type { Product, Stall } from "../lib/types";
+import type { Product, StallMap as Stall } from "../lib/types";
 import { preparationLabel } from "../lib/availability";
 const props = defineProps<{ product: Product; stall: Stall }>();
 const imageFailed = ref(false);
@@ -34,8 +34,10 @@ watch(
         <Utensils :size="32" :stroke-width="1.2" /><span>等待美味亮相</span>
       </div>
       <span v-if="product.sale_paused" class="dish-availability">暂停供应</span>
-      <span v-else-if="product.stock < 1" class="dish-availability"
-        >线上售罄</span
+      <span
+        v-else-if="product.availability === 'sold_out'"
+        class="dish-availability"
+        >{{ product.display_only ? "今天卖完了" : "线上售罄" }}</span
       >
       <span v-else-if="stall.status !== 'open'" class="dish-availability">{{
         statusText(stall.status)
@@ -215,10 +217,12 @@ watch(
     padding: 12px;
   }
   .dish-card h3 {
-    font-size: 15px;
+    font-size: 16px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
   }
   .dish-card-photo {
-    aspect-ratio: 1;
+    aspect-ratio: 1.4;
   }
   .dish-availability {
     top: 8px;
@@ -234,8 +238,11 @@ watch(
   }
   .dish-stall,
   .dish-description {
-    font-size: 11px;
+    font-size: 12px;
   }
+  .dish-card-bottom { margin-top: 12px; }
+  .dish-preparation { margin-top: 8px; font-size: 12px; }
+  .dish-preparation small { font-size: 11px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .dish-card,
