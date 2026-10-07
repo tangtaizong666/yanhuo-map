@@ -50,6 +50,13 @@ const location = reactive({
   longitude: "",
   closes_at: "",
 });
+const mapAvailable = computed(() => !!session.config?.amap_key);
+const hasLocationCoordinates = computed(() => {
+  const latitude = Number(location.latitude), longitude = Number(location.longitude);
+  return !!location.latitude.trim() && !!location.longitude.trim() &&
+    Number.isFinite(latitude) && Number.isFinite(longitude) &&
+    latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180;
+});
 const profileBase: Record<string, any> = {};
 const locationBase: Record<string, string> = {};
 const route = useRoute();
@@ -381,13 +388,14 @@ async function upload(
     >
       <summary>
         <MapPin :size="20" /><span
-          >位置与经营资料<small>更换取餐位置、收摊时间与资质信息</small></span
+          >位置与时间<small>确认出摊位置与预计收摊时间</small></span
         >
       </summary>
       <section class="store-inner-section">
         <div class="m-panel-head">
           <h2><MapPin :size="20" /> 取餐位置与时间</h2>
           <button
+            v-if="mapAvailable"
             class="btn btn-secondary"
             :disabled="!!busy"
             @click="position"
@@ -395,10 +403,11 @@ async function upload(
             <Navigation :size="16" /> 获取当前位置
           </button>
         </div>
-        <p v-if="!session.config?.amap_key" class="m-info-banner">
-          地图暂未配置。可以先保存地址草稿，请团队协助核实；这不会确认位置或开放接单。
+        <p v-if="!mapAvailable && !hasLocationCoordinates" class="m-info-banner">
+          暂时不能使用地图。先保存地址草稿，请团队协助确认位置；草稿不会公开为出摊位置，也不会开始营业。
         </p>
         <button
+          v-if="mapAvailable"
           class="btn btn-secondary"
           :disabled="!!busy"
           @click="pickLocation"
@@ -421,7 +430,7 @@ async function upload(
         </div>
         <form
           class="m-form"
-          @submit.prevent="updateStatus(confirmationStatus, true)"
+          @submit.prevent="hasLocationCoordinates ? updateStatus(confirmationStatus, true) : saveAddressDraft()"
         >
           <label
             >详细取餐地址<input
@@ -430,7 +439,7 @@ async function upload(
               maxlength="200"
               placeholder="例如：学府路夜市入口左侧第三个摊位"
           /></label>
-          <label
+          <label v-show="hasLocationCoordinates"
             >预计收摊时间<input
               v-model="location.closes_at"
               type="datetime-local"
@@ -449,7 +458,7 @@ async function upload(
               /></label>
             </div>
           </details>
-          <p class="m-setting-note">
+          <p v-if="hasLocationCoordinates" class="m-setting-note">
             <ShieldCheck :size="18" />
             更换取餐地址或坐标后，将暂停在线接单，待运营重新核验。历史订单仍保留原取餐地址，请主动联系顾客。
           </p>
@@ -458,19 +467,23 @@ async function upload(
             <p>新位置已保存，线上新单暂停。已有订单保留原取餐地址，请联系顾客确认交付安排。</p>
             <RouterLink to="/merchant/orders?filter=active" class="m-text-link">处理已有订单</RouterLink>
           </div>
-          <button class="btn btn-primary" :disabled="!!busy" type="submit">
+          <button v-if="hasLocationCoordinates" class="btn btn-primary" :disabled="!!busy" type="submit">
             <Save :size="16" /> 确认并保存位置与时间
           </button>
           <button
-            class="btn btn-secondary"
+            :class="['btn', hasLocationCoordinates ? 'btn-secondary' : 'btn-primary']"
             :disabled="!!busy"
-            type="button"
-            @click="saveAddressDraft"
+            :type="hasLocationCoordinates ? 'button' : 'submit'"
+            @click="hasLocationCoordinates && saveAddressDraft()"
           >
-            仅保存地址草稿
+            {{ hasLocationCoordinates ? '仅保存地址草稿' : '保存地址草稿' }}
           </button>
+          <p v-if="!hasLocationCoordinates && mapAvailable" class="m-muted">先保存地址也可以。确认出摊位置前，请定位或在地图上选点。</p>
         </form>
       </section>
+    </details>
+    <details class="m-panel store-details">
+      <summary><ShieldCheck :size="20" /><span>经营信息<small>经营主体与资质公示</small></span></summary>
       <section class="store-inner-section">
         <div class="m-panel-head">
           <h2><ShieldCheck :size="20" /> 经营信息</h2>
