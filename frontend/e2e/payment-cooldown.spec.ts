@@ -26,9 +26,21 @@ async function fixture(page: Page, cooldown: number) {
   await page.clock.install({ time: new Date('2026-10-03T06:00:00Z') })
   await page.clock.pauseAt(new Date('2026-10-03T06:00:01Z'))
   await page.context().addCookies([{ name: 'csrftoken', value: 'fixture-csrf-token', url: baseURL }])
+  let serverElapsedMs = 0
+  let queryDeadline = cooldown * 1000
   const state = {
     user: owner, order: order(cooldown), calls: [] as string[], unexpected: [] as string[],
     beforeSync: null as null | (() => Promise<void>),
+    beforeRead: null as null | (() => Promise<void>),
+    async advanceClock(milliseconds: number) {
+      serverElapsedMs += milliseconds
+      await page.clock.runFor(milliseconds)
+    },
+  }
+  // The simulated server advances only with elapsed test time, independently
+  // of browser wall-clock corrections and ordinary order reads.
+  function currentOrder() {
+    return { ...state.order, payment_query_after_seconds: Math.max(0, Math.ceil((queryDeadline - serverElapsedMs) / 1000)) }
   }
   await page.route('https://**/*', route => route.abort())
   await page.route('**/api/v1/**', async route => {
@@ -38,8 +50,10 @@ async function fixture(page: Page, cooldown: number) {
     if (path === '/auth/me') return send(state.user)
     if (path === '/auth/csrf') return fulfillCsrf(route)
     if (path === '/orders/active-summary') return send([])
-    if (path === `/orders/${state.order.id}`)
-      return state.user.id === owner.id ? send(state.order) : send({ detail: '当前账号无权查看此订单' }, 403)
+    if (path === `/orders/${state.order.id}`) {
+      await state.beforeRead?.()
+      return state.user.id === owner.id ? send(currentOrder()) : send({ detail: '当前账号无权查看此订单' }, 403)
+    }
     const match = path.match(/\/payments\/(sync|close)$/)
     if (match) {
       state.calls.push(match[1])
@@ -49,9 +63,9 @@ async function fixture(page: Page, cooldown: number) {
         state.order.payment_method = 'offline'
         state.order.payment_can_close = false
         state.order.allowed_actions = ['pay', 'cancel']
-        state.order.payment_query_after_seconds = 0
+        queryDeadline = 0
       }
-      return send(state.order)
+      return send(currentOrder())
     }
     state.unexpected.push(path)
     return send({ detail: `Unexpected fixture API: ${path}` }, 500)
@@ -68,32 +82,66 @@ test('server cooldown disables manual sync and the monotonic countdown permits i
   await expect(refresh).toHaveText(/4 秒后可再次核对/)
   // DOM-dispatched activation also has to be rejected by the action guard.
   await refresh.dispatchEvent('click')
+  let releaseRead!: () => void
+  let readStarted!: () => void
+  const readGate = new Promise<void>(resolve => { releaseRead = resolve })
+  const reading = new Promise<void>(resolve => { readStarted = resolve })
+  state.beforeRead = async () => { readStarted(); await readGate }
+  const focusResponse = page.waitForResponse(response => new URL(response.url()).pathname === `/api/v1/orders/${state.order.id}`)
+  const monotonicBefore = await page.evaluate(() => performance.now())
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await reading
   expect(state.calls).toEqual([])
-  state.order.payment_query_after_seconds = 0
   // A wall-clock correction must not bypass a server cooldown.
   await page.clock.setSystemTime(new Date('2026-10-04T06:00:01Z'))
   await expect(refresh).toBeDisabled()
-  await page.clock.runFor(3000)
+  expect(await page.evaluate(() => performance.now())).toBe(monotonicBefore)
+  // Release the ordinary focus GET after the correction, reproducing the
+  // delayed response that previously read an eagerly cleared fixture value.
+  state.order.stall_name = '焦点刷新后的支付测试摊位'
+  releaseRead()
+  const response = await focusResponse
+  await response.finished()
+  expect((await response.json()).payment_query_after_seconds).toBe(4)
+  // A changed receipt proves the response was applied before advancing time.
+  await expect(page.getByRole('heading', { name: state.order.stall_name, exact: true })).toBeVisible()
+  await expect(refresh).toBeDisabled()
+  await expect(refresh).toHaveText(/4 秒后可再次核对/)
+  // Jump again after the response established the current deadline: a new
+  // order response must not hide a regression to Date.now-based countdowns.
+  await page.clock.setSystemTime(new Date('2026-10-05T06:00:01Z'))
+  expect(await page.evaluate(() => performance.now())).toBe(monotonicBefore)
+  await expect(refresh).toBeDisabled()
+  await state.advanceClock(3000)
   await expect(refresh).toHaveText(/1 秒后可再次核对/)
   expect(state.calls).toEqual([])
-  await page.clock.runFor(1000)
+  await state.advanceClock(1000)
   await expect(refresh).toHaveText('刷新付款状态')
+  const syncResponse = page.waitForResponse(response => new URL(response.url()).pathname === `/api/v1/orders/${state.order.id}/payments/sync`)
   await refresh.click()
   await expect.poll(() => state.calls).toEqual(['sync'])
+  const synced = await syncResponse
+  await synced.finished()
+  expect((await synced.json()).payment_query_after_seconds).toBe(0)
   expect(state.unexpected).toEqual([])
 })
 
 test('automatic payment polling respects the server cooldown then resumes', async ({ page }) => {
   const state = await fixture(page, 12)
   // At ten seconds an ordinary order read echoes the two remaining seconds.
-  state.order.payment_query_after_seconds = 2
-  await page.clock.runFor(10_000)
+  const orderResponse = page.waitForResponse(response => new URL(response.url()).pathname === `/api/v1/orders/${state.order.id}`)
+  await state.advanceClock(10_000)
+  const response = await orderResponse
+  await response.finished()
+  expect((await response.json()).payment_query_after_seconds).toBe(2)
   await expect(page.getByRole('button', { name: '2 秒后可再次核对' })).toBeDisabled()
   expect(state.calls).toEqual([])
-  state.order.payment_query_after_seconds = 0
-  await page.clock.runFor(10_000)
+  const syncResponse = page.waitForResponse(response => new URL(response.url()).pathname === `/api/v1/orders/${state.order.id}/payments/sync`)
+  await state.advanceClock(10_000)
   await expect.poll(() => state.calls).toEqual(['sync'])
+  const synced = await syncResponse
+  await synced.finished()
+  expect((await synced.json()).payment_query_after_seconds).toBe(0)
   expect(state.unexpected).toEqual([])
 })
 
@@ -125,7 +173,7 @@ test('a late payment response cannot restore the previous account order after id
   await expect(page.getByRole('heading', { name: '支付方式', exact: true })).toHaveCount(0)
   release()
   await expect.poll(() => state.order.payment_status).toBe('paid')
-  await page.clock.runFor(20_000)
+  await state.advanceClock(20_000)
   await expect(page.getByRole('alert')).toContainText('当前账号无权查看此订单')
   await expect(page.getByText('微信支付已确认', { exact: true })).toHaveCount(0)
   await expect(page.getByText('COOLDOWN-ONLY', { exact: true })).toHaveCount(0)
