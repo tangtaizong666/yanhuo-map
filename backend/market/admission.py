@@ -8,6 +8,20 @@ from django.db.models import Q
 from django.utils import timezone
 
 
+# Explicitly share Python's Unicode whitespace set with database regexes.
+# PostgreSQL's locale-dependent \s/\S does not reliably match Python str.strip.
+ADMISSION_WHITESPACE = (
+    '\t\n\v\f\r\x1c\x1d\x1e\x1f \x85\xa0\u1680'
+    '\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a'
+    '\u2028\u2029\u202f\u205f\u3000'
+)
+ADMISSION_TEXT_PATTERN = f'[^{ADMISSION_WHITESPACE}]'
+
+
+def has_admission_text(value):
+    return bool(value and value.strip(ADMISSION_WHITESPACE))
+
+
 def simulated_orders(stall):
     # Offline demo pickup predates the optional online simulator and stays usable.
     return bool(stall.is_demo and settings.DEMO_MODE and not settings.PRODUCTION)
@@ -34,8 +48,10 @@ def new_trade_eligibility_q(prefix=''):
     def q(**values): return Q(**{prefix + key: value for key, value in values.items()})
     verified = q(transaction_enabled=True, merchant__is_verified=True)
     live = q(is_demo=False, merchant__qualification_tier='storefront',
-        merchant__licensed_business_address__regex=r'\S', merchant__food_preparation_address__regex=r'\S')
-    live &= q(merchant__license_valid_until__isnull=True) | q(merchant__license_valid_until__gte=timezone.localdate())
+        merchant__license_number__regex=ADMISSION_TEXT_PATTERN,
+        merchant__licensed_business_address__regex=ADMISSION_TEXT_PATTERN,
+        merchant__food_preparation_address__regex=ADMISSION_TEXT_PATTERN,
+        merchant__license_valid_until__gte=timezone.localdate())
     demo = q(is_demo=True) if settings.DEMO_MODE and not settings.PRODUCTION else q(pk__isnull=True)
     return verified & (live | demo)
 
@@ -47,9 +63,13 @@ def merchant_trade_reason(merchant):
     if merchant.qualification_tier != 'storefront':
         return '此流动摊位仅提供找摊与菜品信息，尚未开放线上下单、支付和配送；可到摊咨询。'
     if not merchant.is_verified: return '商户经营资质尚未通过核验，暂停新的线上交易。'
-    if not (merchant.licensed_business_address.strip() and merchant.food_preparation_address.strip()):
+    if not (has_admission_text(merchant.licensed_business_address) and has_admission_text(merchant.food_preparation_address)):
         return '门店证照地址尚未登记完整，暂停新的线上交易。'
-    if merchant.license_valid_until and merchant.license_valid_until < timezone.localdate():
+    if not has_admission_text(merchant.license_number):
+        return '经营许可证号尚未登记完整，暂停新的线上交易。'
+    if merchant.license_valid_until is None:
+        return '经营许可证有效期尚未核验，暂停新的线上交易。'
+    if merchant.license_valid_until < timezone.localdate():
         return '经营许可证已过有效期，暂停新的线上下单、支付和配送。'
     return ''
 

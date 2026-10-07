@@ -33,6 +33,8 @@ python -m venv .venv
 
 `transaction_enabled` 在响应中代表有效交易资格；运营保存的原开通标志保留在模型，资质失效不会清空历史订单。未获准的真实流动摊位只提供信息展示；示例演练订单明确保存 `mode=simulation`。禁止用线下收款代替线上下单准入。
 
+真实实体门店还必须有非空白 `license_number` 和明确的 `license_valid_until`（含到期当日）；日期为空按尚未核验处理，不能表示长期有效。未核验商户可逐步补齐证照，撤销核验与关闭服务不受缺证照阻碍；后台新增交易／配送授权使用相同资格规则。许可证号及地址的 Unicode 空白判断在对象与数据库筛选中一致，不会自动补写任何真实商户资料。
+
 找摊菜品新增 `display_availability`（`available` 今天有、`sold_out` 卖完了、`paused` 暂时不卖、空值沿用原状态），商家创建／PATCH 可维护。此字段不修改 `stock`、`stock_version` 或交易用的 `sale_paused`。公开餐点的 `display_only=true` 时按展示状态返回 `availability`，`max_order_quantity=0`；恢复交易资格后重新按线上库存与停售开关判断。旧数据不自动填充“今天有”。
 
 订单 `offline_payment_available` 是当前展示现场付款入口的明确授权；真实自取待取餐、未付款、无线下／线上资金冲突及取消申请时才可能为 true。`stall_payment_qr_image` 在其他状态返回空字符串，模拟订单始终为空。资质失效后的旧线上支付入口收起，查询、关闭和必要售后仍可执行；前端不能仅凭图片地址或旧链接展示付款入口。

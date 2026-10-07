@@ -64,8 +64,16 @@ class MerchantProfile(models.Model):
     def clean(self):
         super().clean()
         if self.qualification_tier == 'storefront':
+            from .admission import has_admission_text
             missing = {name: '实体门店需填写此项。' for name in ('licensed_business_address', 'food_preparation_address')
-                if not getattr(self, name).strip()}
+                if not has_admission_text(getattr(self, name))}
+            if self.is_verified:
+                if not has_admission_text(self.license_number):
+                    missing['license_number'] = '核验通过的实体门店需填写经营许可证号。'
+                if self.license_valid_until is None:
+                    missing['license_valid_until'] = '核验通过的实体门店需填写已核验的许可证有效期。'
+                elif self.license_valid_until < timezone.localdate():
+                    missing['license_valid_until'] = '经营许可证已过有效期，不能标记资质核验通过。'
             if missing: raise ValidationError(missing)
     def online_trade_reason(self):
         from .admission import merchant_trade_reason
