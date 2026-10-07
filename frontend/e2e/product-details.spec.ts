@@ -147,13 +147,21 @@ test("dish quantity respects the per-order limit, persists and survives guest ch
   ).toBeDisabled();
   await expect(page.locator(".dish-add-button strong")).toHaveText("¥76.5");
   await page.getByRole("button", { name: /加入餐袋/ }).click();
+  const checkout = page.getByRole("link", { name: "去结算", exact: true });
+  await expect(checkout).toBeVisible();
+  await expect(checkout).toHaveClass(/btn-primary/);
+  await expect(checkout).toHaveAttribute("href", `/checkout/${stall.id}`);
+  await expect(page.locator(".dish-added-total small")).toHaveText("本摊餐袋 10 份");
+  await expect(page.locator(".dish-added-total strong")).toHaveText("¥85");
+  await page.locator(".dish-purchase-panel").evaluate((form) =>
+    (form as HTMLFormElement).requestSubmit(),
+  );
+  await expect(page.locator(".dish-added-total small")).toHaveText("本摊餐袋 10 份");
+  await expect(page.locator(".dish-added-total strong")).toHaveText("¥85");
+  await page.reload();
   await expect(
     page.getByRole("button", { name: /每单合计最多 10 份/ }),
   ).toBeDisabled();
-  await expect(page.locator(".dish-cart-line")).toContainText(
-    "本摊餐袋 10 份 · ¥85",
-  );
-  await page.reload();
   await expect(page.locator(".dish-cart-line")).toContainText(
     "本摊餐袋 10 份 · ¥85",
   );
@@ -230,6 +238,7 @@ test("checkout food links retain optional fields in memory and logout clears the
     "例如：餐具按需提供（每份口味请在上方分别填写）",
   );
   const phone = page.getByPlaceholder("如遇缺货，方便商家联系你");
+  await page.locator(".checkout-contact-card > summary").click();
   await note.fill("详情往返测试：少辣，谢谢");
   await phone.fill("13800138000");
   await page
@@ -239,6 +248,9 @@ test("checkout food links retain optional fields in memory and logout clears the
     new RegExp(`/stalls/${stall.id}/products/${product.id}$`),
   );
   await page.getByRole("link", { name: "去结算", exact: true }).click();
+  await page.locator(".checkout-contact-card > summary").click();
+  await expect(note).toBeVisible();
+  await expect(phone).toBeVisible();
   await expect(note).toHaveValue("详情往返测试：少辣，谢谢");
   await expect(phone).toHaveValue("13800138000");
   // Titles are also independent detail links, and the desktop bag preview opens the same dish.
@@ -250,6 +262,9 @@ test("checkout food links retain optional fields in memory and logout clears the
     .getByRole("link", { name: `查看餐袋中${product.name}详情`, exact: true })
     .click();
   await page.getByRole("link", { name: "去结算", exact: true }).click();
+  await page.locator(".checkout-contact-card > summary").click();
+  await expect(note).toBeVisible();
+  await expect(phone).toBeVisible();
   await expect(note).toHaveValue("详情往返测试：少辣，谢谢");
   await expect(phone).toHaveValue("13800138000");
   expect(
@@ -274,6 +289,9 @@ test("checkout food links retain optional fields in memory and logout clears the
     .locator(".pickup-card")
     .getByRole("link", { name: "去结算", exact: true })
     .click();
+  await page.locator(".checkout-contact-card > summary").click();
+  await expect(note).toBeVisible();
+  await expect(phone).toBeVisible();
   await expect(note).toHaveValue("");
   await expect(phone).toHaveValue("");
 });

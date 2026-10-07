@@ -14,6 +14,13 @@ const product = {
 };
 const note = "例如：餐具按需提供（每份口味请在上方分别填写）";
 const keyName = "yanhuo-checkout-989-989";
+async function showContactDraft(page: Page) {
+  const contact = page.locator('.checkout-contact-card');
+  await expect(contact).toBeVisible();
+  if (!(await contact.evaluate(element => (element as HTMLDetailsElement).open)))
+    await contact.locator(':scope > summary').click();
+  await expect(page.getByPlaceholder(note)).toBeVisible();
+}
 async function fixture(page: Page) {
   const state = {
     user: {
@@ -173,6 +180,7 @@ async function fixture(page: Page) {
     product,
   );
   await page.reload();
+  await showContactDraft(page);
   await expect(page.getByPlaceholder(note)).toBeVisible();
   await page.getByPlaceholder(note).fill("少辣，保留原备注");
   return state;
@@ -261,6 +269,7 @@ test("reload and a changed cart preserve the original recovery request and newer
   await page.getByRole('link', { name: '确认原订单结果', exact: true }).click();
   await expect(page).toHaveURL(/\/checkout\/989$/);
   await page.reload();
+  await showContactDraft(page);
   await expect(page.getByPlaceholder(note)).toBeDisabled();
   await expect(page.locator(".recovery-summary")).toContainText("× 1");
   expect(
@@ -402,6 +411,7 @@ test("recovery is account scoped and returns when the original account signs bac
   state.user = { ...state.user, id: 989, username: "recovery_a" };
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect(page.getByPlaceholder(note)).toBeDisabled();
+  await showContactDraft(page);
   await expect(page.getByPlaceholder(note)).toHaveValue("少辣，保留原备注");
   state.behavior = "success";
   await page
@@ -435,6 +445,7 @@ test("leaving while the server response is pending retains the original request 
   await expect(page).toHaveURL(/\/stalls\/989\/products\/989$/);
   state.release();
   await page.goto("/checkout/989");
+  await showContactDraft(page);
   await expect(page.getByPlaceholder(note)).toBeDisabled();
   expect(
     await page.evaluate((key) => sessionStorage.getItem(key), keyName),
@@ -529,6 +540,7 @@ test("an old account response cannot clear the new account's pending checkout", 
   state.user = { ...state.user, id: 990, username: "recovery_b" };
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect(page.getByPlaceholder(note)).toBeEnabled();
+  await showContactDraft(page);
   await page.getByPlaceholder(note).fill("新账号的备注");
   state.behavior = "lose";
   await submit(page);

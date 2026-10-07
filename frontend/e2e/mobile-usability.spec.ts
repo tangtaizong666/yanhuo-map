@@ -234,6 +234,7 @@ for (const width of [360, 390])
       });
       await expect(submit).toBeEnabled();
       await capture(page, info, "s-checkout");
+      await page.locator(".checkout-contact-card > summary").click();
       await page
         .getByPlaceholder("例如：餐具按需提供（每份口味请在上方分别填写）")
         .fill("手机全流程隔离验收，少辣");

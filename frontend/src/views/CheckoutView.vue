@@ -124,6 +124,12 @@ const recipient = computed({
   set: (value: string) => drafts.update(stallId, { recipient: value }),
 });
 const isDelivery = computed(() => fulfillment.value === "delivery");
+const contactExpanded = ref(false);
+const contactSummary = computed(
+  () =>
+    [phone.value.trim(), note.value.trim()].filter(Boolean).join(" · ") ||
+    "手机号、整单备注均可不填",
+);
 const isSimulation = computed(
   () => stall.value?.wechat_payment?.mode === "simulation",
 );
@@ -374,7 +380,8 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
       throw new ApiError("订单返回信息不完整，请确认原订单结果。", 502, null);
     const unchangedCart = record.cart === cartFingerprint.value;
     const unchangedDraft = record.fingerprint === fingerprint.value;
-    if (record.cartPortions) cart.consumePortions(stallId, record.cartPortions, pageUserId!);
+    if (record.cartPortions)
+      cart.consumePortions(stallId, record.cartPortions, pageUserId!);
     else if (unchangedCart) cart.clear(stallId);
     forgetSubmission();
     if (unchangedDraft && !cart.count(stallId)) drafts.clear(stallId);
@@ -390,15 +397,23 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
       // Identity verification may unmount this page before the first write is
       // ever sent. Do not leave a phantom recovery request for the old account;
       // an actual retry still retains its original uncertain operation.
-      if (!recovering && e instanceof ApiError && e.data?.submitted === false &&
-          readSubmission(keyName, stallId)?.key === record.key)
+      if (
+        !recovering &&
+        e instanceof ApiError &&
+        e.data?.submitted === false &&
+        readSubmission(keyName, stallId)?.key === record.key
+      )
         removeSubmission(keyName);
       return;
     }
     error.value = (e as Error).message;
     if (e instanceof ApiError && Array.isArray(e.data?.order_ids)) {
-      relatedOrderIds.value = e.data.order_ids.filter((id: unknown) =>
-        typeof id === 'string' && /^[a-f0-9-]{36}$/i.test(id)).slice(0, 10);
+      relatedOrderIds.value = e.data.order_ids
+        .filter(
+          (id: unknown) =>
+            typeof id === "string" && /^[a-f0-9-]{36}$/i.test(id),
+        )
+        .slice(0, 10);
     }
     // During recovery, CSRF/auth/schema failures only describe this retry, not
     // the original write. Only business checks after server-side duplicate
@@ -682,18 +697,27 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
           :readiness="stall.wechat_payment"
           :delivery="isDelivery"
         />
-        <section
+        <details
           class="card checkout-card checkout-contact-card"
           aria-label="联系与备注"
+          :open="isDelivery || contactExpanded"
+          @toggle="contactExpanded = ($event.target as HTMLDetailsElement).open"
         >
-          <div class="section-heading">
-            <h2>
+          <summary @click="isDelivery && $event.preventDefault()">
+            <span class="contact-heading">
               联系与备注
               <span class="muted small">{{
                 fulfillment === "delivery" ? "方便交接" : "自取选填"
               }}</span>
-            </h2>
-          </div>
+            </span>
+            <span v-if="!isDelivery" class="contact-summary">{{
+              contactSummary
+            }}</span>
+            <span v-if="!isDelivery" class="contact-expand"
+              >{{ contactExpanded ? "收起" : "填写或修改"
+              }}<ChevronRight :size="16"
+            /></span>
+          </summary>
           <label v-if="isDelivery" class="field"
             >收餐人称呼<input
               v-model="recipient"
@@ -735,7 +759,7 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
             ></textarea
             ><span class="character-count">{{ note.length }}/200</span></label
           >
-        </section>
+        </details>
       </div>
       <aside class="checkout-summary card">
         <span class="eyebrow">YOUR LITTLE HAPPINESS</span>
@@ -754,7 +778,10 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
           <span>{{ isSimulation ? "模拟应付金额" : "应付金额" }}</span
           ><strong>¥{{ money(total + deliveryFee) }}</strong>
         </div>
-        <div class="pay-at-stall">
+        <div
+          v-if="isSimulation || isDelivery || stall.wechat_payment?.available"
+          class="pay-at-stall"
+        >
           <Wallet :size="22" />
           <div>
             <strong>{{
@@ -788,8 +815,18 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
         <p v-if="error && !unresolved" class="error-message" role="alert">
           {{ error }}
         </p>
-        <nav v-if="relatedOrderIds.length && !unresolved" class="recovery-actions" aria-label="已有订单">
-          <RouterLink v-for="(id, index) in relatedOrderIds" :key="id" :to="`/orders/${id}`" class="btn btn-secondary">查看已有订单 {{ index + 1 }}</RouterLink>
+        <nav
+          v-if="relatedOrderIds.length && !unresolved"
+          class="recovery-actions"
+          aria-label="已有订单"
+        >
+          <RouterLink
+            v-for="(id, index) in relatedOrderIds"
+            :key="id"
+            :to="`/orders/${id}`"
+            class="btn btn-secondary"
+            >查看已有订单 {{ index + 1 }}</RouterLink
+          >
         </nav>
         <p
           v-if="isDelivery && !deliveryCanSubmit"
@@ -802,7 +839,11 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
               : "请核对交接点、收餐人、有效联系号码及起送金额。"
           }}
         </p>
-        <div v-if="!unresolved || busy" class="checkout-action-bar" aria-label="确认金额并提交">
+        <div
+          v-if="!unresolved || busy"
+          class="checkout-action-bar"
+          aria-label="确认金额并提交"
+        >
           <div class="mobile-checkout-total">
             <small>{{ isSimulation ? "模拟应付" : "合计" }}</small
             ><strong>¥{{ money(total + deliveryFee) }}</strong
@@ -1060,6 +1101,47 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
   margin-top: 22px;
   position: relative;
 }
+.checkout-contact-card > summary {
+  list-style: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px 12px;
+  min-height: 44px;
+  cursor: pointer;
+}
+.checkout-contact-card > summary::-webkit-details-marker {
+  display: none;
+}
+.contact-heading {
+  font-size: 16px;
+  font-weight: 600;
+}
+.contact-heading > span {
+  margin-left: 6px;
+  font-weight: 400;
+}
+.contact-summary {
+  grid-column: 1;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #796852;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.contact-expand {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  color: #a14f25;
+}
+.checkout-contact-card[open] .contact-expand svg {
+  transform: rotate(90deg);
+}
 .field > .muted {
   font-size: 11px;
   font-weight: 400;
@@ -1251,9 +1333,14 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
     grid-template-columns: 64px minmax(0, 1fr);
     gap: 12px;
   }
-  .checkout-product-photo { grid-row: 1 / 3; align-self: start; }
+  .checkout-product-photo {
+    grid-row: 1 / 3;
+    align-self: start;
+  }
   .checkout-product > .portion-editor,
-  .checkout-product-problem { grid-column: 1 / -1; }
+  .checkout-product-problem {
+    grid-column: 1 / -1;
+  }
   .checkout-product img {
     width: 64px;
     height: 64px;
@@ -1261,7 +1348,11 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
   .product-text p {
     display: none;
   }
-  .product-text h3 a { min-height: 0; padding: 0 0 6px; line-height: 1.5; }
+  .product-text h3 a {
+    min-height: 0;
+    padding: 0 0 6px;
+    line-height: 1.5;
+  }
   .quantity-control {
     grid-column: 2;
     justify-self: start;

@@ -192,7 +192,7 @@ for (const status of ["pending", "preparing"]) {
 }
 
 for (const available of [false, true]) {
-  test(`checkout displays both payment methods without initiating payment: configured=${available}`, async ({
+  test(`checkout displays available payment methods without initiating payment: configured=${available}`, async ({
     page,
   }, testInfo) => {
     const f = await fixture(page, [], available);
@@ -207,14 +207,19 @@ for (const available of [false, true]) {
     await expect(
       methods.getByRole("heading", { name: "支付方式", exact: true }),
     ).toBeVisible();
-    await expect(
-      methods.getByRole("heading", { name: /^微信支付/ }),
-    ).toBeVisible();
+    if (available) {
+      await expect(methods.getByRole("heading", { name: /^微信支付/ })).toBeVisible();
+      await expect(methods).toContainText("出餐后可支付");
+      await expect(methods).toContainText("可使用");
+    } else {
+      await expect(methods.getByRole("heading", { name: /^微信支付/ })).toHaveCount(0);
+      await expect(methods).toContainText("先下单，商家出餐后再付款");
+      await methods.getByText("为什么微信支付尚未开通？", { exact: true }).click();
+      await expect(methods.getByText(readiness(false).reason, { exact: true })).toBeVisible();
+      await expect(methods).toContainText("提交订单本身不会扣款");
+    }
     await expect(methods.getByText("到摊付款", { exact: true })).toBeVisible();
-    await expect(methods).toContainText(
-      available ? "出餐后可支付" : "尚未开通",
-    );
-    await expect(methods).toContainText("可使用");
+    await expect(methods).toContainText("取餐时扫摊主本人的收款码付款，平台不经手款项");
     await expect(
       page.getByRole("button", { name: "提交自取订单", exact: true }),
     ).toBeEnabled();

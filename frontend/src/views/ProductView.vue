@@ -37,6 +37,7 @@ const error = ref("");
 const imageFailed = ref(false);
 const selected = ref(1);
 const portions = ref<Portion[]>([]);
+const justAdded = ref(false);
 const stallId = computed(() => Number(route.params.id));
 const productId = computed(() => Number(route.params.productId));
 const product = computed(() =>
@@ -47,6 +48,21 @@ const inCart = computed(
     cart
       .items(stallId.value)
       .find((item) => item.product.id === productId.value)?.quantity || 0,
+);
+const addedToCart = computed(() => justAdded.value && inCart.value > 0);
+watch(
+  inCart,
+  (quantity) => {
+    if (!quantity) justAdded.value = false;
+  },
+  { flush: "sync" },
+);
+watch(
+  () => session.user?.id,
+  () => {
+    justAdded.value = false;
+  },
+  { flush: "sync" },
 );
 const capacity = computed(() =>
   productAvailable(product.value) ? cart.remaining(stallId.value) : 0,
@@ -106,6 +122,7 @@ async function load() {
   }
 }
 function start() {
+  justAdded.value = false;
   stall.value = null;
   error.value = "";
   loading.value = true;
@@ -118,7 +135,7 @@ function refreshVisible() {
   if (!document.hidden) void load();
 }
 function addToCart() {
-  if (!canAdd.value || !product.value) return;
+  if (addedToCart.value || !canAdd.value || !product.value) return;
   if (invalidPortions(product.value, portions.value, selected.value)) {
     notify("口味选项已变更，请重新选择", "info");
     return;
@@ -134,10 +151,22 @@ function addToCart() {
   notify(`已加入 ${amount} 份${product.value.name}`, "success");
   selected.value = 1;
   portions.value = [];
+  justAdded.value = true;
 }
-watch(selected, (quantity) => {
-  portions.value = normalizePortions(portions.value, quantity);
-});
+watch(
+  [selected, () => JSON.stringify(portions.value)],
+  () => {
+    justAdded.value = false;
+  },
+  { flush: "sync" },
+);
+watch(
+  selected,
+  (quantity) => {
+    portions.value = normalizePortions(portions.value, quantity);
+  },
+  { flush: "sync" },
+);
 watch(capacity, (value) => {
   selected.value = Math.max(1, Math.min(selected.value, value));
 });
@@ -292,16 +321,51 @@ onUnmounted(() => {
           <ReceivingNotice :stall="stall" compact />
           <form class="dish-purchase-panel" @submit.prevent="addToCart">
             <PortionEditor
-              v-if="canAdd"
+              v-if="canAdd && !addedToCart"
               v-model="portions"
               :product="product"
               :quantity="selected"
             />
-            <p v-if="canAdd" class="dish-allowance">
+            <div v-if="addedToCart" class="dish-added-feedback" role="status">
+              <span><Check :size="17" />已加入餐袋，口味与备注已保留</span>
+              <button v-if="canAdd" type="button" @click="justAdded = false">
+                再加这道餐点
+              </button>
+            </div>
+            <p v-if="canAdd && !addedToCart" class="dish-allowance">
               同一摊位合计最多 10 份，当前还可加入 {{ capacity }} 份
             </p>
-            <div class="dish-action-bar" aria-label="选择份数并加入餐袋">
-              <div class="dish-purchase-controls">
+            <div
+              class="dish-action-bar"
+              :aria-label="
+                addedToCart ? '已加入餐袋，继续结算' : '选择份数并加入餐袋'
+              "
+            >
+              <div
+                v-if="addedToCart"
+                class="dish-purchase-controls dish-next-step"
+              >
+                <div class="dish-added-total">
+                  <small>本摊餐袋 {{ cart.count(stallId) }} 份</small
+                  ><strong>¥{{ money(cart.total(stallId)) }}</strong>
+                </div>
+                <RouterLink
+                  v-if="stall.can_order && !error"
+                  :to="`/checkout/${stallId}`"
+                  class="btn btn-primary dish-checkout-button"
+                  aria-label="去结算"
+                  >去结算<ChevronRight :size="18"
+                /></RouterLink>
+                <button
+                  v-else
+                  type="button"
+                  class="btn btn-primary dish-checkout-button"
+                  disabled
+                >
+                  暂不可点单
+                </button>
+              </div>
+              <div v-else class="dish-purchase-controls">
                 <div
                   v-if="canAdd"
                   class="dish-quantity"
@@ -339,7 +403,13 @@ onUnmounted(() => {
                   >
                 </button>
               </div>
-              <div v-if="cart.count(stallId)" class="dish-cart-line">
+              <div v-if="addedToCart" class="dish-cart-line dish-added-actions">
+                <span><Check :size="14" />口味与备注已保留</span>
+                <RouterLink :to="`/stalls/${stallId}`"
+                  >继续选餐<ChevronRight :size="14"
+                /></RouterLink>
+              </div>
+              <div v-else-if="cart.count(stallId)" class="dish-cart-line">
                 <span
                   ><Check :size="14" />本摊餐袋 {{ cart.count(stallId) }} 份 ·
                   ¥{{ money(cart.total(stallId)) }}</span
@@ -643,6 +713,49 @@ onUnmounted(() => {
   font-size: 12px;
   line-height: 1.6;
   margin: 0 0 14px;
+}
+.dish-added-feedback {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+  color: #526d45;
+  font-size: 13px;
+}
+.dish-added-feedback > span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  line-height: 1.6;
+}
+.dish-added-feedback button {
+  justify-self: start;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #a14f25;
+  text-decoration: underline;
+}
+.dish-added-total {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  min-width: 110px;
+}
+.dish-added-total small {
+  color: #75624c;
+  font-size: 12px;
+}
+.dish-added-total strong {
+  color: #b84f1f;
+  font-size: 24px;
+}
+.dish-checkout-button {
+  flex: 1;
+  min-height: 50px;
+  font-size: 15px;
+  border-radius: 12px;
 }
 .dish-purchase-controls {
   display: flex;

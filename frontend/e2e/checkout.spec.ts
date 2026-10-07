@@ -80,6 +80,7 @@ test("student and merchant complete a real pickup order in separate browser sess
     await expect(
       page.locator('.pay-at-stall'),
     ).toBeVisible();
+    await page.locator(".checkout-contact-card > summary").click();
     await page
       .getByPlaceholder("例如：餐具按需提供（每份口味请在上方分别填写）")
       .fill(`测试订单 ${student.username}，少辣`);

@@ -49,11 +49,13 @@ const route = useRoute(),
   error = ref(""),
   tab = ref("menu");
 const id = computed(() => Number(route.params.id));
-const mobileQuery = window.matchMedia('(max-width: 767px)');
+const mobileQuery = window.matchMedia("(max-width: 767px)");
 const mobileLayout = ref(mobileQuery.matches);
-const updateLayout = () => { mobileLayout.value = mobileQuery.matches; };
-onMounted(() => mobileQuery.addEventListener('change', updateLayout));
-onUnmounted(() => mobileQuery.removeEventListener('change', updateLayout));
+const updateLayout = () => {
+  mobileLayout.value = mobileQuery.matches;
+};
+onMounted(() => mobileQuery.addEventListener("change", updateLayout));
+onUnmounted(() => mobileQuery.removeEventListener("change", updateLayout));
 const followState = useFollowState((changedId, followed) => {
   if (stall.value?.id === changedId && id.value === changedId)
     stall.value.is_followed = followed;
@@ -82,7 +84,8 @@ function quantity(p: Product) {
 }
 function change(p: Product, d: number) {
   // Removing items is always allowed; adding waits for a fresh, orderable stall state.
-  if (d > 0 && (!stall.value?.can_order || error.value || !productAvailable(p))) return;
+  if (d > 0 && (!stall.value?.can_order || error.value || !productAvailable(p)))
+    return;
   if (d > 0 && cart.remaining(id.value) <= 0) {
     notify("每个摊位一单合计最多 10 份，请调整餐袋。", "info");
     return;
@@ -181,7 +184,10 @@ onUnmounted(() => {
           />{{ stall.is_followed ? "已关注" : "关注小摊" }}
         </button>
       </section>
-      <div class="stall-layout" :class="{ 'visit-only': !stall.transaction_enabled }">
+      <div
+        class="stall-layout"
+        :class="{ 'visit-only': !stall.transaction_enabled }"
+      >
         <div class="stall-main">
           <section class="stall-overview card">
             <div class="overview-top">
@@ -199,7 +205,8 @@ onUnmounted(() => {
               ><span class="freshness-text">{{
                 stall.can_order
                   ? "可线上点单"
-                  : stall.transaction_enabled && stall.accepting_orders === false
+                  : stall.transaction_enabled &&
+                      stall.accepting_orders === false
                     ? "线上接单暂停"
                     : "线下到访"
               }}</span>
@@ -214,13 +221,19 @@ onUnmounted(() => {
                 <ShieldCheck :size="16" /><span>{{
                   stall.can_order
                     ? "支持线上点单 · 到摊自取"
-                    : stall.transaction_enabled && stall.accepting_orders === false
+                    : stall.transaction_enabled &&
+                        stall.accepting_orders === false
                       ? "线上接单暂停 · 可到摊选购"
                       : "线下到访 · 暂未开通在线点单"
                 }}</span>
               </div>
               <div
-                v-if="stall.transaction_enabled"
+                v-if="
+                  stall.transaction_enabled &&
+                  (!mobileLayout ||
+                    stall.wechat_payment?.available ||
+                    stall.wechat_payment?.mode === 'simulation')
+                "
                 class="stall-payment-status"
               >
                 <CreditCard :size="16" /><span>{{
@@ -233,10 +246,17 @@ onUnmounted(() => {
                     ? "出餐后可线上付款"
                     : "尚未开通"
                 }}</strong
-                ><span v-if="!stall.wechat_payment?.available">到摊扫码付款</span>
+                ><span v-if="!stall.wechat_payment?.available"
+                  >到摊扫码付款</span
+                >
               </div>
               <div
-                v-if="stall.transaction_enabled"
+                v-if="
+                  stall.transaction_enabled &&
+                  (!mobileLayout ||
+                    stall.delivery?.available ||
+                    stall.delivery?.mode === 'simulation')
+                "
                 class="stall-delivery-status"
               >
                 <MapPin :size="16" /><strong>{{
@@ -255,8 +275,15 @@ onUnmounted(() => {
           <details class="stall-arrival" :open="!mobileLayout">
             <summary>
               <MapPin :size="19" />
-              <span><strong>{{ stall.address || '商家暂未提供位置' }}</strong><small>{{ confirmedText(stall.last_confirmed_at) }}</small></span>
-              <span class="arrival-action">认摊与路线<ChevronRight :size="15" /></span>
+              <span
+                ><strong>{{ stall.address || "商家暂未提供位置" }}</strong
+                ><small>{{
+                  confirmedText(stall.last_confirmed_at)
+                }}</small></span
+              >
+              <span class="arrival-action"
+                >认摊与路线<ChevronRight :size="15"
+              /></span>
             </summary>
             <StallVisitInfo :stall="stall" />
             <div class="stall-share-entry"><StallShare :stall="stall" /></div>
@@ -300,7 +327,11 @@ onUnmounted(() => {
                     width="160"
                     height="160"
                   /><span v-if="!productAvailable(p)">{{
-                    p.sale_paused ? "暂停供应" : p.display_only ? "今天卖完了" : "线上售罄"
+                    p.sale_paused
+                      ? "暂停供应"
+                      : p.display_only
+                        ? "今天卖完了"
+                        : "线上售罄"
                   }}</span>
                 </RouterLink>
                 <div class="product-content">
@@ -313,9 +344,11 @@ onUnmounted(() => {
                     /></RouterLink>
                   </h3>
                   <p>{{ p.description }}</p>
-                  <small v-if="productAvailable(p)"
-                    >{{ stall.transaction_enabled ? "可选餐，提交时核对余量" : "今天有，到摊选购" }}</small
-                  >
+                  <small v-if="productAvailable(p)">{{
+                    stall.transaction_enabled
+                      ? "可选餐，提交时核对余量"
+                      : "今天有，到摊选购"
+                  }}</small>
                   <div class="product-bottom">
                     <span class="price"
                       ><span class="currency">¥</span
@@ -342,7 +375,8 @@ onUnmounted(() => {
                       </button>
                     </div>
                     <span v-else class="product-off">{{
-                      productUnavailableReason(p) || (stall.transaction_enabled ? "暂不可点单" : "到摊选购")
+                      productUnavailableReason(p) ||
+                      (stall.transaction_enabled ? "暂不可点单" : "到摊选购")
                     }}</span>
                   </div>
                 </div>
@@ -421,6 +455,27 @@ onUnmounted(() => {
                   >{{ stall.contact_phone }}</a
                 ><span v-else>暂未提供</span>
               </dd>
+              <template v-if="stall.transaction_enabled">
+                <dt>线上支付</dt>
+                <dd>
+                  {{
+                    stall.wechat_payment?.mode === "simulation"
+                      ? "模拟微信支付 · 不会真实扣款"
+                      : stall.wechat_payment?.available
+                        ? "出餐后可在订单页微信付款"
+                        : stall.wechat_payment?.reason ||
+                          "微信支付尚未开通，取餐时向商家付款"
+                  }}
+                </dd>
+                <dt>商家配送</dt>
+                <dd>
+                  {{
+                    stall.delivery?.available
+                      ? `${stall.delivery.mode === "simulation" ? "模拟配送 · " : ""}配送费 ¥${money(stall.delivery.fee_cents)}，送至校园交接点`
+                      : stall.delivery?.reason || "暂未开放，可到摊自取"
+                  }}
+                </dd>
+              </template>
             </dl>
           </section>
         </div>
@@ -473,7 +528,10 @@ onUnmounted(() => {
           </p>
         </aside>
       </div>
-      <div v-if="stall.transaction_enabled && cart.count(id)" class="mobile-cart">
+      <div
+        v-if="stall.transaction_enabled && cart.count(id)"
+        class="mobile-cart"
+      >
         <div class="cart-bag">
           <ShoppingBag :size="22" /><b>{{ cart.count(id) }}</b>
         </div>
@@ -482,7 +540,7 @@ onUnmounted(() => {
           ><small>{{
             stall.delivery?.available
               ? "结算时选择自取或配送 · 配送费另计"
-              : "到摊自取 · 配送暂未开放"
+              : "到摊自取 · 出餐后付款"
           }}</small>
         </div>
         <RouterLink
@@ -496,7 +554,9 @@ onUnmounted(() => {
   </div>
 </template>
 <style scoped>
-.stall-arrival > summary { display: none; }
+.stall-arrival > summary {
+  display: none;
+}
 .stall-share-entry {
   display: flex;
   justify-content: flex-end;
@@ -1028,13 +1088,13 @@ onUnmounted(() => {
     margin-bottom: 12px;
   }
   .stall-hero {
-    height: 196px;
+    height: 148px;
     margin: 0;
     border-radius: 16px;
   }
   .stall-hero-caption {
     left: 20px;
-    bottom: 23px;
+    bottom: 18px;
     right: 20px;
   }
   .stall-hero-caption > span {
@@ -1081,16 +1141,58 @@ onUnmounted(() => {
   .stall-overview {
     padding: 15px;
   }
-  .stall-arrival { margin-top: 12px; background: #fffbf5; border: 1px solid var(--line); border-radius: 14px; }
-  .stall-arrival > summary { display: flex; align-items: center; gap: 9px; min-height: 64px; padding: 12px 14px; cursor: pointer; list-style: none; color: #795133; }
-  .stall-arrival > summary::-webkit-details-marker { display: none; }
-  .stall-arrival > summary > svg { flex: none; }
-  .stall-arrival > summary > span:not(.arrival-action) { min-width: 0; display: grid; gap: 4px; }
-  .stall-arrival summary strong { font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
-  .stall-arrival summary small { font-size: 11px; color: #81705f; }
-  .arrival-action { flex: none; display: flex; align-items: center; margin-left: auto; font-size: 11px; }
-  .stall-arrival[open] .arrival-action svg { transform: rotate(90deg); }
-  .stall-arrival :deep(.stall-visit) { margin: 0; border: 0; border-top: 1px solid var(--line); border-radius: 0 0 14px 14px; }
+  .stall-arrival {
+    margin-top: 12px;
+    background: #fffbf5;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+  }
+  .stall-arrival > summary {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-height: 64px;
+    padding: 12px 14px;
+    cursor: pointer;
+    list-style: none;
+    color: #795133;
+  }
+  .stall-arrival > summary::-webkit-details-marker {
+    display: none;
+  }
+  .stall-arrival > summary > svg {
+    flex: none;
+  }
+  .stall-arrival > summary > span:not(.arrival-action) {
+    min-width: 0;
+    display: grid;
+    gap: 4px;
+  }
+  .stall-arrival summary strong {
+    font-size: 13px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+  .stall-arrival summary small {
+    font-size: 11px;
+    color: #81705f;
+  }
+  .arrival-action {
+    flex: none;
+    display: flex;
+    align-items: center;
+    margin-left: auto;
+    font-size: 11px;
+  }
+  .stall-arrival[open] .arrival-action svg {
+    transform: rotate(90deg);
+  }
+  .stall-arrival :deep(.stall-visit) {
+    margin: 0;
+    border: 0;
+    border-top: 1px solid var(--line);
+    border-radius: 0 0 14px 14px;
+  }
   .overview-top {
     gap: 8px;
   }
@@ -1112,8 +1214,10 @@ onUnmounted(() => {
     padding: 4px 6px;
   }
   .overview-facts {
+    flex-direction: row;
+    flex-wrap: wrap;
     gap: 8px;
-    margin-top: 12px;
+    margin-top: 10px;
   }
   .overview-facts > div {
     font-size: 12px;

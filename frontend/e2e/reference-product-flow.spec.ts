@@ -301,6 +301,11 @@ test("other dishes count toward the ten-portion limit in the product action", as
     page.getByRole("button", { name: "增加份数", exact: true }),
   ).toBeDisabled();
   await page.getByRole("button", { name: /加入餐袋/ }).click();
+  await expect(page.getByRole('link', { name: '去结算', exact: true })).toHaveClass(/btn-primary/);
+  await expect(page.getByRole('button', { name: '再加这道餐点', exact: true })).toHaveCount(0);
+  await page.locator('.dish-purchase-panel').evaluate(form => (form as HTMLFormElement).requestSubmit());
+  expect((await cartRows(page)).reduce((sum: number, row: { quantity: number }) => sum + row.quantity, 0)).toBe(10);
+  await page.reload();
   await expect(
     page.getByRole("button", { name: "每单合计最多 10 份", exact: true }),
   ).toBeDisabled();

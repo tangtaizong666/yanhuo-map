@@ -12,6 +12,13 @@ const onlineSupported = computed(
     props.readiness?.mode === "simulation" ||
     props.readiness?.supported !== false,
 );
+const offlinePickup = computed(
+  () =>
+    !props.delivery &&
+    onlineSupported.value &&
+    !props.readiness?.available &&
+    props.readiness?.mode !== "simulation",
+);
 </script>
 
 <template>
@@ -31,7 +38,10 @@ const onlineSupported = computed(
         }}
       </p>
     </header>
-    <div v-if="onlineSupported" class="method-row wechat-method">
+    <div
+      v-if="onlineSupported && !offlinePickup"
+      class="method-row wechat-method"
+    >
       <span class="method-icon"><CreditCard :size="22" /></span>
       <div class="method-copy">
         <h3>
@@ -62,7 +72,11 @@ const onlineSupported = computed(
           : "尚未开通"
       }}</span>
     </div>
-    <div v-if="!delivery && onlineSupported" class="method-row offline-method">
+    <div
+      v-if="!delivery && onlineSupported"
+      class="method-row offline-method"
+      :class="{ 'single-method': offlinePickup }"
+    >
       <span class="method-icon"><Wallet :size="22" /></span>
       <div class="method-copy">
         <h3>到摊付款</h3>
@@ -74,7 +88,7 @@ const onlineSupported = computed(
           }}
         </p>
       </div>
-      <span class="method-state available">可使用</span>
+      <span v-if="!offlinePickup" class="method-state available">可使用</span>
     </div>
     <p v-if="!onlineSupported" class="payment-timing">
       找到摊位后，请现场向摊主确认餐点和付款方式。
@@ -143,6 +157,10 @@ header p {
 }
 .method-row + .method-row {
   margin-top: 11px;
+}
+.single-method {
+  padding: 0;
+  border: 0;
 }
 .wechat-method {
   background: #f4f8f0;
