@@ -47,6 +47,8 @@ const hasLocation = computed(
 );
 const pending = computed(() => props.orders.filter(acceptReady).length);
 const state = computed(() => props.stall.status);
+// This value is validated by the server, independent of the phone's clock.
+const openingClosesAt = computed(() => state.value === "closed" ? props.stall.opening_closes_at || null : null);
 async function status(value: string, confirmLocation = false) {
   if (busy.value) return;
   if (value === "open" && !hasLocation.value) {
@@ -59,7 +61,10 @@ async function status(value: string, confirmLocation = false) {
   try {
     await api(`/merchant/stalls/${props.stall.id}/status`, {
       method: "POST",
-      body: { status: value, confirm_location: confirmLocation },
+      body: { status: value, confirm_location: confirmLocation,
+        ...(value === "open" && confirmLocation && openingClosesAt.value
+          ? { closes_at: openingClosesAt.value } : {}),
+      },
       signal: controller.signal,
     });
     if (disposed) return;
@@ -137,6 +142,7 @@ async function loadReports() {
     <button v-else :disabled="busy" @click="accepting">{{ stall.accepting_orders === false ? '恢复接单' : '暂停接单' }}</button>
     <RouterLink to="/merchant/store" aria-label="营业设置"><Store :size="18" /><span>设置</span></RouterLink>
     <p v-if="state === 'closed' || state === 'stale'" class="compact-location"><MapPin :size="16" /><span>{{ hasLocation ? stall.address : '先确认实际取餐位置，再开始营业。' }}</span><RouterLink v-if="hasLocation" to="/merchant/store#location">更换位置</RouterLink></p>
+    <p v-if="hasLocation && openingClosesAt" class="compact-location">本次预计 {{ formatTime(openingClosesAt) }} 收摊<RouterLink to="/merchant/store#location">调整时间</RouterLink></p>
     <p v-if="error" class="m-alert" role="alert">{{ error }}</p>
   </section>
   <section v-else class="m-panel operations" :class="{ 'discovery-operations': discoveryOnly }" :aria-label="discoveryOnly ? '今天出摊' : '今天怎样营业'">
@@ -158,8 +164,9 @@ async function loadReports() {
     </p>
     <p v-if="hasLocation && stall.last_confirmed_at" class="location-time">上次确认 {{ formatTime(stall.last_confirmed_at) }}</p>
     <p v-else-if="discoveryOnly" class="location-time">位置尚未确认；保存地址草稿不会发布出摊。</p>
-    <p v-if="discoveryOnly" class="location-time discovery-closes">{{ stall.closes_at ? `预计 ${formatTime(stall.closes_at)} 收摊` : '尚未填写预计收摊时间' }}<button class="m-text-link" @click="emit('location')">调整时间</button></p>
+    <p v-if="discoveryOnly && !openingClosesAt" class="location-time discovery-closes">{{ stall.closes_at ? `预计 ${formatTime(stall.closes_at)} 收摊` : '尚未填写预计收摊时间' }}<button class="m-text-link" @click="emit('location')">调整时间</button></p>
     <p v-if="discoveryOnly && state === 'stale'" class="helper">位置已超过有效期，顾客会看到“位置待确认”。请核对实际位置后再确认。</p>
+    <p v-if="hasLocation && openingClosesAt" class="location-time discovery-closes">本次预计 {{ formatTime(openingClosesAt) }} 收摊<button class="m-text-link" @click="emit('location')">调整时间</button></p>
     <div class="main-actions">
       <button
         v-if="state === 'stale'"

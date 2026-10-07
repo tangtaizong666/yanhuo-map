@@ -68,6 +68,15 @@ async function openMap(page: Page) {
   await expect(page.locator(".map-list-item")).toHaveCount(2);
 }
 
+async function focusWithoutPendingScroll(locator: Locator) {
+  // WebKit may finish focus-triggered scrolling after focus() resolves. Put the
+  // control in view first so that native scrolling cannot race the refresh baseline.
+  await locator.scrollIntoViewIfNeeded();
+  await locator.evaluate((element: HTMLElement) => element.focus({ preventScroll: true }));
+  await expect(locator).toBeFocused();
+  await expect(locator).toBeInViewport({ ratio: 1 });
+}
+
 test("resting homepage candidates preserve status address and optional planned hours at four widths", async ({ page }, info) => {
   const state = await fixture(page);
   for (const width of [360, 390, 768, 1440]) {
@@ -158,7 +167,7 @@ test("a background refresh preserves pending explicit selection then leaves focu
     state.beforeDetail = null;
   }
   const search = page.getByRole("textbox", { name: "地图搜索", exact: true });
-  await search.focus();
+  await focusWithoutPendingScroll(search);
   const previousTop = await page.evaluate(() => window.scrollY), beforeReads = state.detailReads;
   state.rows[1]!.arrival_note = "蓝色棚旁有银杏树，请先联系商家确认";
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
@@ -180,7 +189,7 @@ test("background guidance refresh preserves a focused route action while hiding 
   const panel = page.getByRole("region", { name: "东门饭摊的位置与路线", exact: true });
   await expect(panel).toBeFocused();
   const directions = panel.getByRole("link", { name: "查看路线", exact: true });
-  await directions.focus();
+  await focusWithoutPendingScroll(directions);
   const previousTop = await page.evaluate(() => window.scrollY), beforeReads = state.detailReads;
   state.rows[1]!.arrival_note = "银杏树旁蓝棚，出发前请联系确认";
   let release!: () => void;
@@ -223,7 +232,7 @@ test("same-account identity refresh preserves selection and focus while an accou
   const panel = page.getByRole("region", { name: "东门饭摊的位置与路线", exact: true });
   await expect(panel).toBeFocused();
   const directions = panel.getByRole("link", { name: "查看路线", exact: true });
-  await directions.focus();
+  await focusWithoutPendingScroll(directions);
   const previousTop = await page.evaluate(() => window.scrollY), beforeReads = state.detailReads;
 
   // A new response object and changed profile text still represent the same account.

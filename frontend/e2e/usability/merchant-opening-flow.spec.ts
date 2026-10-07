@@ -18,6 +18,9 @@ async function fixture(page: Page, options: { map?: boolean; located?: boolean }
     activation: { has_location: !!options.located, steps: [] },
   };
   const state = { stall, writes: [] as { path: string; body: any }[], unexpected: [] as string[] };
+  const serializeStall = () => ({ ...stall, opening_closes_at:
+    stall.status === "closed" && stall.closes_at && new Date(stall.closes_at).getTime() > Date.now()
+      ? stall.closes_at : null });
   await page.route("https://**/*", (route) => route.abort());
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request(), path = new URL(request.url()).pathname.replace("/api/v1", "");
@@ -26,21 +29,25 @@ async function fixture(page: Page, options: { map?: boolean; located?: boolean }
     if (path === "/config") return send({ user, areas: [], demo_mode: false, stale_minutes: 60, amap_key: options.map ? "fixture-map" : "" });
     if (path === "/auth/me") return send(user);
     if (path === "/events") return send({});
-    if (path === "/merchant/stalls") return send([stall]);
+    if (path === "/merchant/stalls") return send([serializeStall()]);
     if (path === "/merchant/orders") return send([]);
     if (path === "/merchant/stalls/1071/profile" && request.method() === "PATCH") {
       const body = request.postDataJSON(); state.writes.push({ path, body }); Object.assign(stall, body);
-      return send(stall);
+      return send(serializeStall());
     }
     if (path === "/merchant/stalls/1071/status" && request.method() === "POST") {
       const body = request.postDataJSON(); state.writes.push({ path, body });
       if (!stall.activation.has_location && ["address", "latitude", "longitude"].some((key) => !(key in body)))
         return route.fulfill({ status: 400, json: { code: "location_required", detail: "首次设置位置需完整地址和经纬度。" } });
+      const startsNewSession = body.status === "open" && (stall.session_status === "closed" ||
+        (stall.closes_at && new Date(stall.closes_at).getTime() <= Date.now()));
       Object.assign(stall, body);
+      // Match the API: a new session does not silently inherit an old cutoff.
+      if (startsNewSession) stall.closes_at = body.closes_at ?? null;
       stall.session_status = body.status;
       if (body.confirm_location) stall.last_confirmed_at = new Date().toISOString();
       if (["address", "latitude", "longitude"].every((key) => key in body)) stall.activation.has_location = true;
-      return send(stall);
+      return send(serializeStall());
     }
     state.unexpected.push(`${request.method()} ${path}`);
     return route.fulfill({ status: 500, json: { detail: "Unexpected isolated request" } });
@@ -145,5 +152,152 @@ test("configured maps keep positioning actions available", async ({ page }) => {
   await expect(page.getByRole("button", { name: "获取当前位置", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "在地图上选择位置", exact: true })).toBeVisible();
   expect(state.writes).toEqual([]);
+  expect(state.unexpected).toEqual([]);
+});
+
+test("invalid coordinates and failed positioning preserve the address draft without confirming a location", async ({ page }) => {
+  const state = await fixture(page, { map: true });
+  await page.goto("/merchant/store#location");
+  await page.getByText("手动填写地图坐标", { exact: true }).click();
+  const latitude = page.getByLabel("纬度（高德坐标）", { exact: true });
+  const longitude = page.getByLabel("经度（高德坐标）", { exact: true });
+  const confirm = page.getByRole("button", { name: "确认并保存位置与时间", exact: true });
+  for (const [lat, lng] of [["", "120"], ["30", ""], ["NaN", "120"], ["30", "Infinity"], ["91", "120"], ["-91", "120"], ["30", "181"], ["30", "-181"]]) {
+    await latitude.fill(lat!);
+    await longitude.fill(lng!);
+    await expect(confirm).toHaveCount(0);
+  }
+  await page.getByLabel("详细取餐地址").fill("东门入口蓝色棚");
+  await latitude.fill("30");
+  await longitude.fill("");
+  // The isolated fixture aborts the map script rather than contacting a map API.
+  await page.getByRole("button", { name: "获取当前位置", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText("暂时未能定位。可在地图上选点，或先保存地址草稿，请团队协助核实位置。");
+  await expect(latitude).toHaveValue("30");
+  await expect(longitude).toHaveValue("");
+  await expect(page.getByLabel("详细取餐地址")).toHaveValue("东门入口蓝色棚");
+  expect(state.writes).toEqual([]);
+  await page.getByRole("button", { name: "保存地址草稿", exact: true }).click();
+  await expect.poll(() => state.writes.length).toBe(1);
+  expect(state.writes[0]).toEqual({ path: "/merchant/stalls/1071/profile", body: { location_draft_address: "东门入口蓝色棚" } });
+  expect(state.stall.activation.has_location).toBe(false);
+  expect(state.stall.last_confirmed_at).toBeNull();
+  expect(state.stall.status).toBe("closed");
+  expect(state.unexpected).toEqual([]);
+});
+
+test("a pending first location confirmation suppresses repeated submission", async ({ page }) => {
+  const state = await fixture(page);
+  let submissions = 0;
+  let release!: () => void;
+  const responseGate = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/api/v1/merchant/stalls/1071/status", async (route) => {
+    submissions++;
+    await responseGate;
+    return route.fallback();
+  });
+  await page.goto("/merchant/store#location");
+  await page.getByText("手动填写地图坐标", { exact: true }).click();
+  await page.getByLabel("纬度（高德坐标）", { exact: true }).fill("30");
+  await page.getByLabel("经度（高德坐标）", { exact: true }).fill("120");
+  const confirm = page.getByRole("button", { name: "确认并保存位置与时间", exact: true });
+  await confirm.click();
+  await expect.poll(() => submissions).toBe(1);
+  await expect(confirm).toBeDisabled();
+  await page.getByLabel("详细取餐地址").press("Enter");
+  expect(submissions).toBe(1);
+  release();
+  await expect.poll(() => state.writes.length).toBe(1);
+  await expect(confirm).toBeEnabled();
+  expect(state.stall.activation.has_location).toBe(true);
+  expect(state.stall.status).toBe("closed");
+  expect(state.unexpected).toEqual([]);
+});
+
+test("a lost first location response can be checked by refresh without a second write", async ({ page }) => {
+  const state = await fixture(page);
+  await page.route("**/api/v1/merchant/stalls/1071/status", async (route) => {
+    const body = route.request().postDataJSON();
+    state.writes.push({ path: "/merchant/stalls/1071/status", body });
+    Object.assign(state.stall, body, { session_status: body.status, last_confirmed_at: new Date().toISOString() });
+    state.stall.activation.has_location = true;
+    return route.abort("failed");
+  }, { times: 1 });
+  await page.goto("/merchant/store#location");
+  await page.getByText("手动填写地图坐标", { exact: true }).click();
+  await page.getByLabel("纬度（高德坐标）", { exact: true }).fill("30");
+  await page.getByLabel("经度（高德坐标）", { exact: true }).fill("120");
+  await page.getByRole("button", { name: "确认并保存位置与时间", exact: true }).click();
+  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(page.getByText("取餐位置和收摊时间已保存", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "刷新工作台", exact: true }).click();
+  await expect(page.getByRole("button", { name: "在老地方开摊", exact: true })).toBeVisible();
+  await expect(page.getByLabel("详细取餐地址")).toHaveValue("南门路口橙色棚");
+  expect(state.writes).toHaveLength(1);
+  expect(state.stall.status).toBe("closed");
+  expect(state.stall.transaction_enabled).toBe(false);
+  expect(state.unexpected).toEqual([]);
+});
+
+for (const clockSkewHours of [0, -24, 24]) {
+test(`first opening preserves the closing time explicitly saved with the first location (phone clock ${clockSkewHours}h)`, async ({ page }, info) => {
+  const state = await fixture(page);
+  const serverTime = Date.now();
+  await page.clock.setFixedTime(new Date(serverTime + clockSkewHours * 60 * 60 * 1000));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/merchant/store#location");
+  await page.getByText("手动填写地图坐标", { exact: true }).click();
+  await page.getByLabel("纬度（高德坐标）", { exact: true }).fill("30");
+  await page.getByLabel("经度（高德坐标）", { exact: true }).fill("120");
+  const closing = await page.evaluate((serverNow) => {
+    const date = new Date(serverNow + 2 * 60 * 60 * 1000);
+    date.setSeconds(0, 0);
+    const pad = (value: number) => String(value).padStart(2, "0");
+    return { iso: date.toISOString(), local: `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}` };
+  }, serverTime);
+  await page.getByLabel("预计收摊时间").fill(closing.local);
+  await page.getByRole("button", { name: "确认并保存位置与时间", exact: true }).click();
+  await expect.poll(() => state.writes.length).toBe(1);
+  expect(state.writes[0]!.body).toEqual({ status: "closed", confirm_location: true,
+    address: "南门路口橙色棚", latitude: 30, longitude: 120, closes_at: closing.iso });
+  await expect(page.getByRole("button", { name: "在老地方开摊", exact: true })).toBeVisible();
+  expect(state.stall.status).toBe("closed");
+  expect(state.stall.closes_at).toBe(closing.iso);
+  await page.reload();
+  await expect(page.getByLabel("预计收摊时间")).toHaveValue(closing.local);
+  await expect(page.getByText(/^本次预计/)).toBeVisible();
+  if (clockSkewHours === 0) {
+    const operations = page.getByRole("region", { name: "今天出摊", exact: true });
+    for (const width of [360, 390, 768, 1440]) {
+      await page.setViewportSize({ width, height: 844 });
+      await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+      await assertNoHorizontalOverflow(page);
+      await operations.screenshot({ path: info.outputPath(`opening-plan-${width}.png`), animations: "disabled" });
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+  }
+  await page.getByRole("button", { name: "在老地方开摊", exact: true }).click();
+  await expect.poll(() => state.writes.length).toBe(2);
+  expect(state.writes[1]!.body).toEqual({ status: "open", confirm_location: true, closes_at: closing.iso });
+  expect(state.stall.closes_at).toBe(closing.iso);
+  expect(state.stall.status).toBe("open");
+  expect(state.stall.transaction_enabled).toBe(false);
+  expect(state.stall.can_order).toBe(false);
+  expect(state.unexpected).toEqual([]);
+});
+}
+
+test("an expired saved closing time is not carried into opening even when the phone clock is slow", async ({ page }) => {
+  const state = await fixture(page, { located: true });
+  state.stall.closes_at = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  state.stall.stop_orders_at = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  await page.clock.setFixedTime(new Date(Date.now() - 24 * 60 * 60 * 1000));
+  await page.goto("/merchant/store");
+  await expect(page.getByText(/^本次预计/)).toHaveCount(0);
+  await page.getByRole("button", { name: "在老地方开摊", exact: true }).click();
+  await expect.poll(() => state.writes.length).toBe(1);
+  expect(state.writes[0]!.body).toEqual({ status: "open", confirm_location: true });
+  expect(state.stall.closes_at).toBeNull();
+  expect(state.stall.status).toBe("open");
   expect(state.unexpected).toEqual([]);
 });

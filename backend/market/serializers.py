@@ -125,6 +125,13 @@ class StallSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         result = super().to_representation(instance)
         if self.context.get('merchant'):
+            session = instance.current_session
+            # The server decides whether a saved closing time is still usable.
+            # Opening remains an explicit write; no cutoff is inherited here.
+            result['opening_closes_at'] = result['closes_at'] if (
+                result['status'] == 'closed' and session and session.closes_at and
+                session.closes_at > timezone.now()
+            ) else None
             has_location = getattr(instance, 'location', None) is not None
             sellable = any(p.is_active and not p.sale_paused and p.stock > 0 for p in instance.products.all())
             payment = result.get('wechat_payment') or {}
