@@ -41,6 +41,8 @@ def csrf(request): SessionAuthentication().enforce_csrf(request)
 
 
 def check_password(password, user):
+    if not password.strip():
+        raise BusinessError('密码不能全部为空白字符。', 'weak_password', status=400)
     try: validate_password(password, user)
     except DjangoValidationError as exc:
         raise BusinessError(' '.join(exc.messages), 'weak_password', status=400)
@@ -153,8 +155,8 @@ def profile(request):
 @permission_classes([IsAuthenticated])
 @throttle_classes([AuthThrottle])
 def password(request):
-    old = serializers.CharField(max_length=128).run_validation(request.data.get('old_password'))
-    new = serializers.CharField(max_length=128).run_validation(request.data.get('new_password'))
+    old = serializers.CharField(max_length=128, trim_whitespace=False).run_validation(request.data.get('old_password'))
+    new = serializers.CharField(max_length=128, trim_whitespace=False).run_validation(request.data.get('new_password'))
     with transaction.atomic():
         user = User.objects.select_for_update().get(pk=request.user.pk)
         if not user.is_active or not user.check_password(old):
@@ -182,7 +184,7 @@ def account(request):
                 or PaymentAttempt.objects.filter(order__user=user, status__in=PaymentAttempt.ACTIVE_STATUSES).exists()
                 or PaymentRefund.objects.filter(order__user=user, resolved_at__isnull=True).exclude(status='success').exists()):
             raise BusinessError('还有进行中的订单，请处理完成后再注销。', 'active_orders')
-        supplied = serializers.CharField(max_length=128).run_validation(request.data.get('password'))
+        supplied = serializers.CharField(max_length=128, trim_whitespace=False).run_validation(request.data.get('password'))
         if not user.check_password(supplied): raise BusinessError('请输入正确密码确认注销。', 'invalid_password', status=400)
         audit(user, 'account_deactivated', user.id)
         Follow.objects.filter(user=user).delete()

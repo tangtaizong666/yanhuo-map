@@ -414,7 +414,7 @@ class OrderInput(serializers.Serializer):
 
 class RegistrationInput(serializers.Serializer):
     username = serializers.RegexField(r'^[a-zA-Z0-9_]{3,30}$')
-    password = serializers.CharField(min_length=8, max_length=128, write_only=True)
+    password = serializers.CharField(min_length=8, max_length=128, write_only=True, trim_whitespace=False)
     display_name = serializers.CharField(max_length=30, required=False, allow_blank=True)
 
 

@@ -1029,7 +1029,7 @@ onMounted(() =>
 }
 .home-hero {
   position: relative;
-  height: 180px;
+  min-height: 180px;
   border-radius: 22px;
   overflow: hidden;
   background: #f8ead3;
@@ -1247,9 +1247,6 @@ onMounted(() =>
   .dish-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .hero-copy h1 {
-    font-size: 36px;
-  }
   .hero-copy {
     width: 62%;
   }
@@ -1370,7 +1367,7 @@ onMounted(() =>
     min-height: 44px;
   }
   .home-hero {
-    height: 112px;
+    min-height: 112px;
     border-radius: 17px;
   }
   .hero-copy {

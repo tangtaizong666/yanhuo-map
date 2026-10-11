@@ -338,7 +338,21 @@ test("homepage keeps the existing hero photography and visible category navigati
     "/images/night-market.jpg",
   );
   await expect(page.locator(".home-hero")).toBeVisible();
-  expect((await page.locator(".home-hero").boundingBox())!.height).toBe(112);
+  for (const width of [360, 390, 768, 1440]) {
+    await page.setViewportSize({ width, height: 844 });
+    const hero = (await page.locator(".home-hero").boundingBox())!;
+    const title = (await page.locator(".hero-copy h1").boundingBox())!;
+    const action = (await page.locator(".hero-link").boundingBox())!;
+    expect(title.y).toBeGreaterThanOrEqual(hero.y);
+    expect(title.y + title.height).toBeLessThanOrEqual(hero.y + hero.height);
+    expect(action.height).toBeGreaterThanOrEqual(44);
+    expect(action.y + action.height).toBeLessThanOrEqual(hero.y + hero.height);
+    if (width >= 768) {
+      const explanation = (await page.locator(".hero-copy p").boundingBox())!;
+      expect(explanation.y + explanation.height).toBeLessThanOrEqual(hero.y + hero.height);
+    }
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
   await expect(
     page.getByRole("navigation", { name: "美食品类" }),
   ).toBeVisible();
