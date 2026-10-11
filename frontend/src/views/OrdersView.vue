@@ -31,12 +31,12 @@ const router = useRouter();
 const session = useSession();
 const orders = ref<any[]>([]);
 const loading = ref(true);
-const listError = ref("");
+const listErrors = ref(new Map<string, string>());
 const pollingError = ref("");
 const unsyncedIds = ref(new Set<string>());
 const error = computed(
   () =>
-    listError.value ||
+    listErrors.value.get(selected.value) ||
     pollingError.value ||
     (unsyncedIds.value.size
       ? "部分订单状态尚未同步，将自动重试；请打开订单详情核对。"
@@ -141,11 +141,11 @@ async function load(more = false) {
       else attention.delete(row.id);
     }
     updateCachedOrders(page.results);
-    listError.value = "";
+    listErrors.value.delete(filter);
     if (!error.value) lastSynced.value = new Date().toISOString();
   } catch (e) {
     if (!disposed && current === sequence)
-      listError.value = (e as Error).message;
+      listErrors.value.set(filter, (e as Error).message);
   } finally {
     if (!disposed && current === sequence) {
       loading.value = false;
@@ -246,7 +246,7 @@ onMounted(async () => {
       }, 10000);
   } catch (e) {
     if (disposed) return;
-    listError.value = (e as Error).message;
+    listErrors.value.set(selected.value, (e as Error).message);
     loading.value = false;
   }
 });

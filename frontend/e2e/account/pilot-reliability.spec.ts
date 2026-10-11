@@ -235,6 +235,40 @@ test("successful attention polling cannot hide a failed history refresh", async 
   expect(state.unexpected).toEqual([]);
 });
 
+test("list errors stay with their filter when switching between cached order lists", async ({
+  page,
+}) => {
+  const state = await fixture(page);
+  state.orders = [order("history", "completed")];
+  await page.goto("/orders");
+  await expect(card(page, "history")).toBeVisible();
+  await page.getByRole("button", { name: "已完成", exact: true }).click();
+  await expect(card(page, "history")).toBeVisible();
+  await page.getByRole("button", { name: "全部订单", exact: true }).click();
+
+  state.listFailures.add("all");
+  await page.getByRole("button", { name: "刷新订单", exact: true }).click();
+  await expect(warning(page)).toContainText("测试列表读取失败");
+  const reads = state.listReads.length;
+  await page.getByRole("button", { name: "已完成", exact: true }).click();
+  await expect(card(page, "history")).toBeVisible();
+  await expect(warning(page)).toHaveCount(0);
+  expect(state.listReads).toHaveLength(reads);
+
+  // A successful refresh in this filter cannot erase another filter's failure.
+  await page.getByRole("button", { name: "刷新订单", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "刷新订单", exact: true }),
+  ).toBeEnabled();
+  await expect(warning(page)).toHaveCount(0);
+  await page.getByRole("button", { name: "全部订单", exact: true }).click();
+  await expect(warning(page)).toContainText("测试列表读取失败");
+  state.listFailures.clear();
+  await page.getByRole("button", { name: "重新加载", exact: true }).click();
+  await expect(warning(page)).toHaveCount(0);
+  expect(state.unexpected).toEqual([]);
+});
+
 test("manual retry immediately verifies attention recovery and stays busy until it finishes", async ({
   page,
 }) => {
