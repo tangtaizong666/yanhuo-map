@@ -136,6 +136,15 @@ def create_order(user, data):
                 raise BusinessError(stall.order_unavailable_reason(config), gate or 'stall_unavailable')
             if not hasattr(stall, 'location'):
                 raise BusinessError('商家尚未确认取餐位置。', 'location_missing')
+            # Existing successful requests returned above. A new reservation must
+            # use the location the student confirmed, under the same stall lock
+            # used by merchant location updates. Older clients may omit the token.
+            from .location_contract import location_snapshot
+            current_location = location_snapshot(stall)
+            expected_location = data.get('expected_location_token')
+            if expected_location is not None and not secrets.compare_digest(expected_location, current_location['location_token']):
+                raise BusinessError('摊位位置已变化，请核对最新位置后重新确认。', 'location_changed',
+                    current_location=current_location)
             ids = [item['product_id'] for item in data['items']]
             products = {p.id: p for p in Product.objects.select_for_update().filter(stall=stall, id__in=ids, is_active=True).order_by('id')}
             if len(products) != len(ids):
@@ -218,6 +227,16 @@ def cancel_order(order_id, user, reason):
 
 
 def merchant_action(order_id, user, action, code='', reason='', *, prep_minutes=None, idempotency_key=''):
+    result = _merchant_action(order_id, user, action, code, reason,
+        prep_minutes=prep_minutes, idempotency_key=idempotency_key)
+    # Raise only after the locked transaction has committed the failed attempt.
+    # Production DatabaseCache otherwise rolls back alongside BusinessError.
+    if isinstance(result, BusinessError):
+        raise result
+    return result
+
+
+def _merchant_action(order_id, user, action, code='', reason='', *, prep_minutes=None, idempotency_key=''):
     with transaction.atomic():
         from .permissions import owned_or_permitted
         query = owned_or_permitted(Order.objects.select_for_update(of=('self',)), user, 'market.change_order')
@@ -291,8 +310,17 @@ def merchant_action(order_id, user, action, code='', reason='', *, prep_minutes=
             audit(user, 'delivery_issue_resolved', order.pk, issue=order.delivery_issue, resolution=reason)
             order.delivery_issue = ''
         elif action == 'complete' and order.status == ('arrived' if delivery else 'ready') and order.payment_status == 'paid' and not order.cancel_requested:
+            from django.core.cache import cache
+            fails_key = f'pickup_code_fails:{order.pk}'
+            failures = cache.get(fails_key, 0)
+            if failures >= 5:
+                return BusinessError('取餐码错误次数过多，请10分钟后再试或让顾客刷新订单页核对。', 'pickup_code_locked', status=409)
             if not secrets.compare_digest(str(code), order.pickup_code):
-                raise BusinessError('取餐码不正确，请核对用户出示的取餐码。', 'invalid_pickup_code', status=400)
+                # The order row lock serializes attempts across workers. Set an
+                # explicit expiry: DatabaseCache.incr uses the default timeout.
+                cache.set(fails_key, failures + 1, 600)
+                return BusinessError('取餐码不正确，请核对用户出示的取餐码。', 'invalid_pickup_code', status=400)
+            cache.delete(fails_key)
             order.status, order.completed_at = 'completed', timezone.now()
             Event.objects.create(type='order_completed', user=order.user, stall=order.stall)
         elif action == 'approve_cancel' and order.status in (('preparing', 'ready', 'delivering', 'arrived') if delivery else ('preparing', 'ready')) and order.cancel_requested and order.payment_status in (('unpaid', 'paid') if delivery else ('unpaid',)):

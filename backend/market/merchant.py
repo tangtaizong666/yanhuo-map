@@ -200,7 +200,7 @@ def owned(query, user, prefix='stall__', permission=None):
 @permission_classes([IsAuthenticated])
 def stalls(request):
     # Include hidden stalls in the workspace so their owner can fix their menu.
-    query = Stall.objects.select_related('area', 'merchant', 'location', 'current_session').prefetch_related('products', 'reviews__user')
+    query = Stall.objects.select_related('area', 'merchant', 'location', 'current_session').prefetch_related('products', 'reviews__user', 'reviews__order')
     query = owned(query, request.user, prefix='')
     query = query.annotate(prep_active_count=Count('orders', filter=Q(orders__status__in=('pending_payment', 'pending', 'preparing')), distinct=True))
     return Response(StallSerializer(query.order_by('id'), many=True, context=merchant_context(request)).data)
@@ -285,7 +285,10 @@ def profile(request, stall_id):
 @permission_classes([IsAuthenticated])
 def reviews(request):
     stall = selected_stall(request, 'market.view_review')
-    query = owned(Review.objects.select_related('user'), request.user)
+    mode = request.query_params.get('mode', 'live')
+    if mode not in ('live', 'simulation'):
+        raise BusinessError('评价数据模式无效。', 'invalid_mode', status=400)
+    query = owned(Review.objects.select_related('user', 'order').filter(order__mode=mode), request.user)
     if stall:
         query = query.filter(stall=stall)
     return Response(ReviewSerializer(query.order_by('-created_at'), many=True).data)

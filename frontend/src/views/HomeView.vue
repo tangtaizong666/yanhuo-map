@@ -490,10 +490,16 @@ onMounted(() =>
         </div>
         <span class="section-caption">点开餐点，看看详细介绍</span>
       </div>
-      <div v-if="mealsLoading" class="skeleton-grid">
+      <div v-if="mealsError && meals.length" class="discovery-stale" role="status">
+        <span>餐点暂未同步，下面是上次加载的结果。可售状态以重新读取为准。</span>
+        <button @click="loadMeals" :disabled="mealsLoading">
+          <RefreshCw :size="15" />{{ mealsLoading ? "正在刷新" : "重新加载餐点" }}
+        </button>
+      </div>
+      <div v-if="mealsLoading && !meals.length" class="skeleton-grid">
         <div v-for="n in 4" :key="n" class="skeleton skeleton-card"></div>
       </div>
-      <div v-else-if="mealsError" class="empty-state card">
+      <div v-else-if="mealsError && !meals.length" class="empty-state card">
         <p>{{ mealsError }}</p>
         <button class="btn btn-secondary" @click="loadMeals">
           重新加载餐点

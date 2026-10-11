@@ -102,6 +102,7 @@ export interface Stall {
   area_name: string;
   status: "open" | "paused" | "closed" | "stale";
   last_confirmed_at: string | null;
+  location_token?: string;
   closes_at: string;
   prep_minutes: number;
   transaction_enabled: boolean;

@@ -379,11 +379,7 @@ test('dish, stall menu and remaining cart are usable at phone and desktop sizes'
     await expect(page.getByRole('button', { name: '小摊菜单', exact: true })).toBeVisible();
     await assertNoHorizontalOverflow(page);
     await page.screenshot({ path: info.outputPath(`stall-${width}-top.png`) });
-    if (width < 768) {
-      await page.locator('.stall-arrival summary').click();
-      await expect(page.getByRole('region', { name: '到摊指引', exact: true })).toBeVisible();
-      await page.locator('.stall-arrival summary').click();
-    }
+    await expect(page.getByRole('region', { name: '到摊指引', exact: true })).toBeVisible();
     await page.getByRole('link', { name: '查看餐点10详情', exact: true }).click();
     await expect(page.getByRole('heading', { name: '餐点10', exact: true })).toBeVisible();
     await page.getByRole('button', { name: /加入餐袋/ }).click();

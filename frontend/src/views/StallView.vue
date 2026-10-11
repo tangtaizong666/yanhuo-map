@@ -199,6 +199,10 @@ onUnmounted(() => {
         :class="{ 'visit-only': !stall.transaction_enabled }"
       >
         <div class="stall-main">
+          <section class="stall-arrival" aria-label="认摊与路线">
+            <StallVisitInfo :stall="stall" />
+            <div class="stall-share-entry"><StallShare :stall="stall" /></div>
+          </section>
           <section class="stall-overview card">
             <div class="overview-top">
               <div class="overview-rating">
@@ -218,7 +222,9 @@ onUnmounted(() => {
                   : stall.transaction_enabled &&
                       stall.accepting_orders === false
                     ? "线上接单暂停"
-                    : "线下到访"
+                    : stall.transaction_enabled
+                      ? "暂不可线上点单"
+                      : "线下到访"
               }}</span>
             </div>
             <div class="overview-facts">
@@ -231,9 +237,8 @@ onUnmounted(() => {
                 <ShieldCheck :size="16" /><span>{{
                   stall.can_order
                     ? "支持线上点单 · 到摊自取"
-                    : stall.transaction_enabled &&
-                        stall.accepting_orders === false
-                      ? "线上接单暂停 · 可到摊选购"
+                    : stall.transaction_enabled
+                      ? stall.order_unavailable_reason || "当前暂不接线上新单"
                       : "线下到访 · 暂未开通在线点单"
                 }}</span>
               </div>
@@ -282,22 +287,6 @@ onUnmounted(() => {
               </div>
             </div>
           </section>
-          <details class="stall-arrival" :open="!mobileLayout">
-            <summary>
-              <MapPin :size="19" />
-              <span
-                ><strong>{{ stall.address || "商家暂未提供位置" }}</strong
-                ><small>{{
-                  confirmedText(stall.last_confirmed_at)
-                }}</small></span
-              >
-              <span class="arrival-action"
-                >认摊与路线<ChevronRight :size="15"
-              /></span>
-            </summary>
-            <StallVisitInfo :stall="stall" />
-            <div class="stall-share-entry"><StallShare :stall="stall" /></div>
-          </details>
           <ReceivingNotice :stall="stall" />
           <div v-if="availability" class="availability-note">
             <AlertCircle :size="16" />{{ availability }}
@@ -566,9 +555,6 @@ onUnmounted(() => {
 <style scoped>
 .stall-page > .back-link {
   min-height: 44px;
-}
-.stall-arrival > summary {
-  display: none;
 }
 .stall-share-entry {
   display: flex;
@@ -1155,56 +1141,15 @@ onUnmounted(() => {
     padding: 15px;
   }
   .stall-arrival {
-    margin-top: 12px;
-    background: #fffbf5;
-    border: 1px solid var(--line);
-    border-radius: 14px;
-  }
-  .stall-arrival > summary {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    min-height: 64px;
-    padding: 12px 14px;
-    cursor: pointer;
-    list-style: none;
-    color: #795133;
-  }
-  .stall-arrival > summary::-webkit-details-marker {
-    display: none;
-  }
-  .stall-arrival > summary > svg {
-    flex: none;
-  }
-  .stall-arrival > summary > span:not(.arrival-action) {
-    min-width: 0;
-    display: grid;
-    gap: 4px;
-  }
-  .stall-arrival summary strong {
-    font-size: 13px;
-    line-height: 1.5;
-    overflow-wrap: anywhere;
-  }
-  .stall-arrival summary small {
-    font-size: 11px;
-    color: #81705f;
-  }
-  .arrival-action {
-    flex: none;
-    display: flex;
-    align-items: center;
-    margin-left: auto;
-    font-size: 11px;
-  }
-  .stall-arrival[open] .arrival-action svg {
-    transform: rotate(90deg);
+    margin-bottom: 12px;
   }
   .stall-arrival :deep(.stall-visit) {
     margin: 0;
-    border: 0;
-    border-top: 1px solid var(--line);
-    border-radius: 0 0 14px 14px;
+    padding: 16px;
+    border-radius: 14px;
+  }
+  .stall-arrival :deep(.visit-photo img) {
+    max-height: 180px;
   }
   .overview-top {
     gap: 8px;

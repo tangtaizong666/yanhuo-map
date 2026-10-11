@@ -177,23 +177,7 @@ onUnmounted(reset);
         </p>
       </div>
     </div>
-    <strong class="visit-address">{{ stall.address }}</strong>
-    <p class="visit-note">
-      {{ stall.arrival_note || "商家尚未补充认摊说明，出发前可先联系确认。" }}
-    </p>
-    <p v-if="stall.usual_hours" class="visit-note">
-      通常出摊：{{ stall.usual_hours }}（商家计划，以当日确认状态为准）
-    </p>
-    <figure v-if="stall.arrival_image" class="visit-photo">
-      <img
-        :src="stall.arrival_image"
-        :alt="`${stall.name}的认摊现场照片`"
-        loading="lazy"
-        width="640"
-        height="360"
-      />
-      <figcaption>商家提供的认摊照片 · 非实时画面</figcaption>
-    </figure>
+    <strong class="visit-address">{{ stall.address || "商家暂未提供位置" }}</strong>
     <div class="visit-facts">
       <span
         ><Clock3 :size="14" />{{
@@ -218,6 +202,22 @@ onUnmounted(reset);
           : "商家正在暂歇，出发前请先确认。"
       }}
     </p>
+    <p class="visit-note">
+      {{ stall.arrival_note || "商家尚未补充认摊说明，出发前可先联系确认。" }}
+    </p>
+    <p v-if="stall.usual_hours" class="visit-note">
+      通常出摊：{{ stall.usual_hours }}（商家计划，以当日确认状态为准）
+    </p>
+    <figure v-if="stall.arrival_image" class="visit-photo">
+      <img
+        :src="stall.arrival_image"
+        :alt="`${stall.name}的认摊现场照片`"
+        loading="lazy"
+        width="640"
+        height="360"
+      />
+      <figcaption>商家提供的认摊照片 · 非实时画面</figcaption>
+    </figure>
     <div class="visit-actions">
       <a
         v-if="validLocation"
@@ -382,6 +382,7 @@ onUnmounted(reset);
   margin-top: 7px;
 }
 .visit-facts {
+  margin: 8px 0;
   display: flex;
   gap: 10px 16px;
   flex-wrap: wrap;

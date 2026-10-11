@@ -332,13 +332,17 @@ watch(
   },
   { flush: "sync" },
 );
-watch(section, () => {
+watch([section, allowed], () => {
+  if (section.value === "apply" && allowed.value) {
+    void router.replace("/merchant");
+    return;
+  }
   if (!["", "orders", "products", "more", "analytics", "reviews", "store", "apply"].includes(section.value)) {
     void router.replace("/merchant");
     return;
   }
   if (allowed.value) void loadMetrics();
-});
+}, { immediate: true });
 function changePeriod(value: number) {
   days.value = value;
   void loadMetrics();
@@ -392,7 +396,7 @@ onUnmounted(() => {
 });
 </script>
 <template>
-  <div v-if="!allowed || section === 'apply'" class="m-application-page">
+  <div v-if="!allowed" class="m-application-page">
     <RouterLink class="brand" to="/merchant"><span class="brand-mark"><Store :size="25" /></span><span>烟火地图<small>商家入驻</small></span></RouterLink>
     <MerchantOnboarding :key="session.user?.id || 'guest'" @approved="applicationApproved" />
     <RouterLink to="/" class="m-text-link" @click="session.setConsumerPreview(true)">去学生端逛逛 <ArrowUpRight :size="14" /></RouterLink>

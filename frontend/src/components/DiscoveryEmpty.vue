@@ -26,10 +26,10 @@ const hasFilters = computed(() => !!props.category || !!props.query);
 const title = computed(() => {
   if (loading.value) return "正在看看附近的出摊情况";
   if (error.value) return "暂时无法确认附近的出摊情况";
-  if (!rows.value.length)
-    return props.area ? "这个区域还没有收录摊位" : "这里还没有收录摊位";
   if (props.following && !relevant.value.length)
     return props.area ? "当前区域还没有关注的摊位" : "还没有关注的摊位";
+  if (!rows.value.length)
+    return props.area ? "这个区域还没有收录摊位" : "这里还没有收录摊位";
   if (hasFilters.value || relevant.value.some((s) => s.status === "open"))
     return "暂时没有符合筛选条件的摊位";
   if (relevant.value.some((s) => s.status === "stale"))
@@ -41,13 +41,13 @@ const title = computed(() => {
 const description = computed(() =>
   error.value
     ? "当前没有读到完整信息，请重新加载；不能据此判断商家已收摊。"
-    : !rows.value.length
+    : props.following && !relevant.value.length
+      ? "先看看全部摊位，关注喜欢的小摊，下次就能直接查看它是否营业。"
+      : !rows.value.length
       ? "可以换个校园区域看看。这里还没有资料，不代表现场一定没有摊位。"
       : hasFilters.value
         ? "试试其他品类或清空关键词，已收摊的小摊也可以先了解和关注。"
-        : props.following && !relevant.value.length
-          ? "先看看全部摊位，关注喜欢的小摊，下次就能直接查看它是否营业。"
-          : "以下是已收录的摊位。计划时段仅供参考，出发前请确认当天出摊状态。",
+        : "以下是已收录的摊位。计划时段仅供参考，出发前请确认当天出摊状态。",
 );
 async function load() {
   controller?.abort();

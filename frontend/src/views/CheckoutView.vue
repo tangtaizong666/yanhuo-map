@@ -68,6 +68,11 @@ useBrowseReturn({
 });
 const relatedOrderIds = ref<string[]>([]);
 const priceChanged = ref(false);
+const amountChanges = ref<Record<string, string>>({});
+const locationChanged = ref(false);
+const locationRefreshNeeded = ref(false);
+const previousAddress = ref("");
+const rejectedLocationSubmission = ref<CheckoutSubmission | null>(null);
 const keyboardInset = ref(0);
 const checkoutPage = ref<HTMLElement>();
 const actionBar = ref<HTMLElement>();
@@ -386,6 +391,7 @@ function prepareSubmission() {
     fulfillment: fulfillment.value,
     pointId: pointId.value,
     recipient: recipient.value,
+    stallAddress: stall.value.address,
     body: {
       stall_id: stallId,
       items: items.value.map((item) => ({
@@ -398,6 +404,7 @@ function prepareSubmission() {
       })),
       note: note.value.trim(),
       contact_phone: phone.value.trim(),
+      expected_location_token: stall.value.location_token,
       ...(isDelivery.value
         ? {
             fulfillment_type: "delivery" as const,
@@ -424,6 +431,45 @@ async function refreshStall() {
   if (!isCurrentPage()) return false;
   stall.value = latest;
   return true;
+}
+function reconcileRejectedAmounts(record: CheckoutSubmission) {
+  const changes: Record<string, string> = {};
+  const previousFee = record.body.expected_delivery_fee_cents;
+  if (
+    record.body.fulfillment_type === "delivery" && isDelivery.value &&
+    typeof previousFee === "number" && previousFee !== deliveryFee.value
+  )
+    changes.delivery = `配送费：¥${money(previousFee)} → ¥${money(deliveryFee.value)}`;
+  for (const item of [...items.value]) {
+    const current = stall.value?.products?.find(
+      (product: Product) => product.id === item.product.id,
+    );
+    if (current && current.price_cents !== item.product.price_cents) {
+      changes[`product-${current.id}`] = `${current.name}单价：¥${money(item.product.price_cents)} → ¥${money(current.price_cents)}`;
+      cart.setQuantity(stallId, current, item.quantity);
+    }
+  }
+  if (!Object.keys(changes).length) return false;
+  amountChanges.value = { ...amountChanges.value, ...changes };
+  priceChanged.value = true;
+  return true;
+}
+async function refreshChangedLocation() {
+  if (busy.value || !isCurrentPage()) return;
+  busy.value = true;
+  try {
+    if (await refreshStall()) {
+      if (rejectedLocationSubmission.value)
+        reconcileRejectedAmounts(rejectedLocationSubmission.value);
+      rejectedLocationSubmission.value = null;
+      locationRefreshNeeded.value = false;
+      error.value = "";
+    }
+  } catch {
+    // Keep the old address visibly unconfirmed until a current read succeeds.
+  } finally {
+    if (isCurrentPage()) busy.value = false;
+  }
 }
 onMounted(async () => {
   try {
@@ -458,7 +504,6 @@ function updateQuantity(item: any, quantity: number) {
     return;
   }
   cart.setQuantity(stallId, item.product, quantity);
-  priceChanged.value = false;
 }
 async function submit() {
   if (
@@ -466,6 +511,7 @@ async function submit() {
     !session.user ||
     busy.value ||
     unresolved.value ||
+    locationRefreshNeeded.value ||
     !items.value.length ||
     !stall.value?.can_order ||
     tastesChanged.value ||
@@ -538,6 +584,7 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
     const rejectedAfterDuplicateCheck = new Set([
       "stall_unavailable",
       "location_missing",
+      "location_changed",
       "invalid_items",
       "price_changed",
       "out_of_stock",
@@ -581,25 +628,31 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
       // A transport error may have occurred after the server committed an order.
       // Preserve its exact request/key; only re-price an explicitly rejected order.
       if (!rejected || !(e instanceof ApiError) || !e.code) return;
+      if (e.code === "location_changed") {
+        previousAddress.value = record.stallAddress || "";
+        rejectedLocationSubmission.value = record;
+        locationChanged.value = true;
+        locationRefreshNeeded.value = true;
+      }
       if (!(await refreshStall()) || !isCurrentPage()) return;
+      // A rejection can reveal several changes at once. Compare with the
+      // rejected request before accepting the fresh fee and product prices.
+      const amountChanged = reconcileRejectedAmounts(record);
+      if (e.code === "location_changed") {
+        rejectedLocationSubmission.value = null;
+        locationRefreshNeeded.value = false;
+        error.value = priceChanged.value
+          ? "摊位位置与金额均有变化，请核对最新位置及金额后再次提交。"
+          : "摊位位置刚刚变更，请核对最新位置后再次提交。";
+        return;
+      }
       if (e.code === "delivery_fee_changed") {
         forgetSubmission();
         priceChanged.value = true;
         error.value = "配送费刚刚更新，已显示最新应付金额。请核对后再次提交。";
         return;
       }
-      if (e.code !== "price_changed") return;
-      let changed = false;
-      for (const item of [...items.value]) {
-        const current = stall.value.products.find(
-          (p: any) => p.id === item.product.id,
-        );
-        if (current && current.price_cents !== item.product.price_cents) {
-          cart.setQuantity(stallId, current, item.quantity);
-          changed = true;
-        }
-      }
-      if (changed) {
+      if (e.code === "price_changed" && amountChanged) {
         forgetSubmission();
         priceChanged.value = true;
         error.value =
@@ -798,6 +851,20 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
           :subtotal="total"
           :busy="editingLocked"
         >
+          <div v-if="locationChanged" class="location-change-notice" role="alert">
+            <strong>摊位出摊位置已变更</strong>
+            <p v-if="previousAddress">原位置：{{ previousAddress }}</p>
+            <p v-if="locationRefreshNeeded">暂未读到最新地址，请重新读取后核对。</p>
+            <p v-else>最新位置：{{ stall.address }}。{{ isDelivery ? "请核对商家的出摊位置。" : "请确认仍方便取餐。" }}</p>
+            <p v-if="isDelivery">配送仍送到所选校园交接点，请同时核对交接点与费用。</p>
+            <button
+              v-if="locationRefreshNeeded"
+              type="button"
+              class="btn btn-secondary"
+              :disabled="busy"
+              @click="refreshChangedLocation"
+            >{{ busy ? "正在读取" : "重新读取摊位位置" }}</button>
+          </div>
           <div class="pickup-address">
             <div class="location-icon"><MapPin :size="22" /></div>
             <div>
@@ -943,6 +1010,16 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
         <p v-if="error && !unresolved" class="error-message" role="alert">
           {{ error }}
         </p>
+        <section
+          v-if="Object.keys(amountChanges).length && !unresolved"
+          class="amount-change-notice"
+          aria-label="金额更新"
+          role="status"
+        >
+          <strong>金额已更新，请重新确认</strong>
+          <p v-for="(change, key) in amountChanges" :key="key">{{ change }}</p>
+          <p>最新合计 ¥{{ money(total + deliveryFee) }}</p>
+        </section>
         <nav
           v-if="relatedOrderIds.length && !unresolved"
           class="recovery-actions"
@@ -1000,6 +1077,7 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
             "
             :disabled="
               editingLocked ||
+              locationRefreshNeeded ||
               !stall.can_order ||
               !deliveryCanSubmit ||
               tastesChanged ||
@@ -1011,11 +1089,15 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
                 ? "正在提交…"
                 : unresolved
                   ? "请先确认原订单结果"
-                  : priceChanged
-                    ? "确认新价格并提交"
-                    : isDelivery
-                      ? "提交配送订单，去付款"
-                      : "提交自取订单"
+                  : locationChanged
+                    ? priceChanged
+                      ? "确认新位置与新金额并提交"
+                      : "确认新位置并提交"
+                    : priceChanged
+                      ? "确认新价格并提交"
+                      : isDelivery
+                        ? "提交配送订单，去付款"
+                        : "提交自取订单"
             }}<ChevronRight :size="18" />
           </button>
         </div>
@@ -1311,6 +1393,18 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
   gap: 14px;
   align-items: center;
   margin-top: 24px;
+}
+.location-change-notice,
+.amount-change-notice {
+  margin-bottom: 16px;
+  padding: 14px;
+  border: 1px solid var(--orange);
+  border-radius: 12px;
+  background: var(--cream);
+}
+.location-change-notice p,
+.amount-change-notice p {
+  margin: 6px 0;
 }
 .location-icon {
   width: 45px;

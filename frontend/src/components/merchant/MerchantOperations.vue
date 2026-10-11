@@ -147,7 +147,14 @@ async function loadReports() {
     <button v-else :disabled="busy" @click="accepting">{{ stall.accepting_orders === false ? '恢复接单' : '暂停接单' }}</button>
     <RouterLink to="/merchant/store" aria-label="营业设置"><Store :size="18" /><span>设置</span></RouterLink>
     <p v-if="compactBlockedReason" class="compact-order-reason" role="status">{{ compactBlockedReason }}</p>
-    <p v-if="state === 'closed' || state === 'stale'" class="compact-location"><MapPin :size="16" /><span>{{ hasLocation ? stall.address : '先确认实际取餐位置，再开始营业。' }}</span><RouterLink v-if="hasLocation" to="/merchant/store#location">更换位置</RouterLink></p>
+    <p class="compact-location"><MapPin :size="16" /><span>{{ hasLocation ? stall.address : '先确认实际取餐位置，再开始营业。' }}</span><RouterLink v-if="hasLocation" to="/merchant/store#location">更换位置</RouterLink></p>
+    <p v-if="hasLocation" class="compact-session">
+      <span>{{ stall.last_confirmed_at ? `位置确认 ${formatTime(stall.last_confirmed_at)}` : '位置尚未确认' }}</span>
+      <template v-if="state !== 'closed'">
+        <span>{{ stall.closes_at ? `预计收摊 ${formatTime(stall.closes_at)}` : '未设置预计收摊时间' }}</span>
+        <span v-if="stall.stop_orders_at">停止接单 {{ formatTime(stall.stop_orders_at) }}</span>
+      </template>
+    </p>
     <p v-if="hasLocation && openingClosesAt" class="compact-location">本次预计 {{ formatTime(openingClosesAt) }} 收摊<RouterLink to="/merchant/store#location">调整时间</RouterLink></p>
     <p v-if="error" class="m-alert" role="alert">{{ error }}</p>
   </section>
@@ -331,6 +338,7 @@ async function loadReports() {
 .compact-location > svg { flex: none; margin-top: 4px; }
 .compact-location > span { flex: 1; overflow-wrap: anywhere; }
 .compact-location > a { flex: none; display: inline-flex; align-items: center; min-height: 44px; margin-top: -9px; padding: 0 5px; color: #93451d; text-decoration: underline; text-underline-offset: 3px; }
+.compact-session { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 3px 14px; margin: -4px 0 0 23px; color: #65533f; font-size: 13px; line-height: 1.6; }
 @media (max-width: 380px) { .m-business-compact > a span { display: none; } }
 
 .operations {

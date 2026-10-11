@@ -322,6 +322,18 @@ def merchant_orders(request):
     return order_list_response(query, request, merchant=True)
 
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def merchant_order_detail(request, order_id):
+    query = owned_or_permitted(order_query(), request.user, 'market.view_order')
+    if request.query_params.get('stall'):
+        stall_id = serializers.IntegerField(min_value=1).run_validation(request.query_params['stall'])
+        query = query.filter(stall_id=stall_id)
+    order = get_object_or_404(query, pk=order_id)
+    return Response(OrderSerializer(order, context={'merchant': True, 'request': request}).data,
+        headers={'Cache-Control': 'private, no-store'})
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def merchant_status(request, stall_id):

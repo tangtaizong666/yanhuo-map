@@ -34,7 +34,7 @@ import {
 } from "./delivery";
 import { api, ApiError, formatTime, money, statusText } from "../../lib/api";
 import { notify } from "../../lib/notify";
-import { orderPage, mergeOrders, type OrderCounts } from "../../lib/orderPages";
+import { orderPage, mergeOrders, matchesOrderFilter, type OrderCounts } from "../../lib/orderPages";
 import type { Order } from "../../lib/types";
 import { allows } from "../../lib/orderActions";
 import { useSession } from "../../stores/session";
@@ -156,11 +156,6 @@ const historyFilter = computed(() =>
       ? filter.value
       : null,
 );
-function invalidateHistory() {
-  historyPages.clear();
-  // Re-read the visible history tab in the background; the current rows stay until it returns.
-  if (historyFilter.value) void loadHistory();
-}
 async function loadHistory(more = false) {
   if (
     !historyFilter.value ||
@@ -181,11 +176,16 @@ async function loadHistory(more = false) {
       historyController.signal,
     );
     if (generation !== historyGeneration) return;
-    history.value = more
+    const rows = more
       ? mergeOrders(history.value, page.results)
       : page.results;
+    history.value = rows
+      .filter((row) => !removedHistoryIds.has(String(row.id)))
+      .map((row) => updatedOrders[String(row.id)] || props.orders.find((current) => current.id === row.id) || row)
+      .filter((row) => matchesOrderFilter(row, selected, true));
     historyNext.value = page.next;
     historyPages.set(selected, { rows: history.value, next: page.next });
+    void syncHistory();
   } catch (e) {
     if (generation === historyGeneration)
       historyError.value = (e as Error).message;
@@ -236,6 +236,75 @@ const busyIds = reactive(new Set<string>());
 const isBusy = (order: any) => !!order && busyIds.has(String(order.id));
 const now = ref(Date.now());
 const updatedOrders = reactive<Record<string, any>>({});
+const historySyncIds = reactive(new Set<string>());
+const removedHistoryIds = new Set<string>();
+const historySyncBusy = ref(false);
+let historySyncGeneration = 0;
+let historySyncController: AbortController | undefined;
+function stopHistorySync() {
+  historySyncGeneration++;
+  historySyncController?.abort();
+  historySyncBusy.value = false;
+}
+function updateHistory(rows: Order[], removed: string[] = []) {
+  const replacements = new Map(rows.map((row) => [String(row.id), row]));
+  for (const id of removed) {
+    removedHistoryIds.add(id);
+    delete updatedOrders[id];
+    if (String(lookupOrder.value?.id) === id) lookupOrder.value = null;
+  }
+  for (const row of rows) {
+    const id = String(row.id);
+    removedHistoryIds.delete(id);
+    historySyncIds.delete(id);
+    if (String(lookupOrder.value?.id) === id) lookupOrder.value = row;
+  }
+  for (const id of removed) historySyncIds.delete(id);
+  for (const [key, cached] of historyPages) {
+    const updated = mergeOrders(cached.rows.map((row) => replacements.get(String(row.id)) || row), rows)
+      .filter((row) => !removedHistoryIds.has(String(row.id)) && matchesOrderFilter(row, key, true));
+    historyPages.set(key, { rows: updated, next: cached.next });
+  }
+  if (historyFilter.value) history.value = historyPages.get(historyFilter.value)?.rows || history.value;
+}
+async function syncHistory() {
+  if (!props.ordersReady) return;
+  stopHistorySync();
+  const generation = historySyncGeneration;
+  const attention = new Set(props.orders.map((row) => String(row.id)));
+  const known = mergeOrders(history.value, ...[...historyPages.values()].map((page) => page.rows),
+    Object.values(updatedOrders), lookupOrder.value ? [lookupOrder.value] : []);
+  for (const row of known) {
+    const id = String(row.id);
+    if (!attention.has(id) && matchesOrderFilter(row, "attention", true) && !removedHistoryIds.has(id)) historySyncIds.add(id);
+  }
+  for (const id of attention) historySyncIds.delete(id);
+  const pending = [...historySyncIds];
+  if (!pending.length) return;
+  const stallId = props.stall.id;
+  historySyncController = new AbortController();
+  const signal = historySyncController.signal;
+  historySyncBusy.value = true;
+  // Only records that left attention are reread; completed history is not polled.
+  // Bound concurrency even when many loaded orders finish at the same time.
+  await Promise.all(Array.from({ length: Math.min(4, pending.length) }, async () => {
+    while (pending.length && generation === historySyncGeneration) {
+      const id = pending.shift()!;
+      try {
+        const row = await api<Order>(`/merchant/orders/${encodeURIComponent(id)}?stall=${stallId}`, { signal });
+        if (generation !== historySyncGeneration) return;
+        if (!row || String(row.id) !== id || row.stall_id !== stallId || !Array.isArray(row.items)) throw new Error("未能核实订单");
+        updatedOrders[id] = row;
+        updateHistory([row]);
+      } catch (error) {
+        if (generation !== historySyncGeneration) return;
+        if (error instanceof ApiError && [403, 404].includes(error.status)) updateHistory([], [id]);
+        // Temporary failures retain both the last record and its unsynced marker.
+      }
+    }
+  }));
+  if (generation === historySyncGeneration) historySyncBusy.value = false;
+}
 const pickupCodes = reactive<Record<string, string>>({});
 const drawer = ref<HTMLDialogElement>();
 const confirmation = ref<HTMLDialogElement>();
@@ -560,6 +629,7 @@ function moreActions(order: any) {
   );
 }
 function cardAction(order: any) {
+  if (historySyncIds.has(String(order.id))) return null;
   if (pendingPrep[order.id])
     return {
       value: pendingPrep[order.id]!.action,
@@ -593,6 +663,7 @@ function runCardAction(order: any) {
 }
 function canAct(order: any, value: string) {
   if (!order) return false;
+  if (historySyncIds.has(String(order.id))) return false;
   if (value === "refund_status" && !order.refund) return false;
   if (pendingPrep[order.id]) return value === pendingPrep[order.id]!.action;
   if (Array.isArray(order.allowed_actions) && value !== "refresh_status") {
@@ -1011,7 +1082,8 @@ async function performAction(order: any, value: string, explanation = "") {
       savePrepRequests();
     }
     updatedOrders[String(result.id)] = result;
-    invalidateHistory();
+    stopHistorySync();
+    updateHistory([result]);
     if (lookupOrder.value?.id === result.id) lookupOrder.value = result;
     emit("refresh", result);
     if (value === "complete") delete pickupCodes[order.id];
@@ -1165,6 +1237,8 @@ watch(
   () => {
     // Fresh parent data remains authoritative when another device advances an order.
     for (const row of props.orders) delete updatedOrders[String(row.id)];
+    updateHistory(props.orders);
+    void syncHistory();
   },
 );
 watch(selectedOrder, (order) => {
@@ -1175,6 +1249,9 @@ watch(selectedOrder, (order) => {
 watch(
   () => `${session.user?.id}:${props.stall?.id}`,
   () => {
+    stopHistorySync();
+    historySyncIds.clear();
+    removedHistoryIds.clear();
     actionGeneration++;
     abortActions();
     closeConfirmation();
@@ -1208,6 +1285,7 @@ onMounted(() => {
   }, 1000);
 });
 onUnmounted(() => {
+  stopHistorySync();
   historyGeneration++;
   historyController?.abort();
   actionGeneration++;
@@ -1353,6 +1431,10 @@ onUnmounted(() => {
     </div>
     <p v-if="syncError" class="m-orders-warning" role="status">
       订单暂未同步，当前显示上次结果。请刷新后核对。
+    </p>
+    <p v-if="historySyncIds.size" class="m-orders-warning" role="status">
+      {{ historySyncIds.size }} 笔已加载订单暂未同步，正在核实是否已完成或取消；核实前暂停这些订单的操作。
+      <button :disabled="historySyncBusy || loading" @click="emit('refresh')">{{ historySyncBusy ? '正在核实…' : '重新同步订单' }}</button>
     </p>
     <p v-if="historyFilter && !cancellationOnly" class="m-orders-help">
       历史按页加载，搜索仅覆盖已加载记录。

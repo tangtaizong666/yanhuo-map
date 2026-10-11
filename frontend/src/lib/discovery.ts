@@ -208,6 +208,33 @@ export function useFollowState(apply: (id: number, followed: boolean) => void) {
   return { pendingFollows, follow, snapshot, isCurrent, reconcile };
 }
 
+// Refresh the window the reader has opened, following fresh cursors rather than
+// retaining old rows that may now be closed, sold out or outside the filters.
+// Publish only a complete window: a later-page failure keeps the previous view.
+async function readDiscoveryWindow<T>(
+  path: string,
+  params: URLSearchParams,
+  pageLimit: number,
+  signal: AbortSignal,
+  isCurrent: () => boolean,
+) {
+  const rows: T[] = [];
+  let pages = 0;
+  let result: DiscoveryPage<T> & { truncated?: boolean };
+  const query = new URLSearchParams(params);
+  do {
+    result = await api<DiscoveryPage<T> & { truncated?: boolean }>(
+      `${path}?${query}`, { signal },
+    );
+    if (!isCurrent()) return;
+    rows.push(...result.results);
+    pages++;
+    if (!result.next || pages >= pageLimit) break;
+    query.set("cursor", result.next);
+  } while (true);
+  return { ...result, results: rows, pages };
+}
+
 export function useStalls<T extends StallSummary | StallMap = StallSummary>(
   kind: "list" | "map" = "list",
   bounds?: Ref<string>,
@@ -229,6 +256,7 @@ export function useStalls<T extends StallSummary | StallMap = StallSummary>(
     if (!followed && route.query.follow === "1")
       stalls.value = stalls.value.filter((stall) => stall.id !== id);
   });
+  let refreshFailed = false;
   let seq = 0,
     controller: AbortController | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -239,32 +267,40 @@ export function useStalls<T extends StallSummary | StallMap = StallSummary>(
     const current = ++seq,
       read = followState.snapshot();
     loading.value = true;
-    error.value = "";
     const q = discoveryParams(filters);
     if (route.query.follow === "1") q.set("follow", "1");
     if (bounds?.value && kind === "map") q.set("bounds", bounds.value);
     if (append && next.value) q.set("cursor", next.value);
     try {
-      const result = await api<DiscoveryPage<T> & { truncated?: boolean }>(
-        `${kind === "map" ? "/stalls/map" : "/stalls"}?${q}`,
-        { signal: controller.signal },
+      const result = await readDiscoveryWindow<T>(
+        kind === "map" ? "/stalls/map" : "/stalls", q,
+        append || kind === "map" ? 1 : Math.max(1, loadedPages.value),
+        controller.signal, () => current === seq && followState.isCurrent(read),
       );
-      if (current === seq && followState.isCurrent(read)) {
-        const rows = result.results.map((stall) =>
-          followState.reconcile(stall, read),
-        );
+      if (result && current === seq && followState.isCurrent(read)) {
+        const rows = result.results
+          .map((stall) => followState.reconcile(stall, read))
+          .filter((stall) => q.get("follow") !== "1" || stall.is_followed);
         // ref unwraps generic values; the public records contain no refs.
         stalls.value = (
-          append ? mergeDiscoveryRows(stalls.value as T[], rows) : rows
+          mergeDiscoveryRows(append ? stalls.value as T[] : [], rows)
         ) as typeof stalls.value;
         next.value = result.next || null;
-        loadedPages.value = append ? loadedPages.value + 1 : 1;
+        loadedPages.value = append ? loadedPages.value + 1 : result.pages;
         truncated.value = !!result.truncated;
-        lastSyncedAt.value = new Date();
         loadedBounds.value = q.get("bounds") || "";
+        // A newly appended page cannot verify older pages whose refresh failed.
+        if (!append || !refreshFailed) {
+          error.value = "";
+          lastSyncedAt.value = new Date();
+        }
+        if (!append) refreshFailed = false;
       }
     } catch (cause) {
-      if (current === seq) error.value = (cause as Error).message;
+      if (current === seq) {
+        error.value = (cause as Error).message;
+        if (!append) refreshFailed = true;
+      }
     } finally {
       if (current === seq) loading.value = false;
     }
@@ -290,6 +326,8 @@ export function useStalls<T extends StallSummary | StallMap = StallSummary>(
       seq++;
       controller?.abort();
       clearTimeout(timer);
+      error.value = "";
+      refreshFailed = false;
       next.value = null;
       loadedPages.value = 0;
       if (kind === "list") stalls.value = [];
@@ -363,6 +401,7 @@ export function useMeals(budget: Ref<number>, sort: Ref<string>) {
     error = ref(""),
     next = ref<string | null>(null);
   const loadedPages = ref(0);
+  let refreshFailed = false;
   let sequence = 0,
     controller: AbortController | undefined,
     timer: ReturnType<typeof setTimeout> | undefined;
@@ -372,33 +411,35 @@ export function useMeals(budget: Ref<number>, sort: Ref<string>) {
     controller = new AbortController();
     const current = ++sequence;
     loading.value = true;
-    error.value = "";
     const q = discoveryParams(filters);
     if (route.query.follow === "1") q.set("follow", "1");
     if (budget.value) q.set("budget", String(budget.value));
     q.set("meal_sort", sort.value);
     if (append && next.value) q.set("cursor", next.value);
     try {
-      const result = await api<DiscoveryPage<DiscoveredMeal>>(
-        `/products?${q}`,
-        { signal: controller.signal },
+      const result = await readDiscoveryWindow<DiscoveredMeal>(
+        "/products", q, append ? 1 : Math.max(1, loadedPages.value),
+        controller.signal, () => current === sequence,
       );
-      if (current === sequence) {
-        meals.value = append
-          ? [
-              ...new Map(
-                [...meals.value, ...result.results].map((row) => [
-                  row.product.id,
-                  row,
-                ]),
-              ).values(),
-            ]
-          : result.results;
+      if (result && current === sequence) {
+        meals.value = [
+          ...new Map(
+            [...(append ? meals.value : []), ...result.results].map((row) => [
+              row.product.id,
+              row,
+            ]),
+          ).values(),
+        ];
         next.value = result.next;
-        loadedPages.value = append ? loadedPages.value + 1 : 1;
+        loadedPages.value = append ? loadedPages.value + 1 : result.pages;
+        if (!append || !refreshFailed) error.value = "";
+        if (!append) refreshFailed = false;
       }
     } catch (cause) {
-      if (current === sequence) error.value = (cause as Error).message;
+      if (current === sequence) {
+        error.value = (cause as Error).message;
+        if (!append) refreshFailed = true;
+      }
     } finally {
       if (current === sequence) loading.value = false;
     }
@@ -425,6 +466,8 @@ export function useMeals(budget: Ref<number>, sort: Ref<string>) {
       sequence++;
       controller?.abort();
       clearTimeout(timer);
+      error.value = "";
+      refreshFailed = false;
       meals.value = [];
       next.value = null;
       loadedPages.value = 0;
@@ -435,11 +478,21 @@ export function useMeals(budget: Ref<number>, sort: Ref<string>) {
   const polling = window.setInterval(() => {
     if (!document.hidden && !loading.value) void load();
   }, 60000);
+  function resume() {
+    if (!document.hidden) {
+      clearTimeout(timer);
+      timer = setTimeout(() => load(), 50);
+    }
+  }
+  window.addEventListener("focus", resume);
+  document.addEventListener("visibilitychange", resume);
   onUnmounted(() => {
     sequence++;
     controller?.abort();
     clearTimeout(timer);
     clearInterval(polling);
+    window.removeEventListener("focus", resume);
+    document.removeEventListener("visibilitychange", resume);
   });
   return {
     meals,

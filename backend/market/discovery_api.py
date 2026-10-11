@@ -139,6 +139,9 @@ def products(request):
     order = ['price_cents', 'id'] if request.query_params.get('meal_sort') == 'price' else ['id']
     rows, next_cursor = page(query, request, order, kind='products')
     stalls = {stall.pk: stall for stall in visible_stall_query('map').filter(pk__in={row.stall_id for row in rows})}
+    # Visibility can be revoked after the first query. Keep the original cursor
+    # position while omitting those rows so neither stale data nor a 500 escapes.
+    rows = [row for row in rows if row.stall_id in stalls]
     for row in rows: row.stall = stalls[row.stall_id]
     data = [{'product': PublicProductSerializer(row).data,
         'stall': StallMapSerializer(stalls[row.stall_id], context=context).data} for row in rows]

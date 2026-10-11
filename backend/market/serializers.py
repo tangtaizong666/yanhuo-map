@@ -75,9 +75,10 @@ class PublicProductSerializer(serializers.ModelSerializer):
 
 class ReviewSerializer(serializers.ModelSerializer):
     display_name = serializers.SerializerMethodField()
+    mode = serializers.CharField(source='order.mode', read_only=True)
     class Meta:
         model = Review
-        fields = ['id', 'rating', 'content', 'created_at', 'display_name', 'merchant_reply', 'replied_at']
+        fields = ['id', 'mode', 'rating', 'content', 'created_at', 'display_name', 'merchant_reply', 'replied_at']
     def get_display_name(self, obj):
         name = obj.user.first_name or obj.user.username
         return name[:1] + '同学'
@@ -85,6 +86,7 @@ class ReviewSerializer(serializers.ModelSerializer):
 
 class StallSerializer(serializers.ModelSerializer):
     order_unavailable_reason = serializers.SerializerMethodField()
+    location_token = serializers.SerializerMethodField()
     transaction_enabled = serializers.SerializerMethodField()
     address = serializers.CharField(source='location.address', read_only=True, default='位置尚未确认')
     latitude = serializers.FloatField(source='location.latitude', read_only=True, default=None)
@@ -116,7 +118,7 @@ class StallSerializer(serializers.ModelSerializer):
     capabilities = serializers.SerializerMethodField()
     class Meta:
         model = Stall
-        fields = ['id', 'name', 'description', 'category', 'image', 'address', 'latitude', 'longitude',
+        fields = ['id', 'name', 'description', 'category', 'image', 'address', 'latitude', 'longitude', 'location_token',
           'area_id', 'area_name', 'status', 'session_status', 'business_session_id', 'last_confirmed_at', 'closes_at', 'prep_minutes',
           'transaction_enabled', 'can_order', 'qualification_note', 'merchant_name', 'contact_phone',
           'rating', 'review_count', 'order_count', 'distance_m', 'is_followed', 'products', 'reviews', 'wechat_payment', 'delivery', 'services', 'capabilities',
@@ -166,6 +168,9 @@ class StallSerializer(serializers.ModelSerializer):
                 result['delivery'].pop('capacity', None)
         return result
     def get_order_unavailable_reason(self, obj): return obj.order_unavailable_reason(self.context.get('config'))
+    def get_location_token(self, obj):
+        from .location_contract import location_snapshot
+        return location_snapshot(obj)['location_token']
     def get_receiving_age_seconds(self, obj):
         if obj.receiving_seen_at is None: return None
         return max(0, (timezone.now() - obj.receiving_seen_at).total_seconds())
@@ -188,10 +193,10 @@ class StallSerializer(serializers.ModelSerializer):
     def get_rating(self, obj):
         if hasattr(obj, 'rating_average'):
             return round(obj.rating_average, 1) if obj.rating_average is not None else None
-        ratings = [r.rating for r in obj.reviews.all()]
+        ratings = [r.rating for r in obj.reviews.all() if r.order.mode == 'live']
         return round(sum(ratings) / len(ratings), 1) if ratings else None
     def get_review_count(self, obj):
-        return obj.rating_count if hasattr(obj, 'rating_count') else len(obj.reviews.all())
+        return obj.rating_count if hasattr(obj, 'rating_count') else sum(r.order.mode == 'live' for r in obj.reviews.all())
     def get_order_count(self, obj): return getattr(obj, 'completed_count', 0)
     def get_distance_m(self, obj):
         if hasattr(obj, 'distance_m_db'):
@@ -209,7 +214,7 @@ class StallSerializer(serializers.ModelSerializer):
         for row in rows: row.stall = obj
         return serializer(rows, many=True).data
     def get_reviews(self, obj):
-        rows = obj._preview_reviews if hasattr(obj, '_preview_reviews') else list(obj.reviews.all())[:20]
+        rows = obj._preview_reviews if hasattr(obj, '_preview_reviews') else [r for r in obj.reviews.all() if r.order.mode == 'live'][:20]
         return ReviewSerializer(rows, many=True).data
 
 
@@ -394,6 +399,7 @@ class OrderInput(serializers.Serializer):
     expected_delivery_fee_cents = serializers.IntegerField(min_value=0, max_value=100000, required=False)
     recipient_name = serializers.CharField(max_length=30, allow_blank=True, default='')
     stall_id = serializers.IntegerField(min_value=1)
+    expected_location_token = serializers.RegexField(r'^[0-9a-f]{64}$', max_length=64, required=False)
     items = CartItemInput(many=True, min_length=1, max_length=50)
     note = serializers.CharField(max_length=200, required=False, allow_blank=True, default='')
     contact_phone = serializers.RegexField(r'^[0-9+() \-]{0,30}$', required=False, allow_blank=True, default='')
