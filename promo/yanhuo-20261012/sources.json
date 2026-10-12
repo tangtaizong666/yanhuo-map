@@ -1,25 +1,183 @@
 {
-  "checked_on":"2026-10-12",
-  "license":"Pexels License",
-  "license_url":"https://www.pexels.com/license/",
-  "usage":"Edited promotional montage, with crops, color adjustment and Chinese typography. No implication that pictured people or places are participating merchants or endorse the project. Original footage is kept outside the deliverable folder.",
-  "videos":[
-    {"file":"wok-5336203.mp4","author":"ROMAN ODINTSOV","page":"https://www.pexels.com/video/chef-cooking-in-wok-close-up-5336203/","download":"https://videos.pexels.com/video-files/5336203/5336203-uhd_4096_2160_30fps.mp4"},
-    {"file":"gardenwalk-5177680.mp4","author":"Artem Shutkin","page":"https://www.pexels.com/video/people-walking-on-pavement-beside-garden-5177680/","download":"https://videos.pexels.com/video-files/5177680/5177680-uhd_3840_2160_25fps.mp4"},
-    {"file":"leaves-4980183.mp4","author":"Super Lunar","page":"https://www.pexels.com/video/tree-leaves-as-shade-from-the-sunrays-4980183/","download":"https://videos.pexels.com/video-files/4980183/4980183-uhd_3840_2160_25fps.mp4"},
-    {"file":"night-35321895.mp4","author":"LayG Traveller","page":"https://www.pexels.com/video/serene-night-scene-with-illuminated-lamp-post-35321895/","download":"https://videos.pexels.com/video-files/35321895/14965568_3840_2160_25fps.mp4"},
-    {"file":"sauce-2620043.mp4","author":"Engin Akyurt","page":"https://www.pexels.com/video/a-cook-using-a-wok-2620043/","download":"https://videos.pexels.com/video-files/2620043/2620043-uhd_3840_2160_25fps.mp4"},
-    {"file":"lemon-9001899.mp4","author":"olia danilevich","page":"https://www.pexels.com/video/a-person-pouring-water-with-lemon-on-a-drinking-glass-9001899/","download":"https://videos.pexels.com/video-files/9001899/9001899-hd_1920_1080_25fps.mp4"},
-    {"file":"noodles-4223987.mp4","author":"alleksana","page":"https://www.pexels.com/video/noodles-in-a-bowl-4223987/","download":"https://videos.pexels.com/video-files/4223987/4223987-hd_1920_1080_25fps.mp4"},
-    {"file":"plate-5848630.mp4","author":"Polina Tankilevitch","page":"https://www.pexels.com/video/flat-lay-asian-food-5848630/","download":"https://videos.pexels.com/video-files/5848630/5848630-hd_1920_1080_25fps.mp4"}
+  "checked_on": "2026-10-12",
+  "license": "Pexels License",
+  "license_url": "https://www.pexels.com/license/",
+  "license_scope": "Pexels video entries and explicitly identified derivatives of those videos; HTML, project screenshots, AI illustrations and original music are identified separately below.",
+  "current_film": {
+    "title": "烟火地图 · 这一口，没白惦记",
+    "duration_seconds": 60,
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "planned_frames": 1800,
+    "narration": false,
+    "composition": {
+      "licensed_video_seconds": 49,
+      "isolated_scenario_ui_seconds": 4,
+      "ai_ending_seconds": 7
+    },
+    "scenario_ui_interval_seconds": [
+      16.5,
+      20.5
+    ],
+    "validation_status": "本叙事版已完整解码1800帧并通过本地60秒播放检查，详细实测见 verification.json；不代表现场投影验收",
+    "disclosure": "创意情境 · 非项目实地拍摄 · 界面为演示 · 片尾含 AI 画面"
+  },
+  "usage": "Fictional advertising narrative made from edited licensed stock footage, a separately authored HTML scenario UI and an AI-edited brand ending. No claim of a continuous real-world project visit, participating merchants or endorsement. Original stock footage is kept outside the deliverable folder.",
+  "application_state_check": {
+    "checked_on": "2026-10-12",
+    "method": "Read-only GET requests to the local public example APIs on ports 5183 and 8087.",
+    "result": "8 public example stalls all returned status=closed and can_order=false; open and orderable filters returned no stalls.",
+    "change_scope": "No application source code, database, accounts, merchant status, position, prices, inventory, orders or payments changed for the advertising scene.",
+    "scenario_status": "The open fictional stall in product-scenario.html/png is isolated advertising content, not live operational information."
+  },
+  "videos": [
+    {
+      "file": "leaves-4980183.mp4",
+      "author": "Super Lunar",
+      "page": "https://www.pexels.com/video/tree-leaves-as-shade-from-the-sunrays-4980183/",
+      "download": "https://videos.pexels.com/video-files/4980183/4980183-uhd_3840_2160_25fps.mp4",
+      "used_seconds": 7,
+      "license": "Pexels License",
+      "license_url": "https://www.pexels.com/license/",
+      "used_in_current_film": true
+    },
+    {
+      "file": "noodles-4223987.mp4",
+      "author": "alleksana",
+      "page": "https://www.pexels.com/video/noodles-in-a-bowl-4223987/",
+      "download": "https://videos.pexels.com/video-files/4223987/4223987-hd_1920_1080_25fps.mp4",
+      "used_seconds": 9,
+      "license": "Pexels License",
+      "license_url": "https://www.pexels.com/license/",
+      "used_in_current_film": true
+    },
+    {
+      "file": "gardenwalk-5177680.mp4",
+      "author": "Artem Shutkin",
+      "page": "https://www.pexels.com/video/people-walking-on-pavement-beside-garden-5177680/",
+      "download": "https://videos.pexels.com/video-files/5177680/5177680-uhd_3840_2160_25fps.mp4",
+      "used_seconds": 8.5,
+      "license": "Pexels License",
+      "license_url": "https://www.pexels.com/license/",
+      "used_in_current_film": true
+    },
+    {
+      "file": "phone-5665074.mp4",
+      "author": "Taryn Elliott",
+      "page": "https://www.pexels.com/video/person-walking-outdoors-while-using-her-cellphone-5665074/",
+      "download": "https://videos.pexels.com/video-files/5665074/5665074-hd_1920_1080_25fps.mp4",
+      "used_seconds": 7,
+      "license": "Pexels License",
+      "license_url": "https://www.pexels.com/license/",
+      "used_in_current_film": true
+    },
+    {
+      "file": "sauce-2620043.mp4",
+      "author": "Engin Akyurt",
+      "page": "https://www.pexels.com/video/a-cook-using-a-wok-2620043/",
+      "download": "https://videos.pexels.com/video-files/2620043/2620043-uhd_3840_2160_25fps.mp4",
+      "used_seconds": 11.5,
+      "license": "Pexels License",
+      "license_url": "https://www.pexels.com/license/",
+      "used_in_current_film": true
+    },
+    {
+      "file": "wok-5336203.mp4",
+      "author": "ROMAN ODINTSOV",
+      "page": "https://www.pexels.com/video/chef-cooking-in-wok-close-up-5336203/",
+      "download": "https://videos.pexels.com/video-files/5336203/5336203-uhd_4096_2160_30fps.mp4",
+      "used_seconds": 6,
+      "license": "Pexels License",
+      "license_url": "https://www.pexels.com/license/",
+      "used_in_current_film": true
+    }
   ],
-  "other_assets":[
-    {"file":"assets/brand-scene-ai.png","author":"Generated with OpenAI built-in image generation","type":"AI advertising illustration","use":"Creative brand ending only, not actual merchant photography; generated 2026-10-12"},
-    {"file":"assets/product-current.png","author":"烟火地图项目","type":"Actual local application screenshot","use":"Read-only screenshot of the demo stall page on 2026-10-12. No real account, orders, payment data or merchant uploads."},
-    {"file":"food-noodles.jpg (inside product screenshot)","author":"Fumikas Sagisavas","page":"https://commons.wikimedia.org/wiki/File:Grilled_cold_noodles_(20241101).jpg","license":"CC0","license_url":"https://creativecommons.org/publicdomain/zero/1.0/","use":"Already used in the project's demo UI; not an actual product photo."},
-    {"file":"audio/original-bed.wav","author":"Original procedural composition for this project","type":"Original instrumental music","use":"No third-party recordings, samples, lyrics or voiceover. See tools/create_music.py."}
+  "other_assets": [
+    {
+      "file": "assets/product-scenario.html",
+      "author": "烟火地图项目",
+      "type": "Isolated HTML advertising scenario",
+      "used_in_current_film": true,
+      "use": "Source for the 4-second UI shot at 16.5–20.5 seconds. Independently authored scenario based on implemented status, written address and merchant-confirmed-position features; not the application frontend or a real application recording.",
+      "fictional_fields": {
+        "stall": "南门小炒摊",
+        "status": "出摊中",
+        "address": "示例校园南门步道旁",
+        "confirmation": "商家刚刚确认位置"
+      },
+      "visible_disclosure": "广告情境演示 · 虚构摊位与位置 · 非实时营业信息"
+    },
+    {
+      "file": "assets/product-scenario.png",
+      "author": "烟火地图项目",
+      "type": "Screenshot of isolated HTML advertising scenario",
+      "derived_from": "assets/product-scenario.html",
+      "used_in_current_film": true,
+      "use": "Displayed from 16.5 to 20.5 seconds with the disclosure visible throughout. Not a current screenshot of the live project. Food image is separately credited as assets/noodles-story.jpg."
+    },
+    {
+      "file": "assets/noodles-story.jpg",
+      "author": "alleksana",
+      "type": "Still extracted from licensed stock video",
+      "derived_from_video": "noodles-4223987.mp4",
+      "page": "https://www.pexels.com/video/noodles-in-a-bowl-4223987/",
+      "license": "Pexels License",
+      "license_url": "https://www.pexels.com/license/",
+      "used_in_current_film": true,
+      "use": "Food image within the isolated advertising UI; also supplied solely as the food continuity reference for the AI ending edit. Not an actual participating merchant's product photograph."
+    },
+    {
+      "file": "assets/brand-scene-noodles-ai.png",
+      "author": "Generated with OpenAI built-in image generation",
+      "type": "AI-edited advertising illustration",
+      "used_in_current_film": true,
+      "generated_on": "2026-10-12",
+      "edit_target": "assets/brand-scene-ai.png",
+      "food_continuity_reference": "assets/noodles-story.jpg",
+      "use": "Seven-second creative brand ending from 53 to 60 seconds, with a gentle post-production push-in. Not actual merchant photography or a filmed moving shot. Only foreground bowl and food were requested to change, preserving the campus-at-dusk composition.",
+      "prompt": "Use case: precise-object-edit. Asset: 16:9 cinematic brand-film ending, no typography. First image is the EDIT TARGET. Second image is ONLY a food continuity reference: stir-fried thin round noodles with small vegetables in a pale green ceramic bowl. In the FIRST image, change ONLY the foreground bowl and its food: replace the disposable bowl of broad grilled noodle rolls with an appealing pale sage ceramic bowl full of glossy thin stir-fried noodles and diced vegetables resembling the second image, gently steaming. Preserve the entire first image's campus-at-dusk scene, cool blue sky, warm stall lights, blurred cook with back to camera, right-hand food placement, lens perspective, and generous dark negative space on the left. Premium food commercial photography, natural authentic texture, subtle steam. No text, no logos, no watermarks, no additional objects or people."
+    },
+    {
+      "file": "audio/original-bed.wav",
+      "author": "Original procedural composition for this project",
+      "type": "Original instrumental music",
+      "used_in_current_film": true,
+      "version": "narrative-v2-no-voice",
+      "bpm": 108,
+      "duration_seconds": 60,
+      "metadata_file": "audio/original-bed.json",
+      "source_file": "tools/create_music.py",
+      "use": "Seven narrative music sections cover longing, uncertainty, decision, departure, cooking, first bite and brand resolution. No third-party recordings, samples, lyrics or voiceover; this is the only audio track used in the film."
+    },
+    {
+      "file": "assets/brand-scene-ai.png",
+      "author": "Generated with OpenAI built-in image generation",
+      "type": "AI advertising illustration",
+      "status": "legacy not in current film",
+      "used_in_current_film": false,
+      "use": "Previous brand ending, retained as the edit target for assets/brand-scene-noodles-ai.png. Not directly displayed in the current film; generated 2026-10-12."
+    },
+    {
+      "file": "assets/product-current.png",
+      "author": "烟火地图项目",
+      "type": "Actual local application screenshot",
+      "status": "legacy not in current film",
+      "used_in_current_film": false,
+      "use": "Read-only screenshot of the demo stall page on 2026-10-12, retained from the previous version. Its closed status was not edited. No real account, orders, payment data or merchant uploads; not displayed in the current narrative film."
+    },
+    {
+      "file": "food-noodles.jpg (inside product screenshot)",
+      "author": "Fumikas Sagisavas",
+      "page": "https://commons.wikimedia.org/wiki/File:Grilled_cold_noodles_(20241101).jpg",
+      "license": "CC0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "status": "legacy not in current film",
+      "used_in_current_film": false,
+      "use": "Historical image attribution retained from the prior product-screenshot version. Not used in the current advertising scenario UI or film; not an actual merchant product photo."
+    }
   ],
-  "visual_references":[
+  "visual_references": [
     "https://dribbble.com/shots/27687058-Food-Product-Commercial-Cinematic-Product-Visualization",
     "https://gsap.com/showcase/",
     "https://www.pinterest.com/cliffordkhoi/street-food-vibe/"

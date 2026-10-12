@@ -1,6 +1,6 @@
 {
   "file": "yanhuo-ad-60s-1080p.mp4",
-  "sha256": "b6dd5419eda85564f94075f15e9ad6c56bb8645b7857797e93412a5bb73ea343",
+  "sha256": "f2f17df248c704208bdbd3ff1f4fe6d992cbbfe5ab3651272a54d5d6f9adb2c6",
   "duration_seconds": 60.0,
   "width": 1920,
   "height": 1080,
@@ -17,19 +17,20 @@
   "audio_codec": "aac",
   "audio_sample_rate": 48000,
   "audio_channels": 2,
-  "integrated_loudness_lufs": -17.74,
-  "true_peak_dbtp": -3.12,
+  "integrated_loudness_lufs": -17.52,
+  "true_peak_dbtp": -3.13,
   "decode_check": "passed; full video and audio decoded, no FFmpeg errors",
   "narration": "none; sole mapped audio input is original-bed.wav",
   "application_tests": "not run; artifact-only change",
   "production_deployment": "not performed",
   "browser_playback": {
-    "mode": "muted local Chromium / Codex in-app browser",
-    "completed": true,
-    "duration_seconds": 60.0,
-    "processed_frames": 1800,
-    "renderer_dropped_frames": 2,
-    "media_errors": 0,
-    "note": "Renderer dropped frames are playback statistics; the file independently decodes to exactly 1800 frames."
+    "browser": "Local Chromium (Codex in-app browser)",
+    "muted": true,
+    "ended": true,
+    "duration_seconds": 60,
+    "total_video_frames": 1800,
+    "dropped_video_frames": 0,
+    "media_errors": null,
+    "scope": "Full local playback, not on-site projection or listening acceptance"
   }
 }

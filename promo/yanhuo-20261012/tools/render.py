@@ -25,6 +25,7 @@ GRADES = {
     'drink': 'eq=contrast=1.03:saturation=0.92:gamma=0.99',
     'outdoor': 'eq=contrast=1.04:saturation=0.85:gamma=0.96,colorbalance=rs=0.013:bs=-0.009',
     'night': 'eq=contrast=1.03:saturation=0.88:gamma=1.08',
+    'phone': 'eq=contrast=1.06:saturation=0.80:gamma=1.03,colorbalance=rs=0.035:gs=-0.015:bs=-0.025',
 }
 
 
@@ -71,8 +72,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             srt_text += '\n' + c['supporting_text'] + '\n' + c['disclosure']
         srt.append(f'{i}\n{stamp(start)} --> {stamp(end)}\n{srt_text}\n')
         if c.get('style') == 'brand':
-            events.append(f'Dialogue: 0,{stamp(start,True)},{stamp(end,True)},Brand,,0,0,0,,{{\\fad(650,600)}}烟火地图')
-            events.append(f'Dialogue: 0,{stamp(start+0.7,True)},{stamp(end,True)},Main,,0,0,0,,{{\\an7\\pos(118,508)\\fs43\\fsp3\\fad(650,600)}}找到惦记的那一口。')
+            brand, tagline = text.split('\n', 1)
+            events.append(f'Dialogue: 0,{stamp(start,True)},{stamp(end,True)},Brand,,0,0,0,,{{\\fad(650,600)}}{brand}')
+            events.append(f'Dialogue: 0,{stamp(start+0.7,True)},{stamp(end,True)},Main,,0,0,0,,{{\\an7\\pos(118,508)\\fs43\\fsp3\\fad(650,600)}}{tagline}')
             events.append(f'Dialogue: 0,{stamp(start+1.1,True)},{stamp(end,True)},Small,,0,0,0,,{{\\an7\\pos(120,597)\\fs26\\fad(650,600)}}{c["supporting_text"]}')
             events.append(f'Dialogue: 0,{stamp(start,True)},{stamp(end,True)},Small,,0,0,0,,{{\\fad(650,600)}}{c["disclosure"]}')
         else:
@@ -125,7 +127,7 @@ def main():
         else:filters += [f'scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos',f'crop={width}:{height}',f'fps={FPS}']
         if GRADES[shot['grade']]:filters.append(GRADES[shot['grade']])
         if i==0:filters.append('fade=t=in:st=0:d=0.4')
-        if i==len(plan['shots'])-1:filters.append('fade=t=out:st=6.2:d=0.8')
+        if i==len(plan['shots'])-1:filters.append(f'fade=t=out:st={shot["duration"]-0.8}:d=0.8')
         # Stills and stock footage may differ in range/matrix metadata. Normalize
         # both pixel values and tags so concat never reinitializes the subtitle graph.
         filters += ['scale=in_range=auto:out_range=tv:out_color_matrix=bt709',

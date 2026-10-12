@@ -2,11 +2,73 @@
   "path": "C:\\my_pycharm\\流动摊贩\\promo\\yanhuo-20261012\\audio\\original-bed.wav",
   "duration_seconds": 60.0,
   "sample_rate": 48000,
+  "sample_frames": 2880000,
   "channels": 2,
-  "bpm": 106,
-  "rms": 0.100386,
-  "rms_dbfs": -19.97,
-  "peak": 0.56,
-  "peak_dbfs": -5.04,
-  "source": "Original procedural composition and synthesis; no third-party samples."
+  "sample_width_bits": 16,
+  "bpm": 108,
+  "video_fps": 30,
+  "matching_video_frames": 1800,
+  "version": "narrative-v2-no-voice",
+  "rms": 0.101771,
+  "rms_dbfs": -19.85,
+  "peak": 0.68,
+  "peak_dbfs": -3.35,
+  "source": "Original procedural composition and synthesis; no third-party samples.",
+  "voices": false,
+  "fade_in_seconds": 1,
+  "fade_out_seconds": 2,
+  "cues": [
+    {
+      "start": 0,
+      "end": 12,
+      "story": "After class, wanting something warm",
+      "music": "Warm electric piano and a sparse plucked theme; gentle movement grows after 4.4 s"
+    },
+    {
+      "start": 12,
+      "end": 20,
+      "story": "Wondering whether the stall is still there",
+      "music": "Drums and bass leave; suspended harmony and isolated notes; a breath at 18.8-20 s"
+    },
+    {
+      "start": 20,
+      "end": 27,
+      "story": "Yanhuo Map provides a direction",
+      "music": "C-E-G reveal motif at 20 s, major resolution and a returning pulse"
+    },
+    {
+      "start": 27,
+      "end": 38.111111111,
+      "story": "Setting off with a destination",
+      "music": "A steady light groove; bass, melody and percussion build across five bars"
+    },
+    {
+      "start": 38.111111111,
+      "end": 48,
+      "story": "Arrival and freshly cooked food",
+      "music": "Fullest arrangement, upper melody answers and a soft string halo"
+    },
+    {
+      "start": 48,
+      "end": 53,
+      "story": "Enjoying the meal",
+      "music": "Percussion recedes; warm suspended cadence"
+    },
+    {
+      "start": 53,
+      "end": 60,
+      "story": "Warm food and final title",
+      "music": "Resolved C6/9, a last C-E-G motif, sustained piano; two-second fade"
+    }
+  ],
+  "segment_rms_dbfs": {
+    "0-12s": -20.77,
+    "12-20s": -28.59,
+    "18.8-20s": -40.88,
+    "20-27s": -19.39,
+    "27-38s": -18.33,
+    "38-48s": -17.56,
+    "48-53s": -20.17,
+    "53-60s": -21.98
+  }
 }
