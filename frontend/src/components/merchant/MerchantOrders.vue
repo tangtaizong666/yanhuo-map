@@ -131,7 +131,7 @@ function prepValue(order: any) {
   return prepMinutes[order.id] ?? props.stall.prep_minutes ?? 10;
 }
 function preparationText(order: any) {
-  if (!order.estimated_ready_at) return "接单后会显示商家预计出餐时间";
+  if (!order.estimated_ready_at) return "尚未设置出餐预估";
   const past =
     Date.parse(order.estimated_ready_at) < now.value &&
     order.status === "preparing";
@@ -345,6 +345,10 @@ const primaryStages = [
   { value: "ready", label: "待取餐" },
 ];
 const pendingOperationCount = computed(() => Object.keys(pendingPrep).length);
+const showQueueSummary = computed(() =>
+  !["pending", "preparing"].includes(filter.value) ||
+  hasSearchFilters.value || cancellationOnly.value,
+);
 const queueTitle = computed(() =>
   cancellationOnly.value
     ? "取消申请"
@@ -1443,7 +1447,7 @@ onUnmounted(() => {
       {{ historyError }} <button @click="loadHistory()">重试历史订单</button>
     </p>
     <p v-if="historyBusy" role="status">正在加载历史订单…</p>
-    <div class="m-simple-list-label">
+    <div v-if="showQueueSummary" class="m-simple-list-label">
       <h3>{{ queueTitle }}</h3>
       <span
         >{{ ordersReady ? shownOrders.length : "—" }} 单<span
@@ -1507,7 +1511,7 @@ onUnmounted(() => {
         查看新订单
       </button>
     </div>
-    <div v-else class="m-orders-grid">
+    <div v-else class="m-orders-grid" role="region" :aria-label="queueTitle">
       <article
         v-for="order in shownOrders"
         :key="order.id"

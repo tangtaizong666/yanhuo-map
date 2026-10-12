@@ -41,6 +41,13 @@ const copyMessage = ref("");
 const addressField = ref<HTMLInputElement>();
 const showAddressField = ref(false);
 const toolsExpanded = ref(false);
+const previousClosingPlan = computed(() => {
+  if (!props.stall.closes_at) return "";
+  const state = props.stall.status === "closed"
+    ? "已收摊"
+    : props.stall.status === "stale" ? "当前状态待确认" : "";
+  return state ? `上次预计 ${formatClock(props.stall.closes_at)} 收摊（${state}）` : "";
+});
 const validLocation = computed(
   () =>
     Number.isFinite(props.stall.latitude) &&
@@ -198,8 +205,10 @@ onUnmounted(reset);
             ? `商家${confirmedText(stall.last_confirmed_at)}`
             : "商家尚未确认位置"
         }}</span
-      ><span v-if="stall.closes_at"
-        >预计 {{ formatClock(stall.closes_at) }} 收摊</span
+      ><span v-if="stall.closes_at && !previousClosingPlan"
+        >预计 {{ formatClock(stall.closes_at) }} 收摊 · 商家计划</span
+      ><span v-else-if="previousClosingPlan && !condensed"
+        >{{ previousClosingPlan }}</span
       >
     </div>
     <p v-if="stall.status === 'stale'" class="visit-warning">
@@ -275,6 +284,9 @@ onUnmounted(reset);
       v-show="!condensed || toolsExpanded"
       class="visit-utilities"
     >
+      <p v-if="condensed && previousClosingPlan" class="visit-note">
+        {{ previousClosingPlan }}
+      </p>
       <p v-if="condensed && stall.usual_hours" class="visit-note">
         通常出摊：{{ stall.usual_hours }}（商家计划，以当日确认状态为准）
       </p>

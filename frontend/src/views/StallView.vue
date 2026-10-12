@@ -221,6 +221,7 @@ onUnmounted(() => {
                 stall.can_order
                   ? "可线上点单"
                   : stall.transaction_enabled &&
+                      stall.status === "open" &&
                       stall.accepting_orders === false
                     ? "线上接单暂停"
                     : stall.transaction_enabled
@@ -229,7 +230,7 @@ onUnmounted(() => {
               }}</span>
             </div>
             <div class="overview-facts">
-              <div>
+              <div v-if="stall.can_order">
                 <Clock3 :size="16" /><span
                   >预计 {{ stall.prep_minutes }} 分钟备餐</span
                 >
@@ -239,7 +240,7 @@ onUnmounted(() => {
                   stall.can_order
                     ? "支持线上点单 · 到摊自取"
                     : stall.transaction_enabled
-                      ? stall.order_unavailable_reason || "当前暂不接线上新单"
+                      ? availability || "当前暂不接线上新单"
                       : "线下到访 · 暂未开通在线点单"
                 }}</span>
               </div>
@@ -251,6 +252,7 @@ onUnmounted(() => {
                     stall.wechat_payment?.mode === 'simulation')
                 "
                 class="stall-payment-status"
+                :class="{ unavailable: !stall.wechat_payment?.available }"
               >
                 <CreditCard :size="16" /><span>{{
                   stall.wechat_payment?.mode === "simulation"
@@ -260,10 +262,10 @@ onUnmounted(() => {
                 ><strong>{{
                   stall.wechat_payment?.available
                     ? "出餐后可线上付款"
-                    : "尚未开通"
+                    : "当前不可用"
                 }}</strong
                 ><span v-if="!stall.wechat_payment?.available"
-                  >到摊扫码付款</span
+                  >到摊付款</span
                 >
               </div>
               <div
@@ -289,9 +291,6 @@ onUnmounted(() => {
             </div>
           </section>
           <ReceivingNotice :stall="stall" />
-          <div v-if="availability" class="availability-note">
-            <AlertCircle :size="16" />{{ availability }}
-          </div>
           <nav class="tabs detail-tabs">
             <button :class="{ active: tab === 'menu' }" @click="tab = 'menu'">
               小摊菜单</button
@@ -306,7 +305,7 @@ onUnmounted(() => {
           </nav>
           <section v-if="tab === 'menu'">
             <div class="menu-intro">
-              <h2>现做现吃，热乎刚好</h2>
+              <h2>{{ stall.can_order ? "现做现吃，热乎刚好" : "看看小摊菜单" }}</h2>
               <span>{{ stall.products.length }} 款好味道</span>
             </div>
             <div class="menu-list">
@@ -346,7 +345,9 @@ onUnmounted(() => {
                   <p>{{ p.description }}</p>
                   <small v-if="productAvailable(p)">{{
                     stall.transaction_enabled
-                      ? "可选餐，提交时核对余量"
+                      ? stall.can_order
+                        ? "可选餐，提交时核对余量"
+                        : "可看餐点详情，暂不可点单"
                       : "今天有，到摊选购"
                   }}</small>
                   <div class="product-bottom">
@@ -443,7 +444,7 @@ onUnmounted(() => {
                   stall.transaction_enabled
                     ? stall.wechat_payment?.available
                       ? "线上点单，出餐后微信或到摊付款自取"
-                      : "线上点单，到摊扫码付款自取"
+                      : "线上点单，到摊付款自取"
                     : "仅提供摊位信息，线下到访"
                 }}
               </dd>
@@ -458,13 +459,14 @@ onUnmounted(() => {
               <template v-if="stall.transaction_enabled">
                 <dt>线上支付</dt>
                 <dd>
+                  <template v-if="stall.wechat_payment?.mode === 'simulation'"
+                    >模拟微信支付 · 不会真实扣款。
+                  </template>
                   {{
-                    stall.wechat_payment?.mode === "simulation"
-                      ? "模拟微信支付 · 不会真实扣款"
-                      : stall.wechat_payment?.available
-                        ? "出餐后可在订单页微信付款"
-                        : stall.wechat_payment?.reason ||
-                          "微信支付尚未开通，取餐时向商家付款"
+                    stall.wechat_payment?.available
+                      ? "出餐后可在订单页微信付款"
+                      : stall.wechat_payment?.reason ||
+                        "微信支付当前不可用，取餐时向商家付款"
                   }}
                 </dd>
                 <dt>商家配送</dt>
@@ -567,12 +569,16 @@ onUnmounted(() => {
   gap: 8px !important;
 }
 .stall-payment-status strong {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 500;
   padding: 3px 7px;
   border-radius: 5px;
   background: #edf2e6;
   color: #61724f;
+}
+.stall-payment-status.unavailable strong {
+  background: #f1ede6;
+  color: #6d6257;
 }
 .stall-page {
   padding-top: 20px;
@@ -717,18 +723,6 @@ onUnmounted(() => {
   width: 1px;
   background: #dfd5c6;
   margin: 0 3px;
-}
-.availability-note {
-  margin-top: 16px;
-  padding: 12px 16px;
-  border-radius: 10px;
-  border: 1px solid #ecdfc6;
-  background: #fff5e5;
-  color: #987140;
-  font-size: 12px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
 }
 .detail-tabs {
   margin: 17px 0 22px;
@@ -1278,14 +1272,6 @@ onUnmounted(() => {
     font-size: 12px;
     border-radius: 24px;
     padding: 10px 21px;
-  }
-  .availability-note {
-    font-size: 11px;
-    align-items: flex-start;
-    line-height: 1.8;
-  }
-  .availability-note svg {
-    margin-top: 2px;
   }
   .review-card {
     padding: 18px;

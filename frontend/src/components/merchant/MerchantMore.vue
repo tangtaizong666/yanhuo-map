@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { Settings2, ChartNoAxesCombined, MessageSquare, History, ArrowUpRight, ChevronRight, ShieldCheck, LogOut } from "lucide-vue-next";
+import { Settings2, ChartNoAxesCombined, MessageSquare, History, ArrowUpRight, ChevronRight, ShieldCheck } from "lucide-vue-next";
 import { useSession } from "../../stores/session";
 import StallShare from "../StallShare.vue";
 import { computed } from "vue";
 
 const props = defineProps<{ stall: any; sellable: boolean; discoveryOnly?: boolean }>();
-const emit = defineEmits<{ logout: [] }>();
 const session = useSession();
 const links = computed(() => [
   { to: "/merchant/store", title: "店铺与营业", note: props.discoveryOnly ? "出摊位置、时间与认摊资料" : "开摊、位置、支付和配送", icon: Settings2 },
@@ -37,6 +36,5 @@ const preparationSteps = computed(() => (props.stall.activation?.steps || []).fi
     </details>
     <details v-if="stall.is_visible" class="m-panel m-more-details"><summary>分享摊位<span>地址与二维码</span></summary><StallShare :stall="stall" compact /></details>
     <p v-else class="m-muted">公开展示尚未开通，暂不能分享学生端地址。工作台仍可继续完善资料。</p>
-    <button class="m-more-logout" @click="emit('logout')"><LogOut :size="18" />退出登录</button>
   </div>
 </template>

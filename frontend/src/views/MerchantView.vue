@@ -440,7 +440,7 @@ onUnmounted(() => {
             <p v-if="heartbeatError" class="m-alert" role="status">{{ heartbeatError }}</p>
             <MerchantOrders v-if="orderWorkspace" :key="`${session.user!.id}:${stall.id}:${route.query.filter || 'active'}`" :stall="stall" :orders="orders" :orders-ready="ordersReady" :sync-error="error" :loading="refreshing" :initial-filter="String(route.query.filter || 'active')" :counts="orderCounts" @refresh="orderChanged" />
             <MerchantProducts v-else-if="section === 'products'" :key="stall.id" :stall="stall" :discovery-only="discoveryOnly" @refresh="mutationRefresh" />
-            <MerchantMore v-else-if="section === 'more'" :stall="stall" :sellable="!!sellable" :discovery-only="discoveryOnly" @logout="logout" />
+            <MerchantMore v-else-if="section === 'more'" :stall="stall" :sellable="!!sellable" :discovery-only="discoveryOnly" />
             <MerchantAnalytics v-else-if="section === 'analytics'" :metrics="metrics" :days="days" :error="metricsError" :loading="metricsLoading" @period="changePeriod" />
             <MerchantReviews v-else-if="section === 'reviews'" :key="stall.id" :stall="stall" @refresh="mutationRefresh" />
             <MerchantStore v-else-if="section === 'store'" :key="`${session.user!.id}:${stall.id}`" :stall="stall" :orders="orders" :orders-ready="ordersReady" :discovery-only="discoveryOnly" @refresh="mutationRefresh" />
@@ -449,6 +449,7 @@ onUnmounted(() => {
               <MerchantAttention :key="session.user!.id" :scope="`${session.user!.id}:${stall.id}`" :orders="orders" :ready="ordersReady" :sync-error="error" :compact-pending="orderWorkspace" :show-controls="section === 'more' && (!discoveryOnly || hasOrderHistory)" :show-tasks="!orderWorkspace" @expired="refresh" @refresh="mutationRefresh" />
               <SessionNotifications v-show="section === 'more' && (!discoveryOnly || hasOrderHistory)" :key="`${session.user!.id}:${stall.id}`" :user-id="session.user!.id" :events="notificationEvents" :ready="ordersReady && !error" />
             </div>
+            <button v-if="section === 'more'" class="m-more-logout m-more-final-action" @click="logout"><LogOut :size="18" />退出登录</button>
           </template>
         </template>
       </div>
@@ -460,4 +461,5 @@ onUnmounted(() => {
 </template>
 <style scoped>
 .m-application-page { max-width: 920px; margin: 0 auto; padding: 28px 18px; }
+.m-more-final-action { width: 100%; max-width: 820px; margin-top: 24px; }
 </style>

@@ -78,7 +78,7 @@ function syncFilterLayout(event: MediaQueryListEvent) {
 onMounted(() => filterMedia.addEventListener("change", syncFilterLayout));
 onUnmounted(() => filterMedia.removeEventListener("change", syncFilterLayout));
 const searchFilterSummary = computed(() => {
-  const labels = [
+  const primary = [
     ...(filters.category ? [filters.category] : []),
     followOnly.value
       ? "我的关注"
@@ -86,8 +86,9 @@ const searchFilterSummary = computed(() => {
         ? "正在出摊"
         : "全部摊位",
   ];
+  const details = [];
   if (resultType.value !== "dishes") {
-    labels.push(
+    details.push(
       filters.sort === "rating"
         ? "摊位评分优先"
         : filters.sort === "distance"
@@ -96,10 +97,10 @@ const searchFilterSummary = computed(() => {
     );
   }
   if (resultType.value !== "stalls") {
-    if (mealBudget.value) labels.push(`餐点 ${mealBudget.value / 100} 元以内`);
-    if (mealSort.value === "price") labels.push("餐点价格从低到高");
+    if (mealBudget.value) details.push(`餐点 ${mealBudget.value / 100} 元以内`);
+    if (mealSort.value === "price") details.push("餐点价格从低到高");
   }
-  return labels.join(" · ");
+  return { primary: primary.join(" · "), details: details.join(" · ") };
 });
 const hasSearchFilters = computed(
   () =>
@@ -420,10 +421,15 @@ onMounted(() =>
       </button>
     </div>
     <section v-if="searching" class="search-filters" aria-label="搜索筛选">
-      <div class="search-filter-heading">
-        <p class="search-filter-summary" aria-label="当前筛选条件">
-          {{ searchFilterSummary }}
-        </p>
+      <div
+        class="search-filter-heading search-filter-summary"
+        aria-label="当前筛选条件"
+      >
+        <span class="search-filter-primary">{{ searchFilterSummary.primary }}</span>
+        <span v-if="searchFilterSummary.details" class="search-filter-details"
+          ><span class="search-filter-separator" aria-hidden="true"> · </span
+          >{{ searchFilterSummary.details }}</span
+        >
         <button
           type="button"
           class="search-filter-toggle"
@@ -776,23 +782,37 @@ onMounted(() =>
   margin-bottom: 22px;
 }
 .search-filter-heading {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  flex-wrap: wrap;
   gap: 0 12px;
   padding: 6px 14px;
 }
-.search-filter-summary {
-  flex: 1;
+.search-filter-primary {
+  grid-column: 1;
+  grid-row: 1;
   min-width: 0;
-  margin: 0;
   font-size: 13px;
   line-height: 1.7;
+  font-weight: 600;
+  color: #604830;
+  overflow-wrap: anywhere;
+}
+.search-filter-details {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  padding-bottom: 4px;
+  font-size: 12px;
+  line-height: 1.6;
   color: #735b43;
   overflow-wrap: anywhere;
 }
+.search-filter-separator {
+  display: none;
+}
 .search-filter-toggle,
 .search-filter-clear {
+  grid-row: 1;
   min-height: 44px;
   display: inline-flex;
   align-items: center;
@@ -802,10 +822,14 @@ onMounted(() =>
   font-size: 13px;
   color: #9a4923;
 }
+.search-filter-toggle {
+  grid-column: 2;
+}
 .search-filter-toggle .expanded {
   transform: rotate(180deg);
 }
 .search-filter-clear {
+  grid-column: 3;
   color: #756450;
   text-decoration: underline;
   text-underline-offset: 3px;

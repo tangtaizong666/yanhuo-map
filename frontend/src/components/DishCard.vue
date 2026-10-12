@@ -31,7 +31,7 @@ watch(
         @error="imageFailed = true"
       />
       <div v-else class="dish-photo-placeholder">
-        <Utensils :size="32" :stroke-width="1.2" /><span>等待美味亮相</span>
+        <Utensils :size="32" :stroke-width="1.2" /><span>暂无餐点照片</span>
       </div>
       <span v-if="product.sale_paused" class="dish-availability">暂停供应</span>
       <span
@@ -55,21 +55,22 @@ watch(
       /></span>
     </div>
     <div class="dish-card-body">
+      <h3>{{ product.name }}</h3>
+      <div class="dish-card-bottom">
+        <strong>¥{{ money(product.price_cents) }}</strong>
+      </div>
       <p class="dish-stall">
         <Store :size="13" /><span>{{ stall.name }}</span>
       </p>
-      <h3>{{ product.name }}</h3>
-      <p class="dish-description">
-        {{ product.description || "点开看看这份好味道" }}
+      <p v-if="product.description?.trim()" class="dish-description">
+        {{ product.description }}
       </p>
-      <div class="dish-card-bottom">
-        <strong>¥{{ money(product.price_cents) }}</strong
-        ><span>查看餐点 <ArrowUpRight :size="13" /></span>
-      </div>
       <p class="dish-preparation">
         <Clock3 :size="12" /><span
-          >{{ preparationLabel(stall.prep_minutes)
-          }}<small>接单后更新</small></span
+          ><span class="dish-preparation-duration">{{
+            preparationLabel(stall.prep_minutes)
+          }}</span
+          ><small>接单后更新</small></span
         >
       </p>
     </div>
@@ -81,23 +82,33 @@ watch(
   display: flex;
   align-items: flex-start;
   gap: 5px;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.6;
   color: #796047;
-  margin: 12px 0 0;
+  margin: 8px 0 0;
 }
 .dish-preparation svg {
   flex: none;
   margin-top: 3px;
 }
+.dish-preparation > span {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  min-width: 0;
+}
+.dish-preparation-duration {
+  white-space: nowrap;
+}
 .dish-preparation small {
-  display: block;
-  font-size: 10px;
-  color: #816e59;
+  font: inherit;
+  color: inherit;
+  white-space: nowrap;
 }
 .dish-card {
   display: block;
   min-width: 0;
+  min-height: 44px;
   background: #fffdf9;
   border: 1px solid #eae0d3;
   border-radius: 18px;
@@ -109,6 +120,10 @@ watch(
 .dish-card:hover {
   transform: translateY(-4px);
   box-shadow: 0 12px 30px #51331910;
+}
+.dish-card:focus-visible {
+  outline: 3px solid #ad552b;
+  outline-offset: 3px;
 }
 .dish-card-photo {
   position: relative;
@@ -144,8 +159,9 @@ watch(
   color: #5e5347;
   background: #fffaf0ed;
   padding: 5px 9px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
+  max-width: calc(100% - 24px);
 }
 .dish-availability.available {
   color: #355e41;
@@ -171,6 +187,10 @@ watch(
   gap: 5px;
   color: #80705f;
   font-size: 12px;
+  margin: 8px 0 0;
+}
+.dish-stall svg {
+  flex: none;
 }
 .dish-stall span {
   overflow: hidden;
@@ -178,9 +198,16 @@ watch(
   white-space: nowrap;
 }
 .dish-card h3 {
-  margin-top: 6px;
+  margin: 0;
   font-size: 18px;
   color: #3e3025;
+  line-height: 1.4;
+  min-height: 2.8em;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 .dish-description {
   font-size: 12px;
@@ -193,21 +220,12 @@ watch(
 .dish-card-bottom {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 5px;
-  margin-top: 16px;
+  margin-top: 6px;
 }
 .dish-card-bottom strong {
   font-size: 20px;
   color: #b95422;
   font-variant-numeric: tabular-nums;
-}
-.dish-card-bottom > span {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 11px;
-  color: #83674f;
 }
 @media (max-width: 767px) {
   .dish-card {
@@ -228,10 +246,8 @@ watch(
     top: 8px;
     left: 8px;
     padding: 4px 6px;
-    font-size: 10px;
-  }
-  .dish-card-bottom > span {
-    font-size: 10px;
+    font-size: 12px;
+    max-width: calc(100% - 16px);
   }
   .dish-card-bottom strong {
     font-size: 18px;
@@ -240,9 +256,6 @@ watch(
   .dish-description {
     font-size: 12px;
   }
-  .dish-card-bottom { margin-top: 12px; }
-  .dish-preparation { margin-top: 8px; font-size: 12px; }
-  .dish-preparation small { font-size: 11px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .dish-card,
