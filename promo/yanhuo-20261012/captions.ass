@@ -10,7 +10,7 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 Style: Main,Microsoft YaHei,56,&H00F7F9FF,&H000000FF,&H600E1017,&H90101010,0,0,0,0,100,100,3,0,1,1.6,1.2,2,100,100,100,1
 Style: Product,Microsoft YaHei,56,&H00283140,&H000000FF,&HFF000000,&HFF000000,0,0,0,0,100,100,3,0,1,0,0,2,100,100,100,1
 Style: Brand,Microsoft YaHei,118,&H00F2F5FF,&H000000FF,&H800E1017,&H90101010,-1,0,0,0,100,100,7,0,1,0,1,7,110,110,340,1
-Style: Small,Microsoft YaHei,21,&H00D9E3EB,&H000000FF,&H90000000,&H90101010,0,0,0,0,100,100,0,0,1,0.6,0.5,2,80,80,33,1
+Style: Small,Microsoft YaHei,28,&H00F2F5FF,&H000000FF,&H50000000,&H90101010,0,0,0,0,100,100,0,0,1,1,0.8,2,80,80,54,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

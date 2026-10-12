@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parents[1]
 STOCK = REPO / '.runtime' / 'promo-stock'
 WORK = ROOT / 'work'
-FPS = 25
+FPS = 30
 COLOR_PIPELINE_VERSION = 2
 GRADES = {
     'none': '',
@@ -57,7 +57,7 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 Style: Main,Microsoft YaHei,56,&H00F7F9FF,&H000000FF,&H600E1017,&H90101010,0,0,0,0,100,100,3,0,1,1.6,1.2,2,100,100,100,1
 Style: Product,Microsoft YaHei,56,&H00283140,&H000000FF,&HFF000000,&HFF000000,0,0,0,0,100,100,3,0,1,0,0,2,100,100,100,1
 Style: Brand,Microsoft YaHei,118,&H00F2F5FF,&H000000FF,&H800E1017,&H90101010,-1,0,0,0,100,100,7,0,1,0,1,7,110,110,340,1
-Style: Small,Microsoft YaHei,21,&H00D9E3EB,&H000000FF,&H90000000,&H90101010,0,0,0,0,100,100,0,0,1,0.6,0.5,2,80,80,33,1
+Style: Small,Microsoft YaHei,28,&H00F2F5FF,&H000000FF,&H50000000,&H90101010,0,0,0,0,100,100,0,0,1,1,0.8,2,80,80,54,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -90,6 +90,7 @@ def main():
     args = parser.parse_args()
     plan = json.loads((ROOT/'timeline.json').read_text(encoding='utf-8'))
     assert not plan['narration'] and abs(sum(s['duration'] for s in plan['shots'])-60)<0.001
+    assert plan['fps'] == FPS and round(plan['duration'] * FPS) == 1800
     WORK.mkdir(exist_ok=True); STOCK.mkdir(parents=True,exist_ok=True)
     if args.download:
         for asset in json.loads((ROOT/'sources.json').read_text(encoding='utf-8'))['videos']:
@@ -111,7 +112,7 @@ def main():
             if float(meta['format']['duration'])+0.03 < shot.get('in',0)+shot['duration']*speed:
                 raise ValueError(f'Source too short for shot {i+1}')
         out=WORK/f'{width}-shot-{i+1:02d}.mp4'
-        key=hashlib.sha256(json.dumps([shot,width,height,GRADES,COLOR_PIPELINE_VERSION],sort_keys=True).encode()+str(path.stat().st_mtime_ns).encode()).hexdigest()
+        key=hashlib.sha256(json.dumps([shot,width,height,FPS,GRADES,COLOR_PIPELINE_VERSION],sort_keys=True).encode()+str(path.stat().st_mtime_ns).encode()).hexdigest()
         stampfile=out.with_suffix('.sha256')
         if out.exists() and stampfile.exists() and stampfile.read_text()==key:
             parts.append(out);continue
@@ -120,7 +121,7 @@ def main():
         if shot.get('crop'):filters.append('crop='+shot['crop'])
         if shot.get('motion')=='gentle-push':
             # Subtle post-production motion only; this is explicitly an AI still.
-            filters += [f'scale={width*2}:{height*2}:force_original_aspect_ratio=increase',f'crop={width*2}:{height*2}',f"zoompan=z='1+on*0.00012':x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1:s={width}x{height}:fps={FPS}"]
+            filters += [f'scale={width*2}:{height*2}:force_original_aspect_ratio=increase',f'crop={width*2}:{height*2}',f"zoompan=z='1+on*0.003/{FPS}':x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1:s={width}x{height}:fps={FPS}"]
         else:filters += [f'scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos',f'crop={width}:{height}',f'fps={FPS}']
         if GRADES[shot['grade']]:filters.append(GRADES[shot['grade']])
         if i==0:filters.append('fade=t=in:st=0:d=0.4')
@@ -131,7 +132,7 @@ def main():
                     'setsar=1','format=yuv420p',
                     'setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709']
         print(f'Rendering {i+1}/{len(plan["shots"])}: {shot["note"]}',flush=True)
-        run(['ffmpeg','-y','-hide_banner','-loglevel','error',*inp,'-an','-vf',','.join(filters),'-frames:v',str(round(shot['duration']*FPS)),'-c:v','libx264','-preset','fast','-crf','18','-threads','4','-pix_fmt','yuv420p','-color_range','tv','-colorspace','bt709','-color_primaries','bt709','-color_trc','bt709','-video_track_timescale','25000',str(out)])
+        run(['ffmpeg','-y','-hide_banner','-loglevel','error',*inp,'-an','-vf',','.join(filters),'-frames:v',str(round(shot['duration']*FPS)),'-c:v','libx264','-preset','fast','-crf','18','-threads','4','-pix_fmt','yuv420p','-color_range','tv','-colorspace','bt709','-color_primaries','bt709','-color_trc','bt709','-video_track_timescale',str(FPS*1000),str(out)])
         count=int(next(s for s in probe(out)['streams'] if s['codec_type']=='video')['nb_frames'])
         assert count==round(shot['duration']*FPS),(i,count)
         stampfile.write_text(key)
@@ -145,6 +146,8 @@ def main():
     print('Finishing subtitles and original instrumental music (no narration).',flush=True)
     run(['ffmpeg','-y','-hide_banner','-loglevel','error','-i',str(base),'-i',str(ROOT/'audio/original-bed.wav'),'-map','0:v:0','-map','1:a:0','-vf','subtitles=captions.ass','-af','loudnorm=I=-18:TP=-1.5:LRA=8','-t','60','-c:v','libx264','-preset','medium','-crf','18','-threads','4','-pix_fmt','yuv420p','-color_range','tv','-colorspace','bt709','-color_primaries','bt709','-color_trc','bt709','-c:a','aac','-b:a','192k','-ar','48000','-movflags','+faststart','-metadata','title=烟火地图 · 找到惦记的那一口','-metadata','comment=No voiceover. Licensed stock montage and AI-generated end visual. Credits: sources.json.',str(output)])
     details=probe(output)
+    video = next(s for s in details['streams'] if s['codec_type']=='video')
+    assert video['r_frame_rate'] == '30/1' and int(video['nb_frames']) == 1800
     (ROOT/('review-probe.json' if args.preview else 'video-probe.json')).write_text(json.dumps(details,ensure_ascii=False,indent=2),encoding='utf-8')
     run(['ffmpeg','-y','-v','error','-ss','56','-i',str(output),'-frames:v','1',str(ROOT/'poster.jpg')])
     run(['ffmpeg','-y','-v','error','-i',str(output),'-vf','fps=1/4,scale=480:-2,tile=5x3','-frames:v','1',str(ROOT/'contact-sheet.jpg')])

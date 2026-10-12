@@ -1,11 +1,11 @@
 {
   "file": "yanhuo-ad-60s-1080p.mp4",
-  "sha256": "bc8f5f05ee2c01d250f0c3dd38de09f57953c256f6e37f66cd6257831f34617a",
+  "sha256": "b6dd5419eda85564f94075f15e9ad6c56bb8645b7857797e93412a5bb73ea343",
   "duration_seconds": 60.0,
   "width": 1920,
   "height": 1080,
-  "fps": "25/1",
-  "decoded_video_frames": 1500,
+  "fps": "30/1",
+  "decoded_video_frames": 1800,
   "video_codec": "h264",
   "color_parameters": [
     "yuv420p",
@@ -22,5 +22,14 @@
   "decode_check": "passed; full video and audio decoded, no FFmpeg errors",
   "narration": "none; sole mapped audio input is original-bed.wav",
   "application_tests": "not run; artifact-only change",
-  "production_deployment": "not performed"
+  "production_deployment": "not performed",
+  "browser_playback": {
+    "mode": "muted local Chromium / Codex in-app browser",
+    "completed": true,
+    "duration_seconds": 60.0,
+    "processed_frames": 1800,
+    "renderer_dropped_frames": 2,
+    "media_errors": 0,
+    "note": "Renderer dropped frames are playback statistics; the file independently decodes to exactly 1800 frames."
+  }
 }
