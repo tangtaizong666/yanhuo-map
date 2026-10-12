@@ -165,7 +165,7 @@ def main():
                 }, indent=2), encoding="utf-8")
                 run("browser-integration", [node, "node_modules/@playwright/test/cli.js", "test",
                     "e2e/counter-integration.spec.ts", "e2e/simulation-live.spec.ts",
-                    "e2e/product-details.spec.ts", "e2e/checkout.spec.ts", "e2e/reorder.spec.ts",
+                    "e2e/product-details.spec.ts", "e2e/checkout.spec.ts", "e2e/checkout-isolation.spec.ts", "e2e/reorder.spec.ts",
                     "e2e/mobile-usability.spec.ts", "e2e/identity-cookie-integration.spec.ts",
                     "--reporter=list", f"--output={artifacts / 'browser-results'}"], FRONTEND, timeout=540)
             finally:

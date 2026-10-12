@@ -23,7 +23,11 @@ import { copyText, newRequestKey, trackEngagement } from "../lib/engagement";
 import { useSession } from "../stores/session";
 import type { Stall } from "../lib/types";
 
-const props = defineProps<{ stall: Stall; compact?: boolean }>();
+const props = defineProps<{
+  stall: Stall;
+  compact?: boolean;
+  condensed?: boolean;
+}>();
 const session = useSession();
 const dialog = ref<HTMLDialogElement>();
 const kind = ref("not_found");
@@ -36,6 +40,7 @@ const uncertain = ref(false);
 const copyMessage = ref("");
 const addressField = ref<HTMLInputElement>();
 const showAddressField = ref(false);
+const toolsExpanded = ref(false);
 const validLocation = computed(
   () =>
     Number.isFinite(props.stall.latitude) &&
@@ -158,26 +163,34 @@ function reset() {
   dialog.value?.close();
   showAddressField.value = false;
   copyMessage.value = "";
+  toolsExpanded.value = false;
 }
 watch(() => [props.stall.id, session.user?.id], reset, { flush: "sync" });
 onUnmounted(reset);
 </script>
 
 <template>
-  <section :class="['stall-visit', { compact }]" aria-label="到摊指引">
-    <div class="visit-heading">
+  <section
+    :class="['stall-visit', { compact, condensed }]"
+    aria-label="到摊指引"
+  >
+    <div v-if="!condensed" class="visit-heading">
       <span class="visit-symbol"><MapPin :size="20" /></span>
       <div>
         <h3>到这里，找到好味道</h3>
         <p>
           {{ statusText(stall.status)
-          }}<template v-if="stall.transaction_enabled && stall.accepting_orders === false">
+          }}<template
+            v-if="stall.transaction_enabled && stall.accepting_orders === false"
+          >
             · 暂停线上接单</template
           >
         </p>
       </div>
     </div>
-    <strong class="visit-address">{{ stall.address || "商家暂未提供位置" }}</strong>
+    <strong class="visit-address">{{
+      stall.address || "商家暂未提供位置"
+    }}</strong>
     <div class="visit-facts">
       <span
         ><Clock3 :size="14" />{{
@@ -202,10 +215,24 @@ onUnmounted(reset);
           : "商家正在暂歇，出发前请先确认。"
       }}
     </p>
+    <p
+      v-else-if="
+        condensed &&
+        stall.transaction_enabled &&
+        stall.accepting_orders === false
+      "
+      class="visit-warning"
+    >
+      <AlertCircle :size="16" />暂停线上接单<span
+        v-if="stall.order_unavailable_reason"
+      >
+        · {{ stall.order_unavailable_reason }}</span
+      >
+    </p>
     <p class="visit-note">
       {{ stall.arrival_note || "商家尚未补充认摊说明，出发前可先联系确认。" }}
     </p>
-    <p v-if="stall.usual_hours" class="visit-note">
+    <p v-if="stall.usual_hours && !condensed" class="visit-note">
       通常出摊：{{ stall.usual_hours }}（商家计划，以当日确认状态为准）
     </p>
     <figure v-if="stall.arrival_image" class="visit-photo">
@@ -226,24 +253,53 @@ onUnmounted(reset);
         rel="noopener"
         @click="directions"
         ><Navigation :size="16" />查看路线</a
-      ><button type="button" @click="copyAddress">
-        <Copy :size="16" />复制地址</button
-      ><a v-if="phone" :href="`tel:${phone}`"><Phone :size="16" />联系商家</a>
+      >
+      <button
+        v-if="condensed"
+        type="button"
+        :aria-expanded="toolsExpanded"
+        :aria-controls="`visit-tools-${stall.id}`"
+        @click="toolsExpanded = !toolsExpanded"
+      >
+        {{ toolsExpanded ? "收起辅助信息" : "联系与更多信息" }}
+      </button>
+      <template v-else>
+        <button type="button" @click="copyAddress">
+          <Copy :size="16" />复制地址
+        </button>
+        <a v-if="phone" :href="`tel:${phone}`"><Phone :size="16" />联系商家</a>
+      </template>
     </div>
-    <p v-if="copyMessage" class="visit-copy-message" role="status">
-      {{ copyMessage }}
-    </p>
-    <input
-      v-if="showAddressField"
-      ref="addressField"
-      class="visit-copy-field"
-      :value="addressText"
-      readonly
-      aria-label="可复制的摊位地址"
-    />
-    <button type="button" class="visit-report" @click="openReport">
-      <Flag :size="14" />没找到摊位？告诉我们<span>反馈位置问题</span>
-    </button>
+    <div
+      :id="`visit-tools-${stall.id}`"
+      v-show="!condensed || toolsExpanded"
+      class="visit-utilities"
+    >
+      <p v-if="condensed && stall.usual_hours" class="visit-note">
+        通常出摊：{{ stall.usual_hours }}（商家计划，以当日确认状态为准）
+      </p>
+      <div v-if="condensed" class="visit-actions">
+        <button type="button" @click="copyAddress">
+          <Copy :size="16" />复制地址
+        </button>
+        <a v-if="phone" :href="`tel:${phone}`"><Phone :size="16" />联系商家</a>
+      </div>
+      <p v-if="copyMessage" class="visit-copy-message" role="status">
+        {{ copyMessage }}
+      </p>
+      <input
+        v-if="showAddressField"
+        ref="addressField"
+        class="visit-copy-field"
+        :value="addressText"
+        readonly
+        aria-label="可复制的摊位地址"
+      />
+      <button type="button" class="visit-report" @click="openReport">
+        <Flag :size="14" />没找到摊位？告诉我们<span>反馈位置问题</span>
+      </button>
+      <slot />
+    </div>
   </section>
   <dialog
     ref="dialog"
@@ -483,6 +539,25 @@ onUnmounted(reset);
 }
 .compact .visit-report span {
   display: none;
+}
+.condensed .visit-address {
+  font-size: 16px;
+}
+.condensed .visit-facts {
+  margin: 5px 0;
+}
+.condensed > .visit-note {
+  margin: 6px 0 8px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.condensed > .visit-actions {
+  margin-top: 8px;
+}
+.condensed .visit-utilities {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 4px;
 }
 .visit-report-dialog {
   width: min(460px, calc(100vw - 28px));

@@ -1,5 +1,13 @@
 import { expect, test } from "@playwright/test";
-import { assertNoHorizontalOverflow, login, mutate } from "./helpers";
+import {
+  assertNoHorizontalOverflow,
+  login,
+  mutate,
+  requireIsolatedApi,
+} from "./helpers";
+
+// Two scenarios submit the login form directly instead of using login().
+test.beforeEach(() => requireIsolatedApi());
 
 test("student login returns to the requested checkout", async ({ page }) => {
   await page.goto("/checkout/1");

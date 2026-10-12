@@ -93,11 +93,85 @@ test("stall without merchant recognition data shows an honest missing descriptio
   await expect(page.locator(".visit-photo")).toHaveCount(0);
 });
 
+test("a stall without recognition material keeps the first meal action in the mobile viewport", async ({ page }, info) => {
+  const state = await fixture(page);
+  Object.assign(state.detail, { arrival_note: "", arrival_image: "", usual_hours: "11:00–14:00",
+    contact_phone: "13800000000", products: [meal(1).product], receiving_status: "recent", receiving_valid_for_seconds: 30 });
+  for (const width of [360, 390, 768, 1440]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto("/stalls/1");
+    const guide = page.getByRole("region", { name: "到摊指引" });
+    await expect(guide.locator(".visit-address")).toHaveText("南门1号");
+    await expect(guide.locator(".visit-facts")).toContainText("商家");
+    await expect(guide).toContainText("商家尚未补充认摊说明");
+    if (width <= 390) {
+      const add = page.getByRole("button", { name: "添加第1页煎饼", exact: true });
+      await expect(add).toBeInViewport({ ratio: 1 });
+      await expect(page.locator(".product-bottom .price").first()).toBeInViewport({ ratio: 1 });
+      expect((await add.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      await expect(guide.getByRole("button", { name: "联系与更多信息" })).toHaveAttribute("aria-expanded", "false");
+      await expect(guide.getByText(/通常出摊/)).toBeHidden();
+    }
+    await assertNoHorizontalOverflow(page);
+    await page.screenshot({ path: info.outputPath(`stall-first-meal-${width}.png`) });
+  }
+  expect(state.unexpected).toEqual([]);
+});
+
+for (const width of [360, 390]) {
+  test(`mobile arrival utilities expand by keyboard while recognition stays visible at ${width}px`, async ({ page }, info) => {
+    const state = await fixture(page);
+    Object.assign(state.detail, { usual_hours: "11:00–14:00", contact_phone: "13800000000" });
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto("/stalls/1");
+    const guide = page.getByRole("region", { name: "到摊指引" });
+    const toggle = guide.getByRole("button", { name: "联系与更多信息" });
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(guide.getByText(/通常出摊/)).toBeHidden();
+    await expect(guide.getByRole("link", { name: "联系商家" })).toBeHidden();
+    await expect(guide.getByRole("button", { name: "分享小摊" })).toBeHidden();
+    await expect(guide.locator(".visit-photo img")).toBeVisible();
+    await expect(guide.getByText("绿色棚顶，靠近南门便利店", { exact: true })).toBeVisible();
+    await expect(guide.getByRole("link", { name: "查看路线" })).toBeVisible();
+    await toggle.focus();
+    await page.keyboard.press("Enter");
+    const collapse = guide.getByRole("button", { name: "收起辅助信息" });
+    await expect(collapse).toHaveAttribute("aria-expanded", "true");
+    await expect(guide.getByText(/通常出摊/)).toBeVisible();
+    await expect(guide.getByRole("link", { name: "联系商家" })).toHaveAttribute("href", "tel:13800000000");
+    await expect(guide.getByRole("button", { name: "复制地址" })).toBeVisible();
+    await guide.getByRole("button", { name: /没找到摊位/ }).click();
+    await expect(page.getByRole("dialog", { name: "没找到 第1页煎饼摊？" })).toBeVisible();
+    await page.getByRole("button", { name: "关闭位置反馈" }).click();
+    await guide.getByRole("button", { name: "分享小摊" }).click();
+    await expect(page.getByRole("dialog", { name: "把好味道分享出去" })).toBeVisible();
+    await page.getByRole("button", { name: "关闭分享" }).click();
+    await page.screenshot({ path: info.outputPath(`stall-utilities-expanded-${width}.png`), fullPage: true });
+    await collapse.focus();
+    await page.keyboard.press("Space");
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(guide.getByText(/通常出摊/)).toBeHidden();
+    await expect(guide.locator(".visit-photo img")).toBeVisible();
+    await expect(guide.getByText("绿色棚顶，靠近南门便利店", { exact: true })).toBeVisible();
+    await page.setViewportSize({ width: 768, height: 844 });
+    await expect(toggle).toHaveCount(0);
+    await expect(guide.getByRole("link", { name: "联系商家" })).toBeVisible();
+    await expect(guide.getByRole("button", { name: "分享小摊" })).toBeVisible();
+    await page.setViewportSize({ width, height: 844 });
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await assertNoHorizontalOverflow(page);
+    expect(state.unexpected).toEqual([]);
+  });
+}
+
 for (const [status, reason] of [["stale", "位置已过期"], ["closed", "商家已收摊"], ["open", "备餐已满"]]) {
   test(`a qualified ${status} stall describes current unavailability instead of lost ordering eligibility`, async ({ page }) => {
     const state = await fixture(page);
-    Object.assign(state.detail, { status, can_order: false, order_unavailable_reason: reason });
+    Object.assign(state.detail, { status, can_order: false, accepting_orders: false, order_unavailable_reason: reason });
+    await page.setViewportSize({ width: 360, height: 844 });
     await page.goto("/stalls/1");
+    await expect(page.getByRole("region", { name: "到摊指引" }).locator(".visit-warning")).toContainText(reason!);
+    await expect(page.getByRole("button", { name: "联系与更多信息" })).toHaveAttribute("aria-expanded", "false");
     await expect(page.locator(".overview-facts")).not.toContainText("暂未开通在线点单");
     await expect(page.locator(".overview-facts")).toContainText(reason!);
   });

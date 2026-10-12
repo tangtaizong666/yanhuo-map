@@ -1,14 +1,52 @@
 import {
   expect,
+  request,
   test,
+  type APIRequestContext,
   type Browser,
   type BrowserContext,
   type Page,
 } from "@playwright/test";
-import { baseURL, createStudent, mutate } from "./helpers";
+import { baseURL, createStudent, mutate, requireIsolatedApi } from "./helpers";
 
 const noteSelector = "例如：餐具按需提供（每份口味请在上方分别填写）";
 const phoneSelector = "如遇缺货，方便商家联系你";
+
+test.skip(
+  process.env.E2E_ISOLATED !== "1",
+  "Requires an isolated demo server and E2E_ISOLATED=1",
+);
+
+let cleanupFixture: (() => Promise<void>) | undefined;
+test.afterEach(async () => {
+  // Hooks receive their own teardown timeout, even when a page action timed out.
+  const cleanup = cleanupFixture;
+  cleanupFixture = undefined;
+  await cleanup?.();
+});
+
+async function cleanupMutation(
+  api: APIRequestContext,
+  path: string,
+  data: unknown,
+  method = "POST",
+) {
+  requireIsolatedApi();
+  const csrf = await api.get("/api/v1/auth/csrf");
+  expect(csrf.ok(), await csrf.text()).toBeTruthy();
+  return api.fetch(`/api/v1${path}`, {
+    method,
+    data,
+    headers: { "X-CSRFToken": (await csrf.json()).csrfToken, Origin: baseURL },
+  });
+}
+
+async function expandContact(page: Page) {
+  const details = page.locator('details[aria-label="联系与备注"]');
+  if ((await details.getAttribute("open")) === null) {
+    await details.locator("summary").click();
+  }
+}
 
 async function fixture(browser: Browser, context: BrowserContext) {
   const first = await createStudent(context);
@@ -55,53 +93,86 @@ async function fixture(browser: Browser, context: BrowserContext) {
       .click();
     await page.getByRole("link", { name: "去结算", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/checkout/${stall.id}$`));
+    await expandContact(page);
     await page.getByPlaceholder(noteSelector).fill("账号 A 的口味备注");
     await page.getByPlaceholder(phoneSelector).fill("13800000001");
   }
   async function cleanup() {
-    // Each account was created by this fixture, and only this isolated product is cleaned up.
-    for (const student of [first, second]) {
-      expect((await mutate(context, "/auth/login", student)).ok()).toBeTruthy();
-      const orders = await (
-        await context.request.get(`${baseURL}/api/v1/orders`)
-      ).json();
-      for (const order of orders) {
-        if (
-          order.status === "pending" &&
-          order.items.every((item: any) => item.product_id === product.id)
-        ) {
-          const cancelled = await mutate(
-            context,
-            `/orders/${order.id}/cancel`,
-            { reason: "结算隔离测试结束，恢复库存" },
-          );
-          expect(cancelled.ok(), await cancelled.text()).toBeTruthy();
-        }
+    // An independent API context survives the test page/browser-context closing.
+    const api = await request.newContext({ baseURL, timeout: 10_000 });
+    const errors: unknown[] = [];
+    const attempt = async (action: () => Promise<void>) => {
+      try {
+        await action();
+      } catch (error) {
+        errors.push(error);
       }
+    };
+    const loginMerchant = async () => {
+      const login = await cleanupMutation(api, "/auth/login", {
+        username: "vendor",
+        password: "demo12345",
+      });
+      expect(login.ok(), await login.text()).toBeTruthy();
+    };
+    try {
+      // Hide only our fixture first; an account/order cleanup failure must not
+      // leave the synthetic dish visible or prevent the remaining cleanup.
+      await attempt(async () => {
+        await loginMerchant();
+        const hidden = await cleanupMutation(
+          api,
+          `/merchant/products/${product.id}`,
+          { is_active: false },
+          "PATCH",
+        );
+        expect(hidden.ok(), await hidden.text()).toBeTruthy();
+      });
+      for (const student of [first, second]) {
+        await attempt(async () => {
+          const login = await cleanupMutation(api, "/auth/login", student);
+          expect(login.ok(), await login.text()).toBeTruthy();
+          const orders = await (await api.get("/api/v1/orders")).json();
+          for (const order of orders) {
+            if (
+              order.status === "pending" &&
+              order.items.every((item: any) => item.product_id === product.id)
+            ) {
+              const cancelled = await cleanupMutation(
+                api,
+                `/orders/${order.id}/cancel`,
+                { reason: "结算隔离测试结束，恢复库存" },
+              );
+              expect(cancelled.ok(), await cancelled.text()).toBeTruthy();
+            }
+          }
+        });
+      }
+      await attempt(async () => {
+        await loginMerchant();
+        const restored = await cleanupMutation(
+          api,
+          `/merchant/stalls/${stall.id}/status`,
+          {
+            status: stall.session_status || "closed",
+            confirm_location: true,
+            closes_at:
+              stall.closes_at && Date.parse(stall.closes_at) > Date.now()
+                ? stall.closes_at
+                : null,
+          },
+        );
+        expect(restored.ok(), await restored.text()).toBeTruthy();
+      });
+    } finally {
+      await api.dispose();
+      await merchant.close().catch(() => {});
     }
-    const hidden = await mutate(
-      merchant,
-      `/merchant/products/${product.id}`,
-      { is_active: false },
-      "PATCH",
-    );
-    expect(hidden.ok(), await hidden.text()).toBeTruthy();
-    const restored = await mutate(
-      merchant,
-      `/merchant/stalls/${stall.id}/status`,
-      {
-        status: stall.session_status || "closed",
-        confirm_location: true,
-        closes_at:
-          stall.closes_at && Date.parse(stall.closes_at) > Date.now()
-            ? stall.closes_at
-            : null,
-      },
-    );
-    expect(restored.ok(), await restored.text()).toBeTruthy();
-    await merchant.close();
+    if (errors.length)
+      throw new AggregateError(errors, "Checkout fixture cleanup failed");
   }
-  return { first, second, firstUser, merchant, stall, product, start, cleanup };
+  cleanupFixture = cleanup;
+  return { first, second, firstUser, merchant, stall, product, start };
 }
 
 async function holdRealOrderResponse(page: Page) {
@@ -148,15 +219,30 @@ async function switchIdentity(
   page: Page,
   context: BrowserContext,
   account: { username: string; password: string },
+  draft: { stallId: number; product: unknown },
 ) {
   const response = await mutate(context, "/auth/login", account);
   expect(response.ok(), await response.text()).toBeTruthy();
   const user = await response.json();
+  // Each account owns its cart. Give B an explicit draft before the identity
+  // refresh, keeping A's mounted request alive to exercise the late response.
+  await page.evaluate(
+    ({ userId, draft }) => {
+      localStorage.setItem(
+        `yanhuo-cart-v2:user:${userId}`,
+        JSON.stringify({
+          [draft.stallId]: [{ product: draft.product, quantity: 1 }],
+        }),
+      );
+    },
+    { userId: user.id, draft },
+  );
   const identity = page.waitForResponse((result) =>
     result.url().endsWith("/auth/me"),
   );
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   expect((await identity).ok()).toBeTruthy();
+  await expandContact(page);
   await expect(page.getByPlaceholder(noteSelector)).toHaveValue("");
   return user;
 }
@@ -197,7 +283,11 @@ for (const lateResponse of ["success", "price_changed"] as const) {
         original.request.idempotency_key,
       );
 
-      const secondUser = await switchIdentity(page, context, f.second);
+      const secondUser = await switchIdentity(page, context, f.second, {
+        stallId: f.stall.id,
+        product: f.product,
+      });
+      const secondCartKey = `yanhuo-cart-v2:user:${secondUser.id}`;
       await page
         .getByRole("button", { name: `增加${f.product.name}`, exact: true })
         .click();
@@ -210,18 +300,25 @@ for (const lateResponse of ["success", "price_changed"] as const) {
       await page
         .getByRole("button", { name: "提交自取订单", exact: true })
         .click();
-      await expect(page.getByRole("alert")).toContainText("暂时连接不上");
+      const networkAlert = page
+        .getByRole("alert")
+        .filter({ hasText: "暂时连接不上" });
+      await expect(networkAlert).toBeVisible();
       const secondKey = `yanhuo-checkout-${secondUser.id}-${f.stall.id}`;
       const before = await page.evaluate(
-        ({ firstKey, secondKey }) => ({
+        ({ firstKey, secondKey, secondCartKey }) => ({
           first: sessionStorage.getItem(firstKey),
           second: sessionStorage.getItem(secondKey),
-          cart: localStorage.getItem("yanhuo-cart-v1"),
+          cart: localStorage.getItem(secondCartKey),
         }),
-        { firstKey, secondKey },
+        { firstKey, secondKey, secondCartKey },
       );
       expect(before.first).toBe(firstRecord);
       expect(before.second).toBeTruthy();
+      const secondCart = JSON.parse(before.cart!)[f.stall.id];
+      expect(secondCart).toHaveLength(1);
+      expect(secondCart[0].quantity).toBe(2);
+      expect(secondCart[0].product.price_cents).toBe(1000);
 
       held.release();
       await held.completed;
@@ -239,14 +336,14 @@ for (const lateResponse of ["success", "price_changed"] as const) {
       await expect(page.getByPlaceholder(phoneSelector)).toHaveValue(
         "13800000002",
       );
-      await expect(page.getByRole("alert")).toContainText("暂时连接不上");
+      await expect(networkAlert).toBeVisible();
       const after = await page.evaluate(
-        ({ firstKey, secondKey }) => ({
+        ({ firstKey, secondKey, secondCartKey }) => ({
           first: sessionStorage.getItem(firstKey),
           second: sessionStorage.getItem(secondKey),
-          cart: localStorage.getItem("yanhuo-cart-v1"),
+          cart: localStorage.getItem(secondCartKey),
         }),
-        { firstKey, secondKey },
+        { firstKey, secondKey, secondCartKey },
       );
       expect(after).toEqual(before);
       const secondOrders = await (
@@ -262,8 +359,7 @@ for (const lateResponse of ["success", "price_changed"] as const) {
         expect(firstOrders[0].id).toBe(original.body.id);
     } finally {
       held?.release();
-      await page.unroute("**/api/v1/orders");
-      await f.cleanup();
+      await page.unroute("**/api/v1/orders").catch(() => {});
     }
   });
 }
@@ -308,13 +404,18 @@ test("leaving checkout ignores a late success and returning can retry the commit
     expect(
       await page.evaluate((key) => sessionStorage.getItem(key), firstKey),
     ).toBe(originalRecord);
-    const cart = await page.evaluate(() =>
-      JSON.parse(localStorage.getItem("yanhuo-cart-v1") || "{}"),
+    const cart = await page.evaluate(
+      (userId) =>
+        JSON.parse(
+          localStorage.getItem(`yanhuo-cart-v2:user:${userId}`) || "{}",
+        ),
+      f.firstUser.id,
     );
     expect(cart[f.stall.id]).toHaveLength(1);
     expect(cart[f.stall.id][0].quantity).toBe(1);
     await page.unroute("**/api/v1/orders");
     await page.goto(`/checkout/${f.stall.id}`);
+    await expandContact(page);
     await expect(page.getByPlaceholder(noteSelector)).toHaveValue(
       "账号 A 的口味备注",
     );
@@ -340,9 +441,10 @@ test("leaving checkout ignores a late success and returning can retry the commit
     expect(
       await page.evaluate((key) => sessionStorage.getItem(key), firstKey),
     ).toBeNull();
+    // Exercise teardown after the page has gone, as happens on test timeouts.
+    await page.close();
   } finally {
     held?.release();
-    await page.unroute("**/api/v1/orders");
-    await f.cleanup();
+    await page.unroute("**/api/v1/orders").catch(() => {});
   }
 });

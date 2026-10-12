@@ -7,6 +7,18 @@ import {
 
 export const baseURL = process.env.E2E_BASE_URL || "http://127.0.0.1:5183";
 
+export function requireIsolatedApi() {
+  if (
+    process.env.E2E_ISOLATED !== "1" ||
+    !process.env.E2E_BASE_URL ||
+    ["5183", "8087"].includes(new URL(baseURL).port)
+  ) {
+    throw new Error(
+      "Real API tests require E2E_ISOLATED=1 and an explicit disposable E2E_BASE_URL; run scripts/verify_browser_integration.py. Never use the working 5183/8087 preview.",
+    );
+  }
+}
+
 // Isolated UI fixtures must model the cookie that Django sets before a write.
 export async function fulfillCsrf(route: Route) {
   // WebKit's intercepted response may omit Set-Cookie under the test runner.
@@ -52,6 +64,7 @@ export async function mutate(
   data: unknown,
   method = "POST",
 ) {
+  requireIsolatedApi();
   await context.request.get(`${baseURL}/api/v1/auth/csrf`);
   const csrf = (await context.cookies()).find(
     (cookie) => cookie.name === "csrftoken",
@@ -65,6 +78,7 @@ export async function mutate(
 }
 
 export async function createStudent(context: BrowserContext) {
+  requireIsolatedApi();
   const config = await (
     await context.request.get(`${baseURL}/api/v1/config`)
   ).json();
@@ -113,6 +127,7 @@ export async function correctStock(
 }
 
 export async function login(page: Page, username: string, password: string) {
+  requireIsolatedApi();
   await page.getByRole("textbox", { name: "账号", exact: true }).fill(username);
   await page.getByLabel("密码", { exact: true }).fill(password);
   const authenticated = page.waitForResponse(

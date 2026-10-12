@@ -200,8 +200,9 @@ onUnmounted(() => {
       >
         <div class="stall-main">
           <section class="stall-arrival" aria-label="认摊与路线">
-            <StallVisitInfo :stall="stall" />
-            <div class="stall-share-entry"><StallShare :stall="stall" /></div>
+            <StallVisitInfo :stall="stall" :condensed="mobileLayout">
+              <div class="stall-share-entry"><StallShare :stall="stall" /></div>
+            </StallVisitInfo>
           </section>
           <section class="stall-overview card">
             <div class="overview-top">
@@ -559,7 +560,7 @@ onUnmounted(() => {
 .stall-share-entry {
   display: flex;
   justify-content: flex-end;
-  margin: 12px 0 18px;
+  margin-top: 12px;
 }
 .stall-payment-status {
   flex-wrap: wrap;
