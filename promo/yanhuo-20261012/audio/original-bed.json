@@ -1,0 +1,12 @@
+{
+  "path": "C:\\my_pycharm\\流动摊贩\\promo\\yanhuo-20261012\\audio\\original-bed.wav",
+  "duration_seconds": 60.0,
+  "sample_rate": 48000,
+  "channels": 2,
+  "bpm": 106,
+  "rms": 0.100386,
+  "rms_dbfs": -19.97,
+  "peak": 0.56,
+  "peak_dbfs": -5.04,
+  "source": "Original procedural composition and synthesis; no third-party samples."
+}

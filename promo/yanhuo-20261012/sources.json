@@ -1,0 +1,27 @@
+{
+  "checked_on":"2026-10-12",
+  "license":"Pexels License",
+  "license_url":"https://www.pexels.com/license/",
+  "usage":"Edited promotional montage, with crops, color adjustment and Chinese typography. No implication that pictured people or places are participating merchants or endorse the project. Original footage is kept outside the deliverable folder.",
+  "videos":[
+    {"file":"wok-5336203.mp4","author":"ROMAN ODINTSOV","page":"https://www.pexels.com/video/chef-cooking-in-wok-close-up-5336203/","download":"https://videos.pexels.com/video-files/5336203/5336203-uhd_4096_2160_30fps.mp4"},
+    {"file":"gardenwalk-5177680.mp4","author":"Artem Shutkin","page":"https://www.pexels.com/video/people-walking-on-pavement-beside-garden-5177680/","download":"https://videos.pexels.com/video-files/5177680/5177680-uhd_3840_2160_25fps.mp4"},
+    {"file":"leaves-4980183.mp4","author":"Super Lunar","page":"https://www.pexels.com/video/tree-leaves-as-shade-from-the-sunrays-4980183/","download":"https://videos.pexels.com/video-files/4980183/4980183-uhd_3840_2160_25fps.mp4"},
+    {"file":"night-35321895.mp4","author":"LayG Traveller","page":"https://www.pexels.com/video/serene-night-scene-with-illuminated-lamp-post-35321895/","download":"https://videos.pexels.com/video-files/35321895/14965568_3840_2160_25fps.mp4"},
+    {"file":"sauce-2620043.mp4","author":"Engin Akyurt","page":"https://www.pexels.com/video/a-cook-using-a-wok-2620043/","download":"https://videos.pexels.com/video-files/2620043/2620043-uhd_3840_2160_25fps.mp4"},
+    {"file":"lemon-9001899.mp4","author":"olia danilevich","page":"https://www.pexels.com/video/a-person-pouring-water-with-lemon-on-a-drinking-glass-9001899/","download":"https://videos.pexels.com/video-files/9001899/9001899-hd_1920_1080_25fps.mp4"},
+    {"file":"noodles-4223987.mp4","author":"alleksana","page":"https://www.pexels.com/video/noodles-in-a-bowl-4223987/","download":"https://videos.pexels.com/video-files/4223987/4223987-hd_1920_1080_25fps.mp4"},
+    {"file":"plate-5848630.mp4","author":"Polina Tankilevitch","page":"https://www.pexels.com/video/flat-lay-asian-food-5848630/","download":"https://videos.pexels.com/video-files/5848630/5848630-hd_1920_1080_25fps.mp4"}
+  ],
+  "other_assets":[
+    {"file":"assets/brand-scene-ai.png","author":"Generated with OpenAI built-in image generation","type":"AI advertising illustration","use":"Creative brand ending only, not actual merchant photography; generated 2026-10-12"},
+    {"file":"assets/product-current.png","author":"烟火地图项目","type":"Actual local application screenshot","use":"Read-only screenshot of the demo stall page on 2026-10-12. No real account, orders, payment data or merchant uploads."},
+    {"file":"food-noodles.jpg (inside product screenshot)","author":"Fumikas Sagisavas","page":"https://commons.wikimedia.org/wiki/File:Grilled_cold_noodles_(20241101).jpg","license":"CC0","license_url":"https://creativecommons.org/publicdomain/zero/1.0/","use":"Already used in the project's demo UI; not an actual product photo."},
+    {"file":"audio/original-bed.wav","author":"Original procedural composition for this project","type":"Original instrumental music","use":"No third-party recordings, samples, lyrics or voiceover. See tools/create_music.py."}
+  ],
+  "visual_references":[
+    "https://dribbble.com/shots/27687058-Food-Product-Commercial-Cinematic-Product-Visualization",
+    "https://gsap.com/showcase/",
+    "https://www.pinterest.com/cliffordkhoi/street-food-vibe/"
+  ]
+}

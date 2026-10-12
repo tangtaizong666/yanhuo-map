@@ -1,0 +1,35 @@
+{
+  "title": "烟火地图 · 找到惦记的那一口",
+  "width": 1920,
+  "height": 1080,
+  "fps": 25,
+  "duration": 60,
+  "narration": false,
+  "shots": [
+    {"source":"wok-5336203.mp4", "in":0.3, "duration":2.4, "grade":"wok", "note":"火候开场，先给食物质感"},
+    {"source":"gardenwalk-5177680.mp4", "in":4, "duration":3.6, "grade":"outdoor", "note":"夕阳下结伴走过的脚步与长影"},
+    {"source":"leaves-4980183.mp4", "in":2, "duration":4, "grade":"outdoor", "note":"树影与天光"},
+    {"source":"night-35321895.mp4", "in":0.8, "duration":4, "grade":"night", "note":"傍晚入夜"},
+    {"source":"sauce-2620043.mp4", "in":2.4, "duration":4, "grade":"food", "note":"翻炒中景"},
+    {"source":"wok-5336203.mp4", "in":6.2, "duration":3, "grade":"wok", "note":"火焰与食物特写"},
+    {"source":"wok-5336203.mp4", "in":13.1, "duration":3, "grade":"wok", "note":"锅中食物跃起，接续烹饪动作"},
+    {"source":"sauce-2620043.mp4", "in":10, "duration":3, "grade":"food", "note":"调味动作"},
+    {"source":"lemon-9001899.mp4", "in":3, "duration":4, "grade":"drink", "note":"清爽饮品，转换节奏"},
+    {"source":"assets/product-current.png", "kind":"still", "duration":4, "grade":"none", "note":"2026-10-12 实际产品页面截图；保留示例、已收摊、商家确认时间，不改变数据"},
+    {"source":"gardenwalk-5177680.mp4", "in":7.5, "duration":3, "grade":"outdoor", "note":"步道上的脚步与树影，接续出发意象"},
+    {"source":"noodles-4223987.mp4", "in":2.6, "duration":5, "grade":"food", "note":"一碗热食的近景"},
+    {"source":"sauce-2620043.mp4", "in":22.6, "duration":4, "grade":"food", "note":"烹饪高潮"},
+    {"source":"plate-5848630.mp4", "in":0, "duration":2, "speed":0.75, "grade":"food", "note":"筷子夹起鸡翅；轻微慢放，未循环"},
+    {"source":"night-35321895.mp4", "in":7, "duration":4, "grade":"night", "note":"夜灯留白"},
+    {"source":"assets/brand-scene-ai.png", "kind":"still", "duration":7, "grade":"none", "motion":"gentle-push", "note":"AI 创意片尾主视觉；后期轻微推近，非实拍动态镜头"}
+  ],
+  "captions": [
+    {"start":3, "end":8.5, "text":"下课，去找点烟火气。"},
+    {"start":17, "end":21, "text":"刚刚好的热腾腾。"},
+    {"start":29.4, "end":31, "text":"出发前，看一眼。", "fade_out":0},
+    {"start":31, "end":34.6, "text":"出发前，看一眼。", "style":"product", "fade_in":0},
+    {"start":54, "end":60, "text":"烟火地图\n找到惦记的那一口。", "style":"brand",
+     "supporting_text":"校园周边找摊 · 先看出摊，再出发",
+     "disclosure":"创意示意画面 · 非项目实地拍摄 · 片尾含 AI 生成画面"}
+  ]
+}

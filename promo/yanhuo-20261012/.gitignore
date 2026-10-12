@@ -1,0 +1,6 @@
+work/
+__pycache__/
+audio/voice-*.wav
+audio/voice-timing.json
+tools/create_voice.py
+*.log
