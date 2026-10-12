@@ -14,8 +14,11 @@ test("real counter API preserves paused stock, rejects stale corrections, and lo
   context,
 }) => {
   const student = await browser.newContext({ baseURL });
+  const otherStudent = await browser.newContext({ baseURL });
   const credentials = await createStudent(student);
   expect((await mutate(student, "/auth/login", credentials)).ok()).toBeTruthy();
+  const otherCredentials = await createStudent(otherStudent);
+  expect((await mutate(otherStudent, "/auth/login", otherCredentials)).ok()).toBeTruthy();
   expect(
     (
       await mutate(context, "/auth/login", {
@@ -78,7 +81,9 @@ test("real counter API preserves paused stock, rejects stale corrections, and lo
       image: "/images/food-cold-noodles.jpg",
     });
     const first = await create(crypto.randomUUID());
-    const full = await mutate(student, "/orders", {
+    // A distinct student reaches the capacity gate; same-stall duplicates are
+    // now rejected by the account reservation budget before capacity is checked.
+    const full = await mutate(otherStudent, "/orders", {
       stall_id: stall.id,
       idempotency_key: crypto.randomUUID(),
       items: [
@@ -148,7 +153,7 @@ test("real counter API preserves paused stock, rejects stale corrections, and lo
     await page.goto("/merchant/orders");
     await page.getByLabel("选择管理的摊位").selectOption(String(stall.id));
     await page
-      .getByRole("button", { name: "查取餐码 · 搜索与筛选", exact: true })
+      .getByRole("button", { name: "取餐码查单", exact: true })
       .click();
     await page
       .getByLabel("8 位取餐码", { exact: true })
@@ -165,7 +170,7 @@ test("real counter API preserves paused stock, rejects stale corrections, and lo
     await expect(
       details.getByRole("button", { name: "核销并完成" }),
     ).toHaveCount(0);
-    await details.getByRole("button", { name: "确认已收到 ¥12" }).click();
+    await details.getByRole("button", { name: "收款 ¥12", exact: true }).click();
     await page
       .getByRole("dialog", { name: "确认这笔线下收款" })
       .getByRole("button", { name: "确认收款", exact: true })
@@ -212,5 +217,6 @@ test("real counter API preserves paused stock, rejects stale corrections, and lo
       "PATCH",
     );
     await student.close();
+    await otherStudent.close();
   }
 });

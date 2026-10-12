@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import {
   ArrowUpRight,
@@ -22,12 +22,84 @@ import { useSession } from "../stores/session";
 import { notify } from "../lib/notify";
 import { useFollowState } from "../lib/discovery";
 import { orderPage, type OrderCounts } from "../lib/orderPages";
-import type { Stall } from "../lib/types";
+import type { StallSummary as Stall, DiscoveryPage } from "../lib/types";
 
 const router = useRouter();
 const session = useSession();
 const section = ref("follows");
 const follows = ref<Stall[]>([]);
+const nextFollows = ref<string | null>(null);
+const followsLoaded = ref(false);
+const followsLoading = ref(true);
+const followsError = ref("");
+const moreError = ref("");
+const moreLoading = ref(false);
+let followsSequence = 0;
+let followsController: AbortController | undefined;
+let countsSequence = 0;
+let countsController: AbortController | undefined;
+let disposed = false;
+async function loadFollows(more = false) {
+  if (
+    disposed ||
+    !session.user ||
+    (more && (!nextFollows.value || moreLoading.value || followsLoading.value))
+  )
+    return;
+  const read = followState.snapshot();
+  const current = ++followsSequence;
+  followsController?.abort();
+  const controller = new AbortController();
+  followsController = controller;
+  followsLoading.value = !more;
+  moreLoading.value = more;
+  if (more) moreError.value = "";
+  else followsError.value = "";
+  try {
+    const result = await api<DiscoveryPage<Stall>>(
+      more
+        ? `/follows?cursor=${encodeURIComponent(nextFollows.value!)}`
+        : "/follows",
+      { signal: controller.signal },
+    );
+    if (
+      !disposed &&
+      current === followsSequence &&
+      followState.isCurrent(read)
+    ) {
+      follows.value = [
+        ...new Map(
+          [
+            ...(more ? follows.value : []),
+            ...result.results.map((row) => followState.reconcile(row, read)),
+          ].map((row) => [row.id, row]),
+        ).values(),
+      ].filter((row) => row.is_followed);
+      nextFollows.value = result.next;
+      followsLoaded.value = true;
+      followsError.value = "";
+      moreError.value = "";
+    }
+  } catch (cause) {
+    if (
+      !disposed &&
+      current === followsSequence &&
+      followState.isCurrent(read)
+    ) {
+      if (more) moreError.value = (cause as Error).message;
+      else followsError.value = (cause as Error).message;
+    }
+  } finally {
+    if (
+      !disposed &&
+      current === followsSequence &&
+      followState.isCurrent(read)
+    ) {
+      followsLoading.value = false;
+      moreLoading.value = false;
+    }
+  }
+}
 const followState = useFollowState((id, followed) => {
   if (!followed) follows.value = follows.value.filter((item) => item.id !== id);
 });
@@ -35,10 +107,26 @@ const { pendingFollows } = followState;
 watch(
   () => session.user?.id,
   () => {
+    followsSequence++;
+    countsSequence++;
+    followsController?.abort();
+    countsController?.abort();
     follows.value = [];
+    nextFollows.value = null;
+    followsLoaded.value = false;
+    followsLoading.value = true;
+    moreLoading.value = false;
+    followsError.value = "";
+    moreError.value = "";
+    orderCounts.value = null;
+    countsLoading.value = true;
+    countsError.value = "";
   },
+  { flush: "sync" },
 );
-const orderCounts = ref<OrderCounts>({ all: 0, reviewed: 0 });
+const orderCounts = ref<OrderCounts | null>(null);
+const countsLoading = ref(true);
+const countsError = ref("");
 const loading = ref(true);
 const error = ref("");
 const busy = ref(false);
@@ -51,13 +139,40 @@ const feedbackContact = ref("");
 const deletionOpen = ref(false);
 const deletionConfirmation = ref("");
 const deletionPassword = ref("");
-const reviews = computed(() => orderCounts.value.reviewed || 0);
+const reviews = computed(() => orderCounts.value?.reviewed ?? null);
 const sections = [
   { id: "follows", title: "我的关注", icon: Heart },
   { id: "settings", title: "账号设置", icon: Settings2 },
   { id: "feedback", title: "意见反馈", icon: MessageSquare },
   { id: "privacy", title: "隐私与账号", icon: ShieldCheck },
 ];
+async function loadCounts() {
+  if (disposed || !session.user) return;
+  const read = followState.snapshot();
+  const current = ++countsSequence;
+  countsController?.abort();
+  const controller = new AbortController();
+  countsController = controller;
+  countsLoading.value = true;
+  countsError.value = "";
+  try {
+    const result = await orderPage(
+      "/orders",
+      "all",
+      null,
+      controller.signal,
+      1,
+    );
+    if (!disposed && current === countsSequence && followState.isCurrent(read))
+      orderCounts.value = result.counts;
+  } catch (cause) {
+    if (!disposed && current === countsSequence && followState.isCurrent(read))
+      countsError.value = (cause as Error).message;
+  } finally {
+    if (!disposed && current === countsSequence && followState.isCurrent(read))
+      countsLoading.value = false;
+  }
+}
 onMounted(async () => {
   let read = followState.snapshot();
   try {
@@ -69,21 +184,21 @@ onMounted(async () => {
       return;
     }
     displayName.value = session.user.display_name;
-    const results = await Promise.all([
-      api<Stall[]>("/follows"),
-      orderPage("/orders", "all", null, undefined, 1),
-    ]);
-    if (followState.isCurrent(read)) {
-      follows.value = results[0]
-        .map((stall) => followState.reconcile(stall, read))
-        .filter((stall) => stall.is_followed);
-      orderCounts.value = results[1].counts;
-    }
+    // A delayed or failed statistics request must not hide usable follows.
+    loading.value = false;
+    await Promise.allSettled([loadFollows(), loadCounts()]);
   } catch (e) {
     if (followState.isCurrent(read)) error.value = (e as Error).message;
   } finally {
     if (followState.isCurrent(read)) loading.value = false;
   }
+});
+onUnmounted(() => {
+  disposed = true;
+  followsSequence++;
+  countsSequence++;
+  followsController?.abort();
+  countsController?.abort();
 });
 async function unfollow(stall: Stall) {
   await followState.follow(stall, false);
@@ -183,7 +298,7 @@ async function deleteAccount() {
         <p class="muted">记住喜欢的味道，也记住生活的小美好。</p>
       </div>
     </div>
-    <p v-if="error" class="error-message">{{ error }}</p>
+    <p v-if="error" class="error-message" role="alert">{{ error }}</p>
     <div v-if="loading" class="empty-state"><span class="spinner"></span></div>
     <div v-else-if="session.user" class="profile-layout">
       <aside class="profile-sidebar">
@@ -195,16 +310,34 @@ async function deleteAccount() {
             >校园寻味家 <Star :size="11" fill="currentColor"
           /></span>
           <div class="profile-stats">
-            <button @click="section = 'follows'">
-              <strong>{{ follows.length }}</strong
+            <button @click="section = 'follows'" :aria-busy="followsLoading">
+              <strong>{{
+                followsLoaded
+                  ? `${follows.length}${nextFollows ? "+" : ""}`
+                  : "—"
+              }}</strong
               ><span>关注</span></button
-            ><RouterLink to="/orders"
-              ><strong>{{ orderCounts.all }}</strong
+            ><RouterLink to="/orders" :aria-busy="countsLoading"
+              ><strong>{{ orderCounts?.all ?? "—" }}</strong
               ><span>订单</span></RouterLink
-            ><RouterLink to="/orders"
-              ><strong>{{ reviews }}</strong
+            ><RouterLink to="/orders" :aria-busy="countsLoading"
+              ><strong>{{ reviews ?? "—" }}</strong
               ><span>评价</span></RouterLink
             >
+          </div>
+          <p v-if="countsLoading" class="profile-read-status" role="status">
+            正在读取订单统计…
+          </p>
+          <div v-if="countsError" class="profile-read-error" role="alert">
+            <p>{{ countsError }}</p>
+            <button
+              type="button"
+              class="btn btn-secondary"
+              :disabled="countsLoading"
+              @click="loadCounts"
+            >
+              重试订单统计
+            </button>
           </div>
         </section>
         <nav class="card profile-menu" aria-label="个人中心">
@@ -245,9 +378,37 @@ async function deleteAccount() {
               <span class="eyebrow">MY FAVORITE PLACES</span>
               <h2>总想再吃一口的摊位</h2>
             </div>
-            <span class="muted count-label">{{ follows.length }} 个关注</span>
+            <span v-if="followsLoaded" class="muted count-label">{{
+              nextFollows
+                ? `已加载 ${follows.length} 个关注`
+                : `${follows.length} 个关注`
+            }}</span>
           </div>
-          <div v-if="!follows.length" class="empty-state card">
+          <div v-if="followsLoading" class="empty-state card" role="status">
+            <span class="spinner"></span>
+            <p>正在读取关注列表…</p>
+          </div>
+          <div v-if="followsError" class="profile-read-error card" role="alert">
+            <p>{{ followsError }}</p>
+            <button
+              type="button"
+              class="btn btn-secondary"
+              :disabled="followsLoading"
+              @click="loadFollows()"
+            >
+              重试关注列表
+            </button>
+          </div>
+          <div
+            v-if="
+              followsLoaded &&
+              !followsLoading &&
+              !followsError &&
+              !follows.length &&
+              !nextFollows
+            "
+            class="empty-state card"
+          >
             <Heart :size="40" />
             <h3>把喜欢的小摊，留在这里</h3>
             <p>在摊位详情点一下关注，下次就能轻松找到。</p>
@@ -255,7 +416,7 @@ async function deleteAccount() {
               >发现校园好味道 <ArrowUpRight :size="16"
             /></RouterLink>
           </div>
-          <div v-else class="follow-grid">
+          <div v-if="follows.length" class="follow-grid">
             <article
               v-for="stall in follows"
               :key="stall.id"
@@ -286,8 +447,27 @@ async function deleteAccount() {
                   >今天吃点什么 <ArrowUpRight :size="15"
                 /></RouterLink>
               </div>
-            </article></div
-        ></template>
+            </article>
+          </div>
+          <p v-if="moreError" class="error-message" role="alert">
+            {{ moreError }}
+          </p>
+          <button
+            v-if="nextFollows"
+            class="btn btn-secondary"
+            :disabled="moreLoading || followsLoading"
+            :aria-busy="moreLoading"
+            @click="loadFollows(true)"
+          >
+            {{
+              moreLoading
+                ? "正在加载…"
+                : moreError
+                  ? "重试加载更多关注"
+                  : "加载更多关注"
+            }}
+          </button>
+        </template>
         <template v-else-if="section === 'settings'"
           ><div class="section-heading">
             <div>
@@ -547,6 +727,37 @@ async function deleteAccount() {
 .profile-stats span {
   font-size: 10px;
   color: #9a8e7b;
+}
+.profile-read-status {
+  margin: 0 0 18px;
+  color: #75664f;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.identity-card > .profile-read-status {
+  margin-bottom: 18px;
+  color: #75664f;
+  font-size: 12px;
+}
+.profile-read-error {
+  padding: 16px;
+  margin-bottom: 18px;
+  background: #fff2e7;
+  color: #934322;
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.identity-card .profile-read-error {
+  padding: 12px 0 18px;
+  margin: 0;
+  background: transparent;
+}
+.profile-read-error p {
+  margin: 0 0 10px;
+}
+.profile-read-error .btn {
+  min-height: 44px;
 }
 .profile-menu {
   padding: 10px;

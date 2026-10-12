@@ -7,6 +7,13 @@ import {
   mutate,
 } from "./helpers";
 
+test.skip(process.env.E2E_ISOLATED !== "1", "Requires the disposable integration server and E2E_ISOLATED=1");
+
+async function merchantProduct(merchant: BrowserContext, stallId: number, productId: number) {
+  const rows = await (await merchant.request.get(`${baseURL}/api/v1/merchant/stalls`)).json();
+  return rows.find((row: any) => row.id === stallId).products.find((row: any) => row.id === productId);
+}
+
 async function prepare(student: BrowserContext, merchant: BrowserContext) {
   const config = await (
     await student.request.get(`${baseURL}/api/v1/config`)
@@ -56,11 +63,13 @@ async function prepare(student: BrowserContext, merchant: BrowserContext) {
   ).json();
   expect(fresh.delivery.mode).toBe("simulation");
   expect(fresh.delivery.available, fresh.delivery.reason).toBe(true);
+  const product = fresh.products.find((p: any) => p.availability === "available" && p.max_order_quantity > 0);
+  expect(product).toBeTruthy();
+  expect(product).not.toHaveProperty("stock");
   return {
     stall: fresh,
-    product: fresh.products.find(
-      (p: any) => p.is_active !== false && p.stock > 0,
-    ),
+    product,
+    originalStock: (await merchantProduct(merchant, stall.id, product.id)).stock,
     credentials,
   };
 }
@@ -81,7 +90,7 @@ test("live simulation: two devices complete checkout, failed/pending/retried pay
   });
   const merchant = await merchantContext.newPage();
   try {
-    const { stall, product, credentials } = await prepare(
+    const { stall, product, credentials, originalStock } = await prepare(
       context,
       merchantContext,
     );
@@ -119,7 +128,6 @@ test("live simulation: two devices complete checkout, failed/pending/retried pay
     const created = await response.json();
     expect(created.mode).toBe("simulation");
     expect(created.status).toBe("pending_payment");
-    const originalStock = product.stock;
     await page
       .getByRole("button", { name: "模拟微信付款", exact: true })
       .click();
@@ -159,10 +167,8 @@ test("live simulation: two devices complete checkout, failed/pending/retried pay
     expect(paid.total_cents).toBe(
       product.price_cents + stall.delivery.fee_cents,
     );
-    const reserved = await (
-      await context.request.get(`${baseURL}/api/v1/stalls/${stall.id}`)
-    ).json();
-    expect(reserved.products.find((p: any) => p.id === product.id).stock).toBe(
+    const reserved = await merchantProduct(merchantContext, stall.id, product.id);
+    expect(reserved.stock).toBe(
       originalStock - 1,
     );
 
@@ -171,10 +177,12 @@ test("live simulation: two devices complete checkout, failed/pending/retried pay
     const card = merchant
       .locator("article.merchant-order")
       .filter({ hasText: created.number });
-    await card.getByRole("button", { name: "确认接单", exact: true }).click();
+    await card.getByRole("button", { name: "接单开始做", exact: true }).click();
+    await merchant.getByRole('group', { name: '订单阶段', exact: true }).getByRole('button', { name: /制作中/ }).click();
     await card
-      .getByRole("button", { name: "做好了，准备送餐", exact: true })
+      .getByRole("button", { name: "做好了", exact: true })
       .click();
+    await merchant.getByRole('group', { name: '订单阶段', exact: true }).getByRole('button', { name: /待取餐/ }).click();
     await card
       .getByRole("button", { name: "模拟出发送餐", exact: true })
       .click();
@@ -212,13 +220,13 @@ test("live simulation: two devices complete checkout, failed/pending/retried pay
     expect(done.mode).toBe("simulation");
     const merchantOrders = await (
       await merchantContext.request.get(
-        `${baseURL}/api/v1/merchant/orders?stall=${stall.id}`,
+        `${baseURL}/api/v1/merchant/orders?stall=${stall.id}&pagination=cursor&filter=completed`,
       )
     ).json();
-    expect(merchantOrders.find((o: any) => o.id === done.id).status).toBe(
+    expect(merchantOrders.results.find((o: any) => o.id === done.id).status).toBe(
       "completed",
     );
-    expect(merchantOrders.find((o: any) => o.id === done.id).pickup_code).toBe(
+    expect(merchantOrders.results.find((o: any) => o.id === done.id).pickup_code).toBe(
       "",
     );
     for (const width of [360, 390, 768, 1440]) {
@@ -243,7 +251,7 @@ test("live simulation: full refund failure and recovery keep one refund and rest
 }) => {
   const merchant = await browser.newContext({ baseURL });
   try {
-    const { stall, product, credentials } = await prepare(context, merchant);
+    const { stall, product, credentials, originalStock } = await prepare(context, merchant);
     expect((await mutate(context, "/auth/login", credentials)).ok()).toBe(true);
     const liveBefore = await (
       await merchant.request.get(
@@ -313,11 +321,9 @@ test("live simulation: full refund failure and recovery keep one refund and rest
       { refund_id: failed.refund.id, outcome: "success" },
     );
     expect(replay.ok(), await replay.text()).toBe(true);
-    const fresh = await (
-      await context.request.get(`${baseURL}/api/v1/stalls/${stall.id}`)
-    ).json();
-    expect(fresh.products.find((p: any) => p.id === product.id).stock).toBe(
-      product.stock,
+    const fresh = await merchantProduct(merchant, stall.id, product.id);
+    expect(fresh.stock).toBe(
+      originalStock,
     );
     const liveAfter = await (
       await merchant.request.get(

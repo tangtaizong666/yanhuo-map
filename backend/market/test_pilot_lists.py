@@ -97,7 +97,7 @@ class PilotListTests(TestCase):
             with CaptureQueriesContext(connection) as queries:
                 response = self.api.get('/api/v1/stalls', {'status': 'open'})
                 self.assertEqual(response.status_code, 200)
-                self.assertEqual([row['id'] for row in response.data], [self.stall.pk])
+                self.assertEqual([row['id'] for row in response.data['results']], [self.stall.pk])
             return len(queries)
         original = read()
         for index in range(9):
@@ -133,7 +133,7 @@ class PilotListTests(TestCase):
         for status, ids in expected.items():
             response = self.api.get('/api/v1/stalls', {'status': status})
             self.assertEqual(response.status_code, 200)
-            self.assertEqual({row['id'] for row in response.data}, set(ids))
+            self.assertEqual({row['id'] for row in response.data['results']}, set(ids))
 
 
 class WorkerHealthTests(TestCase):
@@ -160,5 +160,6 @@ class WorkerHealthTests(TestCase):
 
     def test_check_command_fails_until_both_workers_have_progress(self):
         with self.assertRaises(CommandError): call_command('check_operations')
-        for name in ('expire_orders', 'reconcile_payments'): record_worker_success(name)
+        from .runtime_health import WORKERS
+        for name in WORKERS: record_worker_success(name)
         call_command('check_operations')

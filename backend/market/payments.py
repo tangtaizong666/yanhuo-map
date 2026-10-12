@@ -196,13 +196,24 @@ def _drive_payment(order_id, user=None, *, operation='query', payer_client_ip=No
             raise BusinessError('此订单存在支付异常，请联系商家与运营核对。', 'payment_requires_review')
         payment = order.payments.filter(pk=payment_id).first() if payment_id else order.payments.exclude(status='closed').first()
         if not payment: return order
+        # A terminal payment cannot use the close endpoint to bypass query pacing.
+        if operation == 'close' and (payment.status not in PaymentAttempt.ACTIVE_STATUSES or order.payment_status != 'unpaid'):
+            return order
         if operation == 'create' and (payment.status != 'creating' or payment.last_checked_at is not None): return order
         if payment.request_in_flight_until and payment.request_in_flight_until > timezone.now(): return order
+        from .payment_schedule import admit_query, finish_query
+        if operation not in ('create', 'close') and not admit_query(payment): return order
         lease = timezone.now()+timedelta(seconds=90)
         payment.request_in_flight_until = lease
         payment.save(update_fields=['request_in_flight_until'])
     result, failure, entry = None, None, False
     def create(client):
+        if order.mode == 'live':
+            from .admission import online_payment_eligibility_reason
+            current_stall = Stall.objects.select_related('merchant').get(pk=order.stall_id)
+            reason = online_payment_eligibility_reason(current_stall)
+            if reason:
+                raise GatewayError('TRADE_ADMISSION_REVOKED', reason, outcome_unknown=False, retryable=False)
         return client.create_payment(out_trade_no=payment.out_trade_no, amount_cents=payment.amount_cents,
             description=f'{order.stall_name} {"配送" if order.fulfillment_type == "delivery" else "自取"}订单'.encode('utf-8')[:127].decode('utf-8', errors='ignore'),
             expires_at=payment.expires_at, channel=payment.channel, payer_client_ip=payer_client_ip)
@@ -259,7 +270,11 @@ def _drive_payment(order_id, user=None, *, operation='query', payer_client_ip=No
                 payment.save()
         elif result is not None:
             try: _apply_payment(order, payment, result)
-            except GatewayError as error: _error(payment, error)
+            except GatewayError as error:
+                failure = error
+                _error(payment, error)
+        if owns_lease and (operation != 'create' or failure):
+            finish_query(payment, failed=failure is not None)
         return order
 
 
@@ -269,6 +284,7 @@ def start_payment(order_id, user, channel, payer_client_ip):
         except (ValueError, TypeError):
             raise BusinessError('无法确认支付设备的网络地址，请稍后重试。', 'payment_client_ip_missing', status=400) from None
     created = False
+    query_only = False
     with transaction.atomic():
         order = _order(order_id, user)
         if (channel == 'simulation') != (order.mode == 'simulation'):
@@ -278,6 +294,11 @@ def start_payment(order_id, user, channel, payer_client_ip):
         if order.status != expected_status or order.payment_status != 'unpaid' or order.cancel_requested or order.payment_review_required:
             raise BusinessError('当前订单状态不能发起微信付款，请刷新订单状态。', 'payment_unavailable')
         existing = order.payments.filter(status__in=PaymentAttempt.ACTIVE_STATUSES).first()
+        if existing and order.mode == 'live':
+            from .admission import online_payment_eligibility_reason
+            # Repeated starts after revocation only reconcile the old intent.
+            # They cannot recover/create a charge or reopen its payment entry.
+            query_only = bool(online_payment_eligibility_reason(order.stall))
         if not existing:
             if delivery and order.expires_at <= timezone.now()+timedelta(seconds=75):
                 raise BusinessError('订单剩余付款时间不足，请取消后重新下单。', 'payment_unavailable')
@@ -287,6 +308,10 @@ def start_payment(order_id, user, channel, payer_client_ip):
                 raise BusinessError('模拟服务已关闭，原订单不会转为真实支付。', 'simulation_unavailable')
             if order.stall.is_demo and not simulated:
                 raise BusinessError('示例摊位不支持真实微信支付，请使用到摊付款流程。', 'payment_not_configured', status=503)
+            from .admission import online_payment_eligibility_reason
+            admission_reason = online_payment_eligibility_reason(order.stall)
+            if admission_reason:
+                raise BusinessError(admission_reason, 'payment_unavailable')
             available = payment_readiness(order.stall) if simulated else readiness(order.stall.merchant)
             if not available.get('available'):
                 raise BusinessError(available.get('reason') or '微信支付暂未开通，请使用到摊付款。', 'payment_not_configured', status=503)
@@ -308,7 +333,7 @@ def start_payment(order_id, user, channel, payer_client_ip):
             order.save(update_fields=['payment_method'])
             audit(user, 'wechat_payment_started', order.pk, mode=order.mode)
             created = True
-    return _drive_payment(order_id, user, operation='create' if created else 'recover', payer_client_ip=payer_client_ip)
+    return _drive_payment(order_id, user, operation='create' if created else 'query' if query_only else 'recover', payer_client_ip=payer_client_ip)
 
 
 def close_payment(order_id, user):
@@ -470,6 +495,8 @@ def process_refund(order_id, refund_id=None):
         refund = query.filter(pk=refund_id).first() if refund_id else query.filter(resolved_at__isnull=True).first() or query.first()
         if not refund or refund.status == 'success' or refund.resolved_at is not None: return order
         if refund.request_in_flight_until and refund.request_in_flight_until > timezone.now(): return order
+        from .payment_schedule import admit_query, finish_query
+        if not admit_query(refund): return order
         lease = timezone.now()+timedelta(seconds=60)
         refund.request_in_flight_until = lease
         refund.save(update_fields=['request_in_flight_until'])
@@ -501,7 +528,11 @@ def process_refund(order_id, refund_id=None):
         if failure: _error(refund, failure)
         elif result is not None:
             try: _apply_refund(order, refund, result)
-            except GatewayError as error: _error(refund, error)
+            except GatewayError as error:
+                failure = error
+                _error(refund, error)
+        if owns_lease:
+            finish_query(refund, failed=failure is not None)
         return order
 
 
@@ -559,28 +590,32 @@ def request_refund(order_id, user, reason, simulation_outcome=None):
 
 
 def handle_notification(account_key, headers, body):
+    """Verify and durably enqueue; business effects belong to the inbox worker."""
+    from .notification_inbox import receive_notification
+    return receive_notification(account_key, headers, body)
+
+
+def apply_notification(account_key, mchid, appid, event_type, resource):
+    """Apply previously verified minimal facts inside the caller's transaction."""
     if account_key.startswith('simulation-'):
         raise _invalid('模拟记录不接收真实支付通知。')
-    client = client_for(account_key)
-    event = client.verify_notification(headers, body)
-    resource, event_type = event['resource'], event['event_type']
     if event_type == 'TRANSACTION.SUCCESS':
         candidate = PaymentAttempt.objects.filter(mode='live', order__mode='live', account_key=account_key, out_trade_no=resource.get('out_trade_no')).first()
         if not candidate: raise _invalid('支付通知找不到对应订单。')
         with transaction.atomic():
             order = _order(candidate.order_id)
             payment = PaymentAttempt.objects.get(pk=candidate.pk)
-            if client.mchid != payment.mchid or client.appid != payment.appid: raise _invalid()
+            if mchid != payment.mchid or appid != payment.appid: raise _invalid()
             if resource.get('trade_state') != 'SUCCESS': raise _invalid()
             _apply_payment(order, payment, resource)
     elif event_type in ('REFUND.SUCCESS', 'REFUND.ABNORMAL', 'REFUND.CLOSED'):
         candidate = PaymentRefund.objects.filter(mode='live', order__mode='live', payment__mode='live', payment__account_key=account_key,
-            mchid=client.mchid, out_refund_no=resource.get('out_refund_no')).select_related('payment').first()
+            mchid=mchid, out_refund_no=resource.get('out_refund_no')).select_related('payment').first()
         if not candidate: raise _invalid('退款通知找不到对应订单。')
         with transaction.atomic():
             order = _order(candidate.order_id)
             refund = PaymentRefund.objects.select_related('payment').get(pk=candidate.pk)
-            if client.mchid != refund.payment.mchid or client.appid != refund.payment.appid: raise _invalid()
+            if mchid != refund.payment.mchid or appid != refund.payment.appid: raise _invalid()
             expected = {'REFUND.SUCCESS': 'SUCCESS', 'REFUND.ABNORMAL': 'ABNORMAL', 'REFUND.CLOSED': 'CLOSED'}[event_type]
             if resource.get('refund_status') != expected: raise _invalid()
             _apply_refund(order, refund, resource, notification=True)

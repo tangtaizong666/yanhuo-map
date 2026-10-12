@@ -131,6 +131,19 @@ function exportCsv() {
         <ArrowDownToLine :size="16" /> 导出日报
       </button>
     </div>
+    <section v-if="metrics?.pilot_evidence" class="m-panel pilot-evidence" aria-label="试点经营记录">
+      <div class="m-panel-head"><h2>试点经营记录</h2><span>{{ simulated ? '模拟演练 · 不计入真实试点' : '正式记录 · 来自服务端' }}</span></div>
+      <div class="returning-stats">
+        <div><strong>{{ metrics.pilot_evidence.active_merchant_days }}</strong><span>商户开摊天数</span></div>
+        <div><strong>{{ metrics.pilot_evidence.completed_orders }}</strong><span>实际完成订单</span></div>
+        <div><strong>{{ metrics.pilot_evidence.paying_customers }}</strong><span>已确认收款人数</span></div>
+        <div><strong>{{ metrics.pilot_evidence.accept_p50_seconds ?? '—' }}</strong><span>接单耗时 p50（秒）</span></div>
+        <div><strong>{{ metrics.pilot_evidence.accept_p95_seconds ?? '—' }}</strong><span>接单耗时 p95（秒）</span></div>
+        <div><strong>{{ metrics.pilot_evidence.location_reports_confirmed }} / {{ metrics.pilot_evidence.location_reports_received }}</strong><span>核实属实 / 收到的位置反馈</span></div>
+      </div>
+      <p class="m-muted">{{ metrics.pilot_evidence.definitions }} 接单样本 {{ metrics.pilot_evidence.accept_sample_count }} 笔。</p>
+      <p class="m-muted">浏览量和入口来源由客户端申报，单独作为流程参考，不计作真实试点成交证据。</p>
+    </section>
     <section
       v-if="
         typeof metrics?.completed_customer_count === 'number' &&

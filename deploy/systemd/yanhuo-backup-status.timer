@@ -1,0 +1,10 @@
+[Unit]
+Description=Check Yanhuo backup freshness every ten minutes
+
+[Timer]
+OnCalendar=*:0/10
+Persistent=true
+Unit=yanhuo-backup-status.service
+
+[Install]
+WantedBy=timers.target

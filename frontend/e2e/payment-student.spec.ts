@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { assertNoHorizontalOverflow, fulfillCsrf } from "./helpers";
+import QRCode from "qrcode";
 
 // Isolated UI contract tests only. All API requests are intercepted, and no
 // payment service or real order is used. Financial transitions have backend tests.
@@ -13,6 +14,8 @@ const user = {
 function makeOrder(overrides: Record<string, any> = {}) {
   return {
     id: "student-payment-fixture",
+    mode: "live",
+    fulfillment_type: "pickup",
     number: "UI-ONLY-0001",
     stall_id: 992,
     stall_name: "界面测试摊位",
@@ -20,7 +23,11 @@ function makeOrder(overrides: Record<string, any> = {}) {
     payment_method: "offline",
     payment_status: "unpaid",
     payment_review_required: false,
+    offline_payment_available: true,
+    stall_payment_qr_image: "/media/payment-student/collection-test.svg",
     wechat_payment: {
+      mode: "live",
+      supported: true,
       available: false,
       reason: "示例环境不发起真实微信扣款，当前支持到摊付款。",
       channels: [],
@@ -61,6 +68,12 @@ async function fixture(
   const calls: string[] = [],
     unexpected: string[] = [];
   await page.route("https://**/*", (route) => route.abort());
+  const code = await QRCode.toString("UI-TEST-ONLY-NO-PAYMENT", {
+    type: "svg",
+  });
+  await page.route("**/media/payment-student/collection-test.svg", (route) =>
+    route.fulfill({ contentType: "image/svg+xml", body: code }),
+  );
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname.replace("/api/v1", "");
     const send = (data: any, status = 200) =>
@@ -155,11 +168,14 @@ test("UI contract: repeated click creates once, QR pending is not paid, and serv
     }
     return state;
   });
+  await expect(page.locator(".stall-qr img")).toBeVisible();
   await page.getByRole("button", { name: "微信支付", exact: true }).click();
   await expect(page.getByRole("button", { name: "正在创建…" })).toBeDisabled();
+  await expect(page.locator(".stall-qr")).toHaveCount(0);
   await expect.poll(() => f.calls).toEqual(["wechat"]);
   release();
   await expect(page.getByAltText("本订单微信支付二维码")).toBeVisible();
+  await expect(page.locator(".stall-qr")).toHaveCount(0);
   await expect(page.getByText("微信支付已确认", { exact: true })).toHaveCount(
     0,
   );
@@ -172,6 +188,7 @@ test("UI contract: repeated click creates once, QR pending is not paid, and serv
   await expect(
     page.getByRole("button", { name: "微信支付", exact: true }),
   ).toBeEnabled();
+  await expect(page.locator(".stall-qr img")).toBeVisible();
   await expect(
     page.getByRole("button", { name: "申请取消", exact: true }),
   ).toBeVisible();
@@ -250,6 +267,12 @@ test("UI contract: uncertain creation offers recovery of the existing payment en
   page,
 }) => {
   const state = makeOrder({
+    wechat_payment: {
+      available: true,
+      supported: true,
+      reason: "",
+      channels: ["native"],
+    },
     payment_method: "wechat",
     payment_can_close: true,
     payment: {

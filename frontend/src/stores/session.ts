@@ -1,6 +1,12 @@
 import { defineStore } from "pinia";
 import { computed, ref, watch } from "vue";
-import { advanceSessionEpoch, sessionEpoch } from "../lib/sessionEpoch";
+import {
+  advanceSessionEpoch,
+  sessionEpoch,
+  setSessionActor,
+  setSessionVerifier,
+  trackSessionVerification,
+} from "../lib/sessionEpoch";
 import { api } from "../lib/api";
 import type { User, Config } from "../lib/types";
 export const useSession = defineStore("session", () => {
@@ -30,9 +36,13 @@ export const useSession = defineStore("session", () => {
     identityRequest++;
     advanceSessionEpoch();
   }
+  setSessionActor(user.value?.id ?? null);
   watch(
     () => user.value?.id ?? null,
-    () => beginIdentityChange(),
+    () => {
+      setSessionActor(user.value?.id ?? null);
+      beginIdentityChange();
+    },
     { flush: "sync" },
   );
   function expire(epoch: number) {
@@ -45,9 +55,13 @@ export const useSession = defineStore("session", () => {
   async function load() {
     if (loaded.value) return;
     if (pending) return pending;
+    const request = identityRequest;
+    const epoch = sessionEpoch();
     pending = (async () => {
       config.value = await api<Config>("/config");
-      user.value = config.value.user;
+      if (request === identityRequest && epoch === sessionEpoch())
+        user.value = config.value.user;
+      else config.value = { ...config.value, user: user.value };
       try {
         consumerPreview.value =
           isMerchant.value &&
@@ -62,14 +76,19 @@ export const useSession = defineStore("session", () => {
     });
     return pending;
   }
-  async function refreshUser() {
+  function refreshUser() {
     const request = ++identityRequest;
     const epoch = sessionEpoch();
-    const next = await api<User | null>("/auth/me");
-    if (request !== identityRequest || epoch !== sessionEpoch()) return;
-    if (next?.id !== user.value?.id) setConsumerPreview(false);
-    user.value = next;
+    return trackSessionVerification(
+      (async () => {
+        const next = await api<User | null>("/auth/me");
+        if (request !== identityRequest || epoch !== sessionEpoch()) return;
+        if (next?.id !== user.value?.id) setConsumerPreview(false);
+        user.value = next;
+      })(),
+    );
   }
+  setSessionVerifier(refreshUser);
   async function logout() {
     beginIdentityChange();
     await api("/auth/logout", { method: "POST" });

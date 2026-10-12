@@ -136,7 +136,12 @@ class MerchantFollowupContractTests(TestCase):
         foreign.refresh_from_db()
         self.assertEqual(foreign.status, 'cancelled')
 
-    def test_merchant_list_redacts_pickup_codes_payment_links_and_provider_identifiers(self):
+    @override_settings(DEMO_MODE=False)
+    @patch('market.payments.readiness', return_value={
+        'available': True, 'reason': '', 'channels': ['native', 'h5'], 'account_key': 'private-account'})
+    def test_merchant_list_redacts_pickup_codes_payment_links_and_provider_identifiers(self, payment_readiness):
+        # The shared fixture is a verified storefront. Explicitly configure live
+        # payment readiness so empty merchant URLs prove redaction, not denial.
         orders = []
         for channel in ('native', 'h5'):
             order = self.order(status='ready', payment_status='unpaid')
@@ -145,6 +150,7 @@ class MerchantFollowupContractTests(TestCase):
             orders.append(order)
         rows = self.rows()
         for row in rows.values():
+            self.assertTrue(row['wechat_payment']['available'])
             self.assertEqual(row['pickup_code'], '')
             self.assertEqual(row['payment']['code_url'], '')
             self.assertEqual(row['payment']['h5_url'], '')
@@ -152,10 +158,13 @@ class MerchantFollowupContractTests(TestCase):
         self.api.force_authenticate(self.student)
         student = self.api.get(f'/api/v1/orders/{orders[0].pk}')
         self.assertEqual(student.status_code, 200)
+        self.assertTrue(student.data['wechat_payment']['available'])
         self.assertEqual(student.data['pickup_code'], '')
         self.assertTrue(student.data['financial_hold_reason'])
         self.assertNotIn('complete', student.data['allowed_actions'])
         self.assertEqual(student.data['payment']['code_url'], 'weixin://wxpay/private-entry')
+        payment_readiness.assert_called()
+        self.gateway.assert_not_called()
 
     def test_historical_simulation_and_live_modes_survive_current_simulation_switch(self):
         expected = {}

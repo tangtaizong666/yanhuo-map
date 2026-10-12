@@ -8,7 +8,7 @@ from django.db import IntegrityError, connection, transaction
 from django.db.models import Exists, F, OuterRef, Q
 from django.utils import timezone
 from .errors import BusinessError
-from .models import AuditLog, Event, Order, OrderItem, PaymentAttempt, PaymentRefund, PreparationRequest, Product, Stall, SiteConfiguration
+from .models import AuditLog, Event, MerchantProfile, Order, OrderItem, PaymentAttempt, PaymentRefund, PreparationRequest, Product, Stall, SiteConfiguration
 from .tastes import canonical_item, validate_portions
 
 
@@ -51,21 +51,32 @@ def expire_locked(order):
     return False
 
 
-def expire_pending_orders(*, limit=100, stall_id=None, user_id=None, on_error=None):
-    """Bounded maintenance; locked/financially held rows never block other orders."""
-    candidates = Order.objects.filter(status__in=['pending', 'pending_payment'], expires_at__lte=timezone.now(),
+def expiry_candidates(*, now=None):
+    """Read-only eligibility shared by the worker and backlog diagnostics."""
+    candidates = Order.objects.filter(status__in=['pending', 'pending_payment'], expires_at__lte=now or timezone.now(),
         payment_review_required=False).filter(Q(payment_status='unpaid') | Q(fulfillment_type='delivery', payment_status='paid'))
     candidates = candidates.annotate(_active_payment=Exists(PaymentAttempt.objects.filter(
         order_id=OuterRef('pk'), status__in=PaymentAttempt.ACTIVE_STATUSES)),
         _unresolved_refund=Exists(PaymentRefund.objects.filter(order_id=OuterRef('pk'), resolved_at__isnull=True).exclude(status='success'))
     ).filter(_active_payment=False, _unresolved_refund=False)
-    if stall_id is not None: candidates = candidates.filter(stall_id=stall_id)
-    if user_id is not None: candidates = candidates.filter(user_id=user_id)
     from .simulation import enabled
-    if not enabled():
-        basic_cash = Q(fulfillment_type='pickup', payment_method='offline', stall__is_demo=True)
+    if enabled():
+        candidates = candidates.exclude(Q(mode='simulation') & Q(stall__is_demo=False))
+    else:
+        candidates = candidates.annotate(_any_payment=Exists(PaymentAttempt.objects.filter(order_id=OuterRef('pk'))))
+        # Match require_order_operation: a terminal online payment attempt still
+        # needs the simulator. Such rows must not consume every expiry batch.
+        basic_cash = Q(fulfillment_type='pickup', payment_method='offline', stall__is_demo=True, _any_payment=False)
         if not settings.DEMO_MODE or settings.PRODUCTION: basic_cash = Q(pk__isnull=True)
         candidates = candidates.exclude(Q(mode='simulation') & ~basic_cash)
+    return candidates
+
+
+def expire_pending_orders(*, limit=100, stall_id=None, user_id=None, on_error=None):
+    """Bounded maintenance; locked/financially held rows never block other orders."""
+    candidates = expiry_candidates()
+    if stall_id is not None: candidates = candidates.filter(stall_id=stall_id)
+    if user_id is not None: candidates = candidates.filter(user_id=user_id)
     count, seen = 0, []
     for _ in range(max(1, min(int(limit), 1000))):
         order_id = None
@@ -95,6 +106,7 @@ def create_order(user, data):
         return existing, False
     existing = Order.objects.filter(user=user, idempotency_key=data['idempotency_key']).first()
     if existing: return check_duplicate(existing)
+    expire_pending_orders(user_id=user.pk)
     expire_pending_orders(stall_id=data['stall_id'])
     try:
         with transaction.atomic():
@@ -113,12 +125,26 @@ def create_order(user, data):
                 raise BusinessError('摊位不存在。', 'not_found', status=404)
             existing = Order.objects.filter(user=user, idempotency_key=data['idempotency_key']).first()
             if existing: return check_duplicate(existing)
+            # Serialize admission with operator qualification changes. Replays are
+            # returned above so revocation never creates a second reservation.
+            stall.merchant = MerchantProfile.objects.select_for_update(no_key=True).get(pk=stall.merchant_id)
+            from .reservation_limits import enforce_reservation_limits
+            enforce_reservation_limits(user, stall, data['items'])
             config = SiteConfiguration.current()
             if not stall.can_order(config):
                 gate = stall.new_order_gate_code() if stall.accepting_orders and stall.can_order(config, existing_order=True) else ''
                 raise BusinessError(stall.order_unavailable_reason(config), gate or 'stall_unavailable')
             if not hasattr(stall, 'location'):
                 raise BusinessError('商家尚未确认取餐位置。', 'location_missing')
+            # Existing successful requests returned above. A new reservation must
+            # use the location the student confirmed, under the same stall lock
+            # used by merchant location updates. Older clients may omit the token.
+            from .location_contract import location_snapshot
+            current_location = location_snapshot(stall)
+            expected_location = data.get('expected_location_token')
+            if expected_location is not None and not secrets.compare_digest(expected_location, current_location['location_token']):
+                raise BusinessError('摊位位置已变化，请核对最新位置后重新确认。', 'location_changed',
+                    current_location=current_location)
             ids = [item['product_id'] for item in data['items']]
             products = {p.id: p for p in Product.objects.select_for_update().filter(stall=stall, id__in=ids, is_active=True).order_by('id')}
             if len(products) != len(ids):
@@ -133,7 +159,7 @@ def create_order(user, data):
                     raise BusinessError(f'{product.name}已暂停供应，请重新选择。', 'product_sale_paused', product_id=product.pk)
                 validate_portions(product, item)
                 if product.stock < item['quantity']:
-                    raise BusinessError(f'{product.name}库存不足，剩余{product.stock}份。', 'out_of_stock', product_id=product.id)
+                    raise BusinessError(f'{product.name}当前可售份数不足，请减少数量后重试。', 'out_of_stock', product_id=product.id)
                 total += product.price_cents * item['quantity']
             if total > 1000000: raise BusinessError('单笔订单金额超出限制。', 'amount_limit', status=400)
             fulfillment = data.get('fulfillment_type', 'pickup')
@@ -201,6 +227,16 @@ def cancel_order(order_id, user, reason):
 
 
 def merchant_action(order_id, user, action, code='', reason='', *, prep_minutes=None, idempotency_key=''):
+    result = _merchant_action(order_id, user, action, code, reason,
+        prep_minutes=prep_minutes, idempotency_key=idempotency_key)
+    # Raise only after the locked transaction has committed the failed attempt.
+    # Production DatabaseCache otherwise rolls back alongside BusinessError.
+    if isinstance(result, BusinessError):
+        raise result
+    return result
+
+
+def _merchant_action(order_id, user, action, code='', reason='', *, prep_minutes=None, idempotency_key=''):
     with transaction.atomic():
         from .permissions import owned_or_permitted
         query = owned_or_permitted(Order.objects.select_for_update(of=('self',)), user, 'market.change_order')
@@ -210,13 +246,24 @@ def merchant_action(order_id, user, action, code='', reason='', *, prep_minutes=
             from .simulation import require_order_operation
             require_order_operation(order)
         prep_action = action in ('accept', 'update_prep')
+        from .security_models import MerchantOrderOperation
+        from django.utils.crypto import salted_hmac
+        operation_hash = salted_hmac('merchant-order-operation', json.dumps({
+            'action': action, 'code': code, 'reason': reason,
+            'prep_minutes': prep_minutes}, sort_keys=True), algorithm='sha256').hexdigest()
+        if idempotency_key:
+            previous_operation = MerchantOrderOperation.objects.filter(order=order, idempotency_key=idempotency_key).first()
+            if previous_operation:
+                if previous_operation.request_hash != operation_hash:
+                    raise BusinessError('本次提交标识已用于其他订单操作，请核对原操作。', 'idempotency_conflict')
+                return order
         request_hash = ''
-        if prep_action and idempotency_key:
+        if idempotency_key:
             request_hash = hashlib.sha256(json.dumps({'action': action, 'prep_minutes': prep_minutes,
                 'reason': reason if action == 'update_prep' else ''}, sort_keys=True).encode()).hexdigest()
             previous = PreparationRequest.objects.filter(order=order, idempotency_key=idempotency_key).first()
             if previous:
-                if previous.request_hash != request_hash:
+                if not prep_action or previous.request_hash != request_hash:
                     raise BusinessError('本次提交标识已用于其他备餐操作，请刷新后重试。', 'idempotency_conflict')
                 return order
         if prep_action and prep_minutes is not None and (isinstance(prep_minutes, bool) or not isinstance(prep_minutes, int) or not 1 <= prep_minutes <= 180):
@@ -263,8 +310,17 @@ def merchant_action(order_id, user, action, code='', reason='', *, prep_minutes=
             audit(user, 'delivery_issue_resolved', order.pk, issue=order.delivery_issue, resolution=reason)
             order.delivery_issue = ''
         elif action == 'complete' and order.status == ('arrived' if delivery else 'ready') and order.payment_status == 'paid' and not order.cancel_requested:
+            from django.core.cache import cache
+            fails_key = f'pickup_code_fails:{order.pk}'
+            failures = cache.get(fails_key, 0)
+            if failures >= 5:
+                return BusinessError('取餐码错误次数过多，请10分钟后再试或让顾客刷新订单页核对。', 'pickup_code_locked', status=409)
             if not secrets.compare_digest(str(code), order.pickup_code):
-                raise BusinessError('取餐码不正确，请核对用户出示的取餐码。', 'invalid_pickup_code', status=400)
+                # The order row lock serializes attempts across workers. Set an
+                # explicit expiry: DatabaseCache.incr uses the default timeout.
+                cache.set(fails_key, failures + 1, 600)
+                return BusinessError('取餐码不正确，请核对用户出示的取餐码。', 'invalid_pickup_code', status=400)
+            cache.delete(fails_key)
             order.status, order.completed_at = 'completed', timezone.now()
             Event.objects.create(type='order_completed', user=order.user, stall=order.stall)
         elif action == 'approve_cancel' and order.status in (('preparing', 'ready', 'delivering', 'arrived') if delivery else ('preparing', 'ready')) and order.cancel_requested and order.payment_status in (('unpaid', 'paid') if delivery else ('unpaid',)):
@@ -281,6 +337,9 @@ def merchant_action(order_id, user, action, code='', reason='', *, prep_minutes=
         order.save()
         if prep_action and idempotency_key:
             PreparationRequest.objects.create(order=order, idempotency_key=idempotency_key, request_hash=request_hash)
+        if idempotency_key:
+            MerchantOrderOperation.objects.create(order=order, idempotency_key=idempotency_key,
+                action=action, request_hash=operation_hash)
         audit(user, f'order_{action}', order.pk)
         return order
 

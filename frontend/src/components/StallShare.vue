@@ -8,6 +8,7 @@ import { useSession } from "../stores/session";
 
 const props = defineProps<{ stall: Stall; compact?: boolean }>();
 const session = useSession();
+const trigger = ref<HTMLButtonElement>();
 const dialog = ref<HTMLDialogElement>();
 const qr = ref("");
 const message = ref("");
@@ -91,6 +92,27 @@ function close() {
   generating.value = false;
   dialog.value?.close();
 }
+function restoreFocus() {
+  if (trigger.value?.getClientRects().length) {
+    trigger.value.focus();
+    return;
+  }
+  // A viewport change can collapse the opener's section while sharing is open.
+  // Return keyboard focus to its visible disclosure control in that case.
+  let parent = trigger.value?.parentElement;
+  while (parent) {
+    const control = parent.id
+      ? document.querySelector<HTMLButtonElement>(
+          `button[aria-controls~="${CSS.escape(parent.id)}"]`,
+        )
+      : null;
+    if (control?.getClientRects().length) {
+      control.focus();
+      return;
+    }
+    parent = parent.parentElement;
+  }
+}
 watch(() => props.stall.id, close);
 onUnmounted(() => {
   revision++;
@@ -107,18 +129,20 @@ onMounted(() => {
 
 <template>
   <button
+    ref="trigger"
     type="button"
     :class="['stall-share-trigger', { compact }]"
     @click="open"
   >
     <Share2 :size="16" />分享小摊
   </button>
-  <dialog
+  <Teleport to="body"><dialog
     ref="dialog"
     class="stall-share-dialog"
     aria-labelledby="stall-share-title"
     @click.self="close"
-    @cancel="close"
+    @cancel.prevent="close"
+    @close="restoreFocus"
   >
     <header>
       <span class="share-icon"><QrCode :size="25" /></span
@@ -184,7 +208,7 @@ onMounted(() => {
         ><Download :size="16" />保存二维码</a
       >
     </div>
-  </dialog>
+  </dialog></Teleport>
 </template>
 
 <style scoped>

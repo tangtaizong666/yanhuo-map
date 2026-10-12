@@ -210,7 +210,7 @@ onBeforeUnmount(() => {
                   >通常在哪里出摊<input
                     v-model="form.address_note"
                     maxlength="200"
-                    placeholder="例如：南门夜市入口左边"
+                    placeholder="例如：学府路夜市入口左边"
                     required
                 /></label>
               </div>

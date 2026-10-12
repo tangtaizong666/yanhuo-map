@@ -2,9 +2,11 @@
 import { computed } from "vue";
 import { ShoppingBag } from "lucide-vue-next";
 import { useCart } from "../stores/cart";
+import { useRoute } from "vue-router";
 
 withDefaults(defineProps<{ compact?: boolean }>(), { compact: false });
 const cart = useCart();
+const route = useRoute();
 const count = computed(() =>
   Object.values(cart.carts).reduce(
     (total, rows) => total + rows.reduce((sum, row) => sum + row.quantity, 0),
@@ -15,6 +17,7 @@ const count = computed(() =>
 
 <template>
   <RouterLink
+    v-if="count > 0 || !route.path.startsWith('/orders/')"
     to="/cart"
     class="cart-shortcut"
     :class="{ 'cart-shortcut-compact': compact, 'has-items': count > 0 }"

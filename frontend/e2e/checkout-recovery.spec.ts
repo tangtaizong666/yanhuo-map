@@ -9,10 +9,18 @@ const product = {
   description: "隔离测试餐点",
   image: "/images/food-cold-noodles.jpg",
   price_cents: 1600,
-  stock: 50,
+  availability: "available",
+  max_order_quantity: 10,
 };
 const note = "例如：餐具按需提供（每份口味请在上方分别填写）";
 const keyName = "yanhuo-checkout-989-989";
+async function showContactDraft(page: Page) {
+  const contact = page.locator('.checkout-contact-card');
+  await expect(contact).toBeVisible();
+  if (!(await contact.evaluate(element => (element as HTMLDetailsElement).open)))
+    await contact.locator(':scope > summary').click();
+  await expect(page.getByPlaceholder(note)).toBeVisible();
+}
 async function fixture(page: Page) {
   const state = {
     user: {
@@ -31,6 +39,8 @@ async function fixture(page: Page) {
       area_name: "校园",
       category: "小吃",
       address: "南门",
+      location_token: "a".repeat(64),
+      delivery: undefined as Record<string, unknown> | undefined,
       status: "open",
       can_order: true,
       transaction_enabled: true,
@@ -42,16 +52,19 @@ async function fixture(page: Page) {
       wechat_payment: { available: false, channels: [], reason: "尚未开通" },
     },
     stallUnavailable: false,
+    loseBeforeCommit: false,
+    validateChangedPrices: false,
     failCsrf: false,
     rejectRetryStatus: 0,
+    limitCode: '',
     behavior: "lose" as "lose" | "500" | "400" | "price" | "success" | "hold",
     writes: [] as any[],
     committed: new Map<string, any>(),
     unexpected: [] as string[],
     release: () => {},
   };
-  await page.route("https://**/*", (route) => route.abort());
-  await page.route("**/api/v1/**", async (route) => {
+  await page.context().route("https://**/*", (route) => route.abort());
+  await page.context().route("**/api/v1/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname.replace("/api/v1", "");
     const send = (data: any, status = 200) =>
@@ -82,10 +95,15 @@ async function fixture(page: Page) {
       return state.stallUnavailable
         ? send({ code: "not_found", detail: "摊位暂时不可见" }, 404)
         : send(state.stall);
+    if (path === '/stalls/991') return send({ ...state.stall, id: 991, name: '另一份餐袋', products: [{ ...product, id: 991, name: '另摊餐点' }] });
     if (path === "/events") return send({});
     if (path === "/orders" && request.method() === "POST") {
       const body = request.postDataJSON();
       state.writes.push(body);
+      if (state.limitCode) return send({ code: state.limitCode,
+        detail: '已达到下单额度，请先处理已有订单。餐袋已保留。',
+        order_ids: state.limitCode.includes('reservation') ? ['00000000-0000-4000-8000-000000000989'] : [],
+        retry_after: 30 }, state.limitCode === 'checkout_rate_limited' ? 429 : 409);
       if (state.rejectRetryStatus)
         return send(
           { code: "authentication_required", detail: "请重新确认登录状态" },
@@ -104,6 +122,12 @@ async function fixture(page: Page) {
         return send({ code: "price_changed", detail: "餐点价格变化" }, 409);
       }
       const previous = state.committed.get(body.idempotency_key);
+      if (!previous && body.expected_location_token && body.expected_location_token !== state.stall.location_token)
+        return send({ code: "location_changed", detail: "摊位位置已变更，请核对后重新提交" }, 409);
+      if (!previous && state.validateChangedPrices && body.items.some((item: any) =>
+        state.stall.products.find(product => product.id === item.product_id)?.price_cents !== item.expected_price_cents))
+        return send({ code: "price_changed", detail: "餐点价格变化" }, 409);
+      if (state.loseBeforeCommit) return route.abort("failed");
       const order = previous || {
         id: `recovered-${state.committed.size + 1}`,
         number: "RECOVERY-001",
@@ -145,7 +169,8 @@ async function fixture(page: Page) {
       }
       return;
     }
-    if (path === "/orders") return send([...state.committed.values()]);
+    if (path === "/orders") return send({ results: [...state.committed.values()], next: null,
+      counts: { all: state.committed.size, active: state.committed.size, attention: state.committed.size, followup: 0, completed: 0, cancelled: 0 } });
     if (path.startsWith("/orders/recovered-"))
       return send(
         [...state.committed.values()].find(
@@ -165,6 +190,7 @@ async function fixture(page: Page) {
     product,
   );
   await page.reload();
+  await showContactDraft(page);
   await expect(page.getByPlaceholder(note)).toBeVisible();
   await page.getByPlaceholder(note).fill("少辣，保留原备注");
   return state;
@@ -174,6 +200,217 @@ async function submit(page: Page) {
   await expect(
     page.getByRole("heading", { name: "上一笔提交结果待确认", exact: true }),
   ).toBeVisible();
+}
+
+async function chooseDelivery(page: Page, state: Awaited<ReturnType<typeof fixture>>) {
+  state.stall.delivery = { available: true, enabled: true, fee_cents: 200, min_order_cents: 0,
+    points: [{ id: 71, name: "图书馆交接点", address: "图书馆南侧长椅" }], mode: "simulation",
+    starts_at: "00:00", ends_at: "23:59", eta_min_minutes: 15, eta_max_minutes: 25 };
+  await page.reload();
+  await page.getByRole("button", { name: /商家配送/ }).click();
+  await page.getByLabel("校园交接点").selectOption("71");
+  await page.locator('[data-checkout-field="recipient"]').fill("测试同学");
+  await page.locator('[data-checkout-field="phone"]').fill("13800000000");
+}
+
+for (const failedRefresh of [false, true]) {
+  test(`confirmed simultaneous move and delivery fee change preserves explicit amount consent${failedRefresh ? " after a failed refresh" : ""}`, async ({ page }, info) => {
+    const state = await fixture(page);
+    await chooseDelivery(page, state);
+    state.stall.address = "西门蓝色雨棚旁";
+    state.stall.location_token = "b".repeat(64);
+    state.stall.delivery!.fee_cents = 300;
+    state.stallUnavailable = failedRefresh;
+    state.behavior = "success";
+    await page.getByRole("button", { name: "提交配送订单，去付款", exact: true }).click();
+    if (failedRefresh) {
+      await expect(page.locator(".location-change-notice")).toContainText("暂未读到最新地址");
+      state.stallUnavailable = false;
+      await page.getByRole("button", { name: "重新读取摊位位置", exact: true }).click();
+    }
+    await expect(page.locator(".amount-change-notice")).toContainText("配送费：¥2 → ¥3");
+    await expect(page.locator(".amount-change-notice")).toContainText("最新合计 ¥19");
+    await expect(page.getByRole("button", { name: "确认新位置与新金额并提交", exact: true })).toBeEnabled();
+    expect(state.committed.size).toBe(0);
+    if (!failedRefresh) {
+      await page.setViewportSize({ width: 360, height: 844 });
+      await page.locator(".amount-change-notice").scrollIntoViewIfNeeded();
+      await assertNoHorizontalOverflow(page);
+      await page.screenshot({ path: info.outputPath("combined-location-fee-360.png"), fullPage: true });
+    }
+    await page.getByRole("button", { name: "确认新位置与新金额并提交", exact: true }).click();
+    await expect(page).toHaveURL(/\/orders\/recovered-1$/);
+    expect(state.writes[0].expected_delivery_fee_cents).toBe(200);
+    expect(state.writes[1]).toMatchObject({ expected_location_token: "b".repeat(64), expected_delivery_fee_cents: 300, delivery_point_id: 71 });
+    expect(state.writes[1].idempotency_key).not.toBe(state.writes[0].idempotency_key);
+    expect(state.unexpected).toEqual([]);
+  });
+}
+
+test("confirmed simultaneous move and product price changes preserves both acknowledgments through another price rejection", async ({ page }) => {
+  const state = await fixture(page);
+  state.stall.address = "西门蓝色雨棚旁";
+  state.stall.location_token = "b".repeat(64);
+  state.stall.products[0]!.price_cents = 1700;
+  state.validateChangedPrices = true;
+  state.behavior = "success";
+  await page.getByRole("button", { name: "提交自取订单", exact: true }).click();
+  await expect(page.locator(".amount-change-notice")).toContainText("恢复验证烤冷面单价：¥16 → ¥17");
+  state.stall.products[0]!.price_cents = 1800;
+  await page.getByRole("button", { name: "确认新位置与新金额并提交", exact: true }).click();
+  await expect(page.locator(".amount-change-notice")).toContainText("恢复验证烤冷面单价：¥17 → ¥18");
+  await expect(page.locator(".amount-change-notice")).toContainText("最新合计 ¥18");
+  expect(state.committed.size).toBe(0);
+  await page.getByRole("button", { name: "确认新位置与新金额并提交", exact: true }).click();
+  await expect(page).toHaveURL(/\/orders\/recovered-1$/);
+  expect(state.writes.map(write => write.items[0].expected_price_cents)).toEqual([1600, 1700, 1800]);
+  expect(state.unexpected).toEqual([]);
+});
+
+test("confirmed lost delivery result preserves original payload despite simultaneous location fee and product price changes", async ({ page }) => {
+  const state = await fixture(page);
+  await chooseDelivery(page, state);
+  await page.getByRole("button", { name: "提交配送订单，去付款", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "上一笔提交结果待确认", exact: true })).toBeVisible();
+  const original = structuredClone(state.writes[0]);
+  state.stall.address = "西门蓝色雨棚旁";
+  state.stall.location_token = "b".repeat(64);
+  state.stall.delivery!.fee_cents = 300;
+  state.stall.products[0]!.price_cents = 1800;
+  state.validateChangedPrices = true;
+  state.behavior = "success";
+  await page.reload();
+  await expect(page.locator(".recovery-summary")).toContainText("合计 ¥18");
+  await expect(page.locator(".amount-change-notice")).toHaveCount(0);
+  await page.getByRole("button", { name: "确认原订单结果", exact: true }).click();
+  await expect(page).toHaveURL(/\/orders\/recovered-1$/);
+  expect(state.writes).toHaveLength(2);
+  expect(state.writes[1]).toEqual(original);
+  expect(state.committed.size).toBe(1);
+  expect(state.unexpected).toEqual([]);
+});
+
+test("confirmed location change preserves the cart and requires the newly read address", async ({ page }, info) => {
+  const state = await fixture(page);
+  state.stall.address = "西门蓝色雨棚旁";
+  state.stall.location_token = "b".repeat(64);
+  state.behavior = "success";
+  await page.getByRole("button", { name: "提交自取订单", exact: true }).click();
+  await expect(page.locator(".location-change-notice")).toContainText("原位置：南门");
+  await expect(page.locator(".location-change-notice")).toContainText("最新位置：西门蓝色雨棚旁");
+  expect(state.committed.size).toBe(0);
+  expect(state.writes[0].expected_location_token).toBe("a".repeat(64));
+  expect(await page.evaluate(key => sessionStorage.getItem(key), keyName)).toBeNull();
+  for (const width of [360, 390, 768, 1440]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.locator(".location-change-notice").scrollIntoViewIfNeeded();
+    await assertNoHorizontalOverflow(page);
+    await expect(page.getByRole("button", { name: "确认新位置并提交", exact: true })).toBeEnabled();
+    await page.screenshot({ path: info.outputPath(`checkout-location-${width}.png`), fullPage: true });
+  }
+  await page.getByRole("button", { name: "确认新位置并提交", exact: true }).click();
+  await expect(page).toHaveURL(/\/orders\/recovered-1$/);
+  expect(state.writes[1].expected_location_token).toBe("b".repeat(64));
+  expect(state.writes[1].idempotency_key).not.toBe(state.writes[0].idempotency_key);
+  expect(state.writes[1].items).toEqual(state.writes[0].items);
+  expect(state.writes[1].note).toBe("少辣，保留原备注");
+  expect(state.unexpected).toEqual([]);
+});
+
+test("confirmed location change preserves a blocked submit until the current address can be read", async ({ page }) => {
+  const state = await fixture(page);
+  state.stall.address = "西门蓝色雨棚旁";
+  state.stall.location_token = "b".repeat(64);
+  state.stallUnavailable = true;
+  await page.getByRole("button", { name: "提交自取订单", exact: true }).click();
+  await expect(page.locator(".location-change-notice")).toContainText("暂未读到最新地址");
+  await expect(page.getByRole("button", { name: "确认新位置并提交", exact: true })).toBeDisabled();
+  state.stallUnavailable = false;
+  await page.getByRole("button", { name: "重新读取摊位位置", exact: true }).click();
+  await expect(page.locator(".location-change-notice")).toContainText("最新位置：西门蓝色雨棚旁");
+  await expect(page.getByRole("button", { name: "确认新位置并提交", exact: true })).toBeEnabled();
+  expect(state.writes).toHaveLength(1);
+  expect(state.unexpected).toEqual([]);
+});
+
+test("confirmed recovery after a move preserves the original location token and idempotency key", async ({ page }) => {
+  const state = await fixture(page);
+  await submit(page);
+  const original = state.writes[0];
+  state.stall.address = "西门蓝色雨棚旁";
+  state.stall.location_token = "b".repeat(64);
+  state.behavior = "success";
+  await page.reload();
+  await page.getByRole("button", { name: "确认原订单结果", exact: true }).click();
+  await expect(page).toHaveURL(/\/orders\/recovered-1$/);
+  expect(state.writes).toHaveLength(2);
+  expect(state.writes[1]).toEqual(original);
+  expect(state.committed.size).toBe(1);
+  expect(state.unexpected).toEqual([]);
+});
+
+test("confirmed uncommitted recovery preserves the original address comparison after a move and reload", async ({ page }) => {
+  const state = await fixture(page);
+  state.loseBeforeCommit = true;
+  await submit(page);
+  const original = state.writes[0];
+  state.stall.address = "西门蓝色雨棚旁";
+  state.stall.location_token = "b".repeat(64);
+  state.loseBeforeCommit = false;
+  state.behavior = "success";
+  await page.reload();
+  await page.getByRole("button", { name: "确认原订单结果", exact: true }).click();
+  await expect(page.locator(".location-change-notice")).toContainText("原位置：南门");
+  await expect(page.locator(".location-change-notice")).toContainText("最新位置：西门蓝色雨棚旁");
+  expect(state.writes[1]).toEqual(original);
+  expect(state.committed.size).toBe(0);
+  await page.getByRole("button", { name: "确认新位置并提交", exact: true }).click();
+  await expect(page).toHaveURL(/\/orders\/recovered-1$/);
+  expect(state.writes[2].expected_location_token).toBe("b".repeat(64));
+  expect(state.writes[2].idempotency_key).not.toBe(original.idempotency_key);
+  expect(state.unexpected).toEqual([]);
+});
+
+test("confirmed delivery location change preserves the selected handoff and contact draft", async ({ page }) => {
+  const state = await fixture(page);
+  state.stall.delivery = { available: true, enabled: true, fee_cents: 200, min_order_cents: 0,
+    points: [{ id: 71, name: "图书馆交接点", address: "图书馆南侧长椅" }], mode: "simulation",
+    starts_at: "00:00", ends_at: "23:59", eta_min_minutes: 15, eta_max_minutes: 25 };
+  await page.reload();
+  await page.getByRole("button", { name: /商家配送/ }).click();
+  await page.getByLabel("校园交接点").selectOption("71");
+  await page.locator('[data-checkout-field="recipient"]').fill("测试同学");
+  await page.locator('[data-checkout-field="phone"]').fill("13800000000");
+  state.stall.address = "西门蓝色雨棚旁";
+  state.stall.location_token = "b".repeat(64);
+  state.behavior = "success";
+  await page.getByRole("button", { name: "提交配送订单，去付款", exact: true }).click();
+  await expect(page.locator(".location-change-notice")).toContainText("配送仍送到所选校园交接点");
+  await expect(page.getByLabel("校园交接点")).toHaveValue("71");
+  await expect(page.locator(".pickup-address")).toContainText("图书馆南侧长椅");
+  await page.getByRole("button", { name: "确认新位置并提交", exact: true }).click();
+  await expect(page).toHaveURL(/\/orders\/recovered-1$/);
+  expect(state.writes[1]).toMatchObject({ expected_location_token: "b".repeat(64), fulfillment_type: "delivery",
+    delivery_point_id: 71, expected_delivery_fee_cents: 200, recipient_name: "测试同学", contact_phone: "13800000000" });
+  expect(state.unexpected).toEqual([]);
+});
+
+for (const code of ['stall_reservation_limit', 'active_reservation_limit', 'order_quantity_limit', 'checkout_rate_limited']) {
+  test(`confirmed ${code} preserves the editable cart and draft`, async ({ page }) => {
+    const state = await fixture(page);
+    state.limitCode = code;
+    await page.getByRole('button', { name: '提交自取订单', exact: true }).click();
+    await expect(page.getByRole('alert')).toContainText('已达到下单额度');
+    await expect(page.getByRole('heading', { name: '上一笔提交结果待确认', exact: true })).toHaveCount(0);
+    await expect(page.getByPlaceholder(note)).toBeEnabled();
+    await expect(page.getByPlaceholder(note)).toHaveValue('少辣，保留原备注');
+    await expect(page.getByRole('button', { name: `增加${product.name}`, exact: true })).toBeEnabled();
+    expect(await page.evaluate(key => sessionStorage.getItem(key), keyName)).toBeNull();
+    if (code.includes('reservation')) await expect(page.getByRole('link', { name: '查看已有订单 1', exact: true }))
+      .toHaveAttribute('href', '/orders/00000000-0000-4000-8000-000000000989');
+    expect(state.committed.size).toBe(0);
+    expect(state.unexpected).toEqual([]);
+  });
 }
 
 test("a lost result locks edits and retries the exact original write only once", async ({
@@ -187,7 +424,7 @@ test("a lost result locks edits and retries the exact original write only once",
   ).toBeDisabled();
   await expect(
     page.getByRole("button", { name: "请先确认原订单结果", exact: true }),
-  ).toBeDisabled();
+  ).toHaveCount(0);
   await expect(page.locator(".recovery-note")).toHaveText(
     "原备注：少辣，保留原备注",
   );
@@ -228,15 +465,14 @@ test("reload and a changed cart preserve the original recovery request and newer
     (key) => sessionStorage.getItem(key),
     keyName,
   );
-  await page.evaluate(
-    (item) =>
-      localStorage.setItem(
-        "yanhuo-cart-v2:user:989",
-        JSON.stringify({ 989: [{ product: item, quantity: 2 }] }),
-      ),
-    product,
-  );
+  await page.goto('/cart');
+  await expect(page.getByRole('link', { name: '确认原订单结果', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: /去结算/ })).toHaveCount(0);
+  await page.getByRole('button', { name: `增加${product.name}`, exact: true }).click();
+  await page.getByRole('link', { name: '确认原订单结果', exact: true }).click();
+  await expect(page).toHaveURL(/\/checkout\/989$/);
   await page.reload();
+  await showContactDraft(page);
   await expect(page.getByPlaceholder(note)).toBeDisabled();
   await expect(page.locator(".recovery-summary")).toContainText("× 1");
   expect(
@@ -254,7 +490,49 @@ test("reload and a changed cart preserve the original recovery request and newer
         JSON.parse(localStorage.getItem("yanhuo-cart-v2:user:989")!)[989][0]
           .quantity,
     ),
-  ).toBe(2);
+  ).toBe(1);
+  await expect(page.getByRole('link', { name: '我的餐袋，已选 1 件餐点', exact: true })).toBeVisible();
+});
+
+test('confirmed checkout removes its submitted bag and all stale checkout actions from the order screen', async ({ page }, info) => {
+  const state = await fixture(page);
+  state.behavior = 'success';
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: info.outputPath('checkout-ready-390.png'), fullPage: true });
+  await page.getByRole('button', { name: '提交自取订单', exact: true }).click();
+  await expect(page).toHaveURL(/\/orders\/recovered-1$/);
+  await expect(page.locator('.checkout-action-bar')).toHaveCount(0);
+  await expect(page.locator('.header-cart')).toHaveCount(0);
+  await expect(page.getByRole('link', { name: /去结算/ })).toHaveCount(0);
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('yanhuo-cart-v2:user:989')!))).toEqual({});
+  expect(await page.evaluate(key => sessionStorage.getItem(key), keyName)).toBeNull();
+  await page.screenshot({ path: info.outputPath('checkout-confirmed-390.png'), fullPage: true });
+  await page.goto('/cart');
+  await expect(page.locator('.cart-stall')).toHaveCount(0);
+  await expect(page.getByRole('link', { name: /去结算/ })).toHaveCount(0);
+  expect(state.unexpected).toEqual([]);
+});
+
+test('a successful response removes only submitted portions while a second tab adds food', async ({ page }) => {
+  const state = await fixture(page);
+  state.behavior = 'hold';
+  await page.getByRole('button', { name: '提交自取订单', exact: true }).click();
+  await expect.poll(() => state.writes.length).toBe(1);
+  const other = await page.context().newPage();
+  await other.goto('/stalls/989');
+  await other.getByRole('button', { name: `添加${product.name}`, exact: true }).click();
+  await other.goto('/stalls/991');
+  await other.getByRole('button', { name: '添加另摊餐点', exact: true }).click();
+  state.release();
+  await expect(page).toHaveURL(/\/orders\/recovered-1$/);
+  await expect(page.getByRole('link', { name: '我的餐袋，已选 2 件餐点', exact: true })).toBeVisible();
+  const remaining = await page.evaluate(() => JSON.parse(localStorage.getItem('yanhuo-cart-v2:user:989')!));
+  expect(remaining[989][0].quantity).toBe(1);
+  expect(remaining[991][0].quantity).toBe(1);
+  await expect(other.getByRole('link', { name: '我的餐袋，已选 2 件餐点', exact: true })).toBeVisible();
+  await other.close();
+  expect(state.writes).toHaveLength(1);
+  expect(state.unexpected).toEqual([]);
 });
 
 test("an empty cart and unavailable stall do not hide recovery of an existing order", async ({
@@ -336,6 +614,7 @@ test("recovery is account scoped and returns when the original account signs bac
   state.user = { ...state.user, id: 989, username: "recovery_a" };
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect(page.getByPlaceholder(note)).toBeDisabled();
+  await showContactDraft(page);
   await expect(page.getByPlaceholder(note)).toHaveValue("少辣，保留原备注");
   state.behavior = "success";
   await page
@@ -369,6 +648,7 @@ test("leaving while the server response is pending retains the original request 
   await expect(page).toHaveURL(/\/stalls\/989\/products\/989$/);
   state.release();
   await page.goto("/checkout/989");
+  await showContactDraft(page);
   await expect(page.getByPlaceholder(note)).toBeDisabled();
   expect(
     await page.evaluate((key) => sessionStorage.getItem(key), keyName),
@@ -463,6 +743,7 @@ test("an old account response cannot clear the new account's pending checkout", 
   state.user = { ...state.user, id: 990, username: "recovery_b" };
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect(page.getByPlaceholder(note)).toBeEnabled();
+  await showContactDraft(page);
   await page.getByPlaceholder(note).fill("新账号的备注");
   state.behavior = "lose";
   await submit(page);

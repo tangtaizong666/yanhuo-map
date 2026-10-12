@@ -123,6 +123,11 @@ def simulate_payment(order_id, user, payment_id, outcome):
         payment = order.payments.first()
         if order.mode != 'simulation' or not payment or payment.mode != 'simulation' or str(payment.pk) != str(payment_id):
             raise BusinessError('模拟付款记录已变化，请刷新当前订单。', 'simulation_intent_changed')
+        # A deliberate simulator outcome invalidates the cached observation. This
+        # capability is checked above and never applies to a live gateway record.
+        # Keep any in-flight lease: a concurrent observation still owns its work.
+        payment.next_query_at, payment.consecutive_query_failures = None, 0
+        payment.save(update_fields=['next_query_at', 'consecutive_query_failures'])
         if payment.simulation_state in ('SUCCESS', 'CLOSED'):
             return sync_payment(order_id, user) if payment.status not in ('paid', 'closed') else order
         if payment.expires_at <= timezone.now():
@@ -145,6 +150,8 @@ def simulate_refund(order_id, user, refund_id, outcome):
         if order.mode != 'simulation' or not refund:
             raise BusinessError('模拟退款记录不存在，请刷新订单。', 'simulation_intent_changed')
         if refund.status == 'success': return order
+        refund.next_query_at, refund.consecutive_query_failures = None, 0
+        refund.save(update_fields=['next_query_at', 'consecutive_query_failures'])
         if refund.simulation_state == 'SUCCESS':
             return process_refund(order_id, refund.pk)
         refund.simulation_state = {'success': 'SUCCESS', 'failure': 'ABNORMAL', 'pending': 'PROCESSING'}[outcome]

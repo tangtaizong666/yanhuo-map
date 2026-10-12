@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Yanhuo backup freshness and alert on failure
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+EnvironmentFile=/etc/yanhuo/backup.env
+ExecStart=/usr/bin/python3 /srv/yanhuo/scripts/backup.py status
+TimeoutStartSec=60

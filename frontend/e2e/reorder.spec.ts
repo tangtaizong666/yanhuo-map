@@ -16,6 +16,7 @@ async function fixture(browser: Browser, studentContext: BrowserContext) {
   const student = await createStudent(studentContext);
   const signedIn = await mutate(studentContext, "/auth/login", student);
   expect(signedIn.ok(), await signedIn.text()).toBeTruthy();
+  const cartKey = `yanhuo-cart-v2:user:${(await signedIn.json()).id}`;
   const merchant = await browser.newContext({ baseURL });
   const merchantLogin = await mutate(merchant, "/auth/login", {
     username: "vendor",
@@ -136,7 +137,16 @@ async function fixture(browser: Browser, studentContext: BrowserContext) {
     expect(restored.ok(), await restored.text()).toBeTruthy();
     await merchant.close();
   }
-  return { stall, stalls, products, merchant, create, update, cleanup };
+  return {
+    stall,
+    stalls,
+    products,
+    merchant,
+    cartKey,
+    create,
+    update,
+    cleanup,
+  };
 }
 
 test("reordering reviews current prices and skipped items, then merges only available quantities without creating an order", async ({
@@ -170,17 +180,32 @@ test("reordering reviews current prices and skipped items, then merges only avai
     const draft = {
       [f.stall.id]: [
         { product: changedPrice, quantity: 2 },
-        { product: existingOther, quantity: 2 },
+        { product: existingOther, quantity: 7 },
       ],
       [otherStall.id]: otherDraft,
     };
     await page.goto(`/orders/${order.id}`);
     await page.evaluate(
-      (value) => localStorage.setItem("yanhuo-cart-v1", JSON.stringify(value)),
-      draft,
+      ({ value, key }) => localStorage.setItem(key, JSON.stringify(value)),
+      { value: draft, key: f.cartKey },
     );
     await page.reload();
     const trigger = page.getByRole("button", { name: "再来一单", exact: true });
+    await expect(trigger).toBeVisible();
+    await expect
+      .poll(() =>
+        page.evaluate((key) => {
+          const saved = JSON.parse(localStorage.getItem(key) || "{}");
+          return Object.values(saved)
+            .flat()
+            .every((row: any) => row.portionKeys?.length === row.quantity);
+        }, f.cartKey),
+      )
+      .toBe(true);
+    const normalizedDraft = await page.evaluate(
+      (key) => JSON.parse(localStorage.getItem(key) || "{}"),
+      f.cartKey,
+    );
     await trigger.click();
     const dialog = page.getByRole("dialog", { name: "再来一单", exact: true });
     const changedRow = dialog.locator(`[data-product-id="${changedPrice.id}"]`);
@@ -213,45 +238,44 @@ test("reordering reviews current prices and skipped items, then merges only avai
     await expect(dialog).not.toBeVisible();
     await expect(trigger).toBeFocused();
     expect(
-      await page.evaluate(() =>
-        JSON.parse(localStorage.getItem("yanhuo-cart-v1") || "{}"),
+      await page.evaluate(
+        (key) => JSON.parse(localStorage.getItem(key) || "{}"),
+        f.cartKey,
       ),
-    ).toEqual(draft);
+    ).toEqual(normalizedDraft);
     await trigger.click();
     await expect(changedRow).toBeVisible();
-    const before = await (
-      await context.request.get(`${baseURL}/api/v1/orders`)
+    const { results: before } = await (
+      await context.request.get(`${baseURL}/api/v1/orders?pagination=cursor`)
     ).json();
     expect(before).toHaveLength(1);
     await dialog
       .getByRole("button", { name: "确认加入餐袋", exact: true })
       .click();
     await expect(page).toHaveURL(/\/cart$/);
-    const saved = await page.evaluate(() =>
-      JSON.parse(localStorage.getItem("yanhuo-cart-v1") || "{}"),
+    const saved = await page.evaluate(
+      (key) => JSON.parse(localStorage.getItem(key) || "{}"),
+      f.cartKey,
     );
     expect(
       saved[f.stall.id].find((row: any) => row.product.id === changedPrice.id),
     ).toMatchObject({ product: { price_cents: 1350 }, quantity: 3 });
     expect(
       saved[f.stall.id].find((row: any) => row.product.id === existingOther.id),
-    ).toEqual({
+    ).toMatchObject({
       product: existingOther,
-      quantity: 2,
-      portions: [
-        { options: {}, note: "" },
-        { options: {}, note: "" },
-      ],
+      quantity: 7,
+      portions: Array.from({ length: 7 }, () => ({ options: {}, note: "" })),
     });
     expect(saved[f.stall.id]).toHaveLength(2);
-    expect(saved[otherStall.id]).toEqual(
+    expect(saved[otherStall.id]).toMatchObject(
       otherDraft.map((row) => ({
         ...row,
         portions: [{ options: {}, note: "" }],
       })),
     );
-    const after = await (
-      await context.request.get(`${baseURL}/api/v1/orders`)
+    const { results: after } = await (
+      await context.request.get(`${baseURL}/api/v1/orders?pagination=cursor`)
     ).json();
     expect(after).toHaveLength(1);
     expect(after[0].total_cents).toBe(order.total_cents);
@@ -259,11 +283,13 @@ test("reordering reviews current prices and skipped items, then merges only avai
       after[0].items.find((item: any) => item.product_id === changedPrice.id)
         .unit_price_cents,
     ).toBe(1000);
-    const liveStall = await (
-      await context.request.get(`${baseURL}/api/v1/stalls/${f.stall.id}`)
+    const ownedStalls = await (
+      await f.merchant.request.get(`${baseURL}/api/v1/merchant/stalls`)
     ).json();
     expect(
-      liveStall.products.find((item: any) => item.id === changedPrice.id).stock,
+      ownedStalls
+        .find((item: any) => item.id === f.stall.id)
+        .products.find((item: any) => item.id === changedPrice.id).stock,
     ).toBe(3);
   } finally {
     await f.cleanup();
@@ -304,8 +330,11 @@ test("reorder appears only after an order ends, requires a second review after m
     await expect(dialog).toContainText("菜单、库存或餐袋发生变化");
     await expect(dialog).toContainText("现价 ¥11");
     expect(
-      await page.evaluate(() => localStorage.getItem("yanhuo-cart-v1")),
-    ).toBeNull();
+      await page.evaluate(
+        (key) => JSON.parse(localStorage.getItem(key) || "{}"),
+        f.cartKey,
+      ),
+    ).toEqual({});
     await page.keyboard.press("Escape");
     await context.setOffline(true);
     await trigger.click();

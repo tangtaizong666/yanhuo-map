@@ -9,7 +9,7 @@ from django.utils.crypto import constant_time_compare, salted_hmac
 from django.views.decorators.debug import sensitive_post_parameters
 from rest_framework import serializers
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from .errors import BusinessError
 from .recovery_models import AccountRecovery
@@ -65,6 +65,7 @@ def manage_recovery(request):
 
 @sensitive_post_parameters('recovery_code', 'new_password')
 @api_view(['POST'])
+@permission_classes([AllowAny])
 @throttle_classes([AuthThrottle])
 def reset_password(request):
     csrf(request)
@@ -92,5 +93,7 @@ def reset_password(request):
         record.used_at = timezone.now()
         record.save(update_fields=['code_hash', 'password_stamp', 'used_at'])
         audit(user, 'account_password_recovered', user.pk)
+        from .auth_limits import clear_account_failures
+        transaction.on_commit(lambda: clear_account_failures(user.username))
     logout(request)
     return private_response({'detail': '密码已重设。请使用新密码登录，其他设备需要重新登录。恢复码已用完。'})

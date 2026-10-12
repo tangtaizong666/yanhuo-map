@@ -1,3 +1,4 @@
+import { publicResponse, mealResponse } from "./public-contracts";
 import { expect, test, type Page } from "@playwright/test";
 import { fulfillCsrf } from "./helpers";
 
@@ -87,7 +88,8 @@ async function fixture(page: Page, initiallyFollowed = false) {
       return route.fulfill({
         json: { user_id: user?.id, counts: { total: 0 }, order: null },
       });
-    if (path === "/orders" || path === "/orders/recent-completed") return route.fulfill({ json: [] });
+    if (path === "/orders" || path === "/orders/recent-completed")
+      return route.fulfill({ json: [] });
     if (path === "/events") return route.fulfill({ json: { ok: true } });
     const match = path.match(/^\/stalls\/(\d+)\/follow$/);
     if (match) {
@@ -105,9 +107,13 @@ async function fixture(page: Page, initiallyFollowed = false) {
       }
       const stall = stalls.find((item) => item.id === id)!;
       stall.is_followed = route.request().method() === "POST";
-      return route.fulfill({ json: stall });
+      return route.fulfill({ json: publicResponse(path, stall) });
     }
-    if (path === "/stalls") {
+    if (path === "/products")
+      return route.fulfill({
+        json: mealResponse(stalls, new URL(route.request().url()).searchParams),
+      });
+    if (path === "/stalls" || path === "/stalls/map") {
       lists++;
       const snapshot = structuredClone(stalls).map((stall) => ({
         ...stall,
@@ -116,16 +122,22 @@ async function fixture(page: Page, initiallyFollowed = false) {
       const wait = heldList;
       heldList = undefined;
       if (wait) await wait.promise;
-      return route.fulfill({ json: snapshot });
+      return route.fulfill({ json: publicResponse(path, snapshot) });
     }
     if (path === "/follows")
       return route.fulfill({
-        json: stalls.filter((stall) => stall.is_followed),
+        json: publicResponse(
+          path,
+          stalls.filter((stall) => stall.is_followed),
+        ),
       });
     const detail = path.match(/^\/stalls\/(\d+)$/);
     if (detail)
       return route.fulfill({
-        json: stalls.find((stall) => stall.id === Number(detail[1])),
+        json: publicResponse(
+          path,
+          stalls.find((stall) => stall.id === Number(detail[1])),
+        ),
       });
     unexpected.push(path);
     return route.fulfill({
@@ -218,7 +230,7 @@ test("地图刷新替换列表对象后，关注结果更新当前卡片", async
     .click();
   await expect.poll(() => state.writes.length).toBe(1);
   const refreshed = page.waitForResponse(
-    (response) => new URL(response.url()).pathname === "/api/v1/stalls",
+    (response) => new URL(response.url()).pathname === "/api/v1/stalls/map",
   );
   await page.getByRole("button", { name: "刷新摊位", exact: true }).click();
   await refreshed;
@@ -249,7 +261,7 @@ test("晚到的旧地图列表不能覆盖已确认的关注结果", async ({ pa
     page.getByRole("button", { name: "取消关注测试小摊1", exact: true }),
   ).toBeEnabled();
   const delivered = page.waitForResponse(
-    (response) => new URL(response.url()).pathname === "/api/v1/stalls",
+    (response) => new URL(response.url()).pathname === "/api/v1/stalls/map",
   );
   oldList.release();
   await delivered;

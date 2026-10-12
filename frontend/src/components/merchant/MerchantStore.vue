@@ -1,42 +1,46 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { ownedImage } from "../../lib/media";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import {
   Store,
   MapPin,
-  Clock3,
   Navigation,
   ShieldCheck,
   Save,
   Check,
   Camera,
+  Settings2,
   ExternalLink,
-  Coffee,
   CircleCheck,
   CirclePause,
 } from "lucide-vue-next";
-import { api, formatTime, statusText } from "../../lib/api";
+import { api } from "../../lib/api";
 import { loadAMap, locate } from "../../lib/amap";
 import { useSession } from "../../stores/session";
 import { notify } from "../../lib/notify";
 import MerchantServices from "./MerchantServices.vue";
 import MerchantOperations from "./MerchantOperations.vue";
+import { hasPickupEligibility } from "./mode";
 const props = withDefaults(
-    defineProps<{ stall: any; orders?: any[]; ordersReady?: boolean }>(),
+    defineProps<{ stall: any; orders?: any[]; ordersReady?: boolean; discoveryOnly?: boolean }>(),
     { orders: () => [], ordersReady: false },
   ),
   emit = defineEmits<{ refresh: [] }>(),
   session = useSession();
 const busy = ref(""),
-  error = ref("");
+  error = ref(""),
+  relocationNeedsReview = ref(false);
 const profile = reactive({
   name: "",
   description: "",
   image: "",
   prep_minutes: 10,
   contact_phone: "",
+  public_phone_enabled: false,
   arrival_note: "",
   arrival_image: "",
+  payment_qr_image: "",
   location_draft_address: "",
   usual_hours: "",
 });
@@ -46,10 +50,17 @@ const location = reactive({
   longitude: "",
   closes_at: "",
 });
+const mapAvailable = computed(() => !!session.config?.amap_key);
+const hasLocationCoordinates = computed(() => {
+  const latitude = Number(location.latitude), longitude = Number(location.longitude);
+  return !!location.latitude.trim() && !!location.longitude.trim() &&
+    Number.isFinite(latitude) && Number.isFinite(longitude) &&
+    latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180;
+});
 const profileBase: Record<string, any> = {};
 const locationBase: Record<string, string> = {};
 const route = useRoute();
-const locationOpen = ref(route.hash === "#location" || !props.stall.address),
+const locationOpen = ref(route.hash === "#location" || !props.stall.activation?.has_location),
   mapOpen = ref(false),
   mapElement = ref<HTMLElement>();
 let map: any = null,
@@ -65,6 +76,10 @@ watch(
     if (hash === "#location") showLocation();
   },
 );
+watch(
+  () => hasPickupEligibility(props.stall),
+  (eligible) => { if (eligible) relocationNeedsReview.value = false; },
+);
 function showLocation() {
   locationOpen.value = true;
   void nextTick(() =>
@@ -73,6 +88,9 @@ function showLocation() {
       ?.scrollIntoView({ behavior: "smooth", block: "start" }),
   );
 }
+onMounted(() => {
+  if (route.hash === "#location") showLocation();
+});
 const confirmationStatus = computed(() =>
   props.stall.status === "closed"
     ? "closed"
@@ -92,13 +110,15 @@ function fill(current: any, previous?: any) {
     image: props.stall.image,
     prep_minutes: props.stall.prep_minutes,
     contact_phone: props.stall.contact_phone,
+    public_phone_enabled: !!props.stall.public_phone_enabled,
     arrival_note: props.stall.arrival_note || "",
     arrival_image: props.stall.arrival_image || "",
+    payment_qr_image: props.stall.payment_qr_image || "",
     location_draft_address: props.stall.location_draft_address || "",
     usual_hours: props.stall.usual_hours || "",
   };
   const incomingLocation = {
-    address: props.stall.address || props.stall.location_draft_address || "",
+    address: props.stall.activation?.has_location ? props.stall.address : props.stall.location_draft_address || "",
     latitude: String(props.stall.latitude ?? ""),
     longitude: String(props.stall.longitude ?? ""),
     closes_at: localDate(props.stall.closes_at),
@@ -166,6 +186,7 @@ async function updateStatus(
   if (busy.value) return;
   busy.value = "status";
   error.value = "";
+  const hadTradeEligibility = hasPickupEligibility(props.stall);
   try {
     const body: any = {
       status,
@@ -188,9 +209,12 @@ async function updateStatus(
         throw new Error("请填写有效的取餐地址和经纬度。");
       const d = location.closes_at ? new Date(location.closes_at) : null;
       if (d && Number.isNaN(d.getTime())) throw new Error("收摊时间无效。");
-      if (location.address.trim() !== locationBase.address)
+      const firstLocation = !props.stall.activation?.has_location;
+      // An application address draft is not an existing confirmed location.
+      if (firstLocation || location.address.trim() !== locationBase.address)
         body.address = location.address.trim();
       if (
+        firstLocation ||
         lat !== Number(locationBase.latitude) ||
         lng !== Number(locationBase.longitude)
       )
@@ -198,11 +222,19 @@ async function updateStatus(
       if (location.closes_at !== locationBase.closes_at)
         body.closes_at = d?.toISOString() ?? null;
     }
-    await api(`/merchant/stalls/${props.stall.id}/status`, {
+    const updated = await api<any>(`/merchant/stalls/${props.stall.id}/status`, {
       method: "POST",
       body,
     });
     if (disposed) return;
+    // Relocation can switch this stall into information-only mode. Keep the
+    // confirmed action outcome visible beside the editor across that switch.
+    if (
+      saveLocation &&
+      ["address", "latitude", "longitude"].some((field) => field in body) &&
+      hadTradeEligibility &&
+      !hasPickupEligibility(updated)
+    ) relocationNeedsReview.value = true;
     if (saveLocation) Object.assign(locationBase, location);
     emit("refresh");
     notify(
@@ -298,7 +330,10 @@ async function saveAddressDraft() {
     if (!disposed) busy.value = "";
   }
 }
-async function upload(e: Event, field: "image" | "arrival_image" = "image") {
+async function upload(
+  e: Event,
+  field: "image" | "arrival_image" | "payment_qr_image" = "image",
+) {
   const input = e.target as HTMLInputElement,
     file = input.files?.[0];
   if (!file) return;
@@ -320,7 +355,9 @@ async function upload(e: Event, field: "image" | "arrival_image" = "image") {
     notify(
       field === "image"
         ? "封面已上传，保存店铺信息后生效"
-        : "找摊照片已上传，保存店铺信息后生效，不会替换封面",
+        : field === "payment_qr_image"
+          ? "收款码已上传，保存后仅在符合现场付款条件的订单中展示"
+          : "找摊照片已上传，保存店铺信息后生效，不会替换封面",
       "info",
     );
   } catch (e) {
@@ -339,51 +376,150 @@ async function upload(e: Event, field: "image" | "arrival_image" = "image") {
       :stall="stall"
       :orders="orders"
       :ready="ordersReady"
+      :discovery-only="discoveryOnly"
       @refresh="emit('refresh')"
       @location="showLocation"
     />
-    <MerchantServices :stall="stall" @refresh="emit('refresh')" />
-    <div
-      v-if="stall.address && stall.latitude != null && stall.longitude != null"
-      class="m-store-grid daily-settings location-confirmation"
+    <details
+      id="location"
+      class="m-panel store-details"
+      :open="locationOpen"
+      @toggle="locationOpen = ($event.target as HTMLDetailsElement).open"
     >
-      <section class="m-panel">
+      <summary>
+        <MapPin :size="20" /><span
+          >位置与时间<small>确认出摊位置与预计收摊时间</small></span
+        >
+      </summary>
+      <section class="store-inner-section">
         <div class="m-panel-head">
-          <h2><Clock3 :size="20" /> 营业状态</h2>
-          <span :class="['m-status', stall.status]">{{
-            statusText(stall.status)
-          }}</span>
+          <h2><MapPin :size="20" /> 取餐位置与时间</h2>
+          <button
+            v-if="mapAvailable"
+            class="btn btn-secondary"
+            :disabled="!!busy"
+            @click="position"
+          >
+            <Navigation :size="16" /> 获取当前位置
+          </button>
         </div>
-        <div class="m-business-intro">
-          <span class="m-shop-icon"><Coffee :size="30" /></span>
-          <h3>
-            {{
-              stall.status === "open"
-                ? "今天的烟火，正在升起"
-                : "准备好了，就开始今天的好生意"
-            }}
-          </h3>
+        <p v-if="!mapAvailable && !hasLocationCoordinates" class="m-info-banner">
+          暂时不能使用地图。先保存地址草稿，请团队协助确认位置；草稿不会公开为出摊位置，也不会开始营业。
+        </p>
+        <button
+          v-if="mapAvailable"
+          class="btn btn-secondary"
+          :disabled="!!busy"
+          @click="pickLocation"
+        >
+          在地图上选择位置
+        </button>
+        <div v-if="mapOpen" class="map-picker">
+          <div
+            ref="mapElement"
+            class="map-canvas"
+            aria-label="点击地图设置取餐位置"
+          />
           <p>
-            自取与配送共用营业状态。暂歇和收摊会停止新订单，已有订单仍需继续处理。
+            点选你的实际摊位位置，再填写同学看得懂的地址。{{
+              location.latitude && location.longitude
+                ? "已选点，尚未保存。"
+                : "尚未选点。"
+            }}
           </p>
         </div>
-        <div class="m-confirm-location">
-          <MapPin :size="18" />
+        <form
+          class="m-form"
+          @submit.prevent="hasLocationCoordinates ? updateStatus(confirmationStatus, true) : saveAddressDraft()"
+        >
+          <label
+            >详细取餐地址<input
+              v-model="location.address"
+              required
+              maxlength="200"
+              placeholder="例如：学府路夜市入口左侧第三个摊位"
+          /></label>
+          <label v-show="hasLocationCoordinates"
+            >预计收摊时间<input
+              v-model="location.closes_at"
+              type="datetime-local"
+          /></label>
+          <details class="coordinate-details">
+            <summary>手动填写地图坐标</summary>
+            <div class="m-field-row">
+              <label
+                >纬度（高德坐标）<input
+                  v-model="location.latitude"
+                  inputmode="decimal" /></label
+              ><label
+                >经度（高德坐标）<input
+                  v-model="location.longitude"
+                  inputmode="decimal"
+              /></label>
+            </div>
+          </details>
+          <p v-if="hasLocationCoordinates" class="m-setting-note">
+            <ShieldCheck :size="18" />
+            更换取餐地址或坐标后，将暂停在线接单，待运营重新核验。历史订单仍保留原取餐地址，请主动联系顾客。
+          </p>
+          <div v-if="relocationNeedsReview" class="m-info-banner" role="status">
+            <strong>取餐位置已变更，等待运营重新核验</strong>
+            <p>新位置已保存，线上新单暂停。已有订单保留原取餐地址，请联系顾客确认交付安排。</p>
+            <RouterLink to="/merchant/orders?filter=active" class="m-text-link">处理已有订单</RouterLink>
+          </div>
+          <button v-if="hasLocationCoordinates" class="btn btn-primary" :disabled="!!busy" type="submit">
+            <Save :size="16" /> 确认并保存位置与时间
+          </button>
+          <button
+            :class="['btn', hasLocationCoordinates ? 'btn-secondary' : 'btn-primary']"
+            :disabled="!!busy"
+            :type="hasLocationCoordinates ? 'button' : 'submit'"
+            @click="hasLocationCoordinates && saveAddressDraft()"
+          >
+            {{ hasLocationCoordinates ? '仅保存地址草稿' : '保存地址草稿' }}
+          </button>
+          <p v-if="!hasLocationCoordinates && mapAvailable" class="m-muted">先保存地址也可以。确认出摊位置前，请定位或在地图上选点。</p>
+        </form>
+      </section>
+    </details>
+    <details class="m-panel store-details">
+      <summary><ShieldCheck :size="20" /><span>经营信息<small>经营主体与资质公示</small></span></summary>
+      <section class="store-inner-section">
+        <div class="m-panel-head">
+          <h2><ShieldCheck :size="20" /> 经营信息</h2>
+          <span
+            class="m-status"
+            :class="!discoveryOnly ? 'open' : 'paused'"
+            >{{
+              !discoveryOnly
+                ? "已开放在线接单"
+                : "仅展示，未开放在线接单"
+            }}</span
+          >
+        </div>
+        <div class="m-qualification">
           <div>
-            <strong>{{ stall.address }}</strong
-            ><small>最近确认：{{ formatTime(stall.last_confirmed_at) }}</small>
+            <small>经营主体</small><strong>{{ stall.merchant_name }}</strong>
+          </div>
+          <div>
+            <small>资质公示</small>
+            <p>
+              {{
+                stall.qualification_note ||
+                "尚未公示经营资质，由运营核验后维护。"
+              }}
+            </p>
           </div>
         </div>
-        <button
-          class="btn btn-secondary m-full-button"
-          :disabled="!!busy"
-          @click="updateStatus(confirmationStatus, false, true)"
-        >
-          <Check :size="16" /> 我还在这里，确认当前位置
-        </button>
-        <p class="m-muted">位置过期时将暂停新订单。请在实际出摊位置确认。</p>
+        <p class="m-muted">
+          {{ discoveryOnly ? '当前提供找摊信息服务，可发布位置与菜品。自取下单、线上支付和配送分别核验；使用个人收款码不等于获得线上交易资格。' : '自取下单、线上支付和配送分别按当前资格开放。资格变化只限制新交易，已有订单仍需继续处理。' }}
+        </p>
       </section>
-    </div>
+    </details>
+    <details v-if="!discoveryOnly" class="m-panel store-details store-services">
+      <summary><Settings2 :size="20" /><span>支付与配送<small>线上支付、配送开关与交接点</small></span></summary>
+      <MerchantServices :stall="stall" @refresh="emit('refresh')" />
+    </details>
     <details class="m-panel store-details">
       <summary>
         <Store :size="20" /><span
@@ -393,13 +529,15 @@ async function upload(e: Event, field: "image" | "arrival_image" = "image") {
       <section class="store-inner-section">
         <div class="m-panel-head">
           <h2><Store :size="20" /> 店铺信息</h2>
-          <RouterLink :to="`/stalls/${stall.id}`" class="m-text-link"
+          <RouterLink v-if="stall.is_visible" :to="`/stalls/${stall.id}`" class="m-text-link" @click="session.setConsumerPreview(true)"
             >预览 <ExternalLink :size="15"
           /></RouterLink>
+          <small v-else class="muted">公开展示核验后可预览</small>
         </div>
         <form class="m-form" @submit.prevent="saveProfile">
+          <p v-if="(profile.image && !ownedImage(profile.image)) || (profile.arrival_image && !ownedImage(profile.arrival_image))" class="m-alert">旧第三方图片地址仍保留，已停止对外加载。请重新上传封面或找摊照片后保存；已有平台上传照片不受影响。</p>
           <div class="m-shop-photo">
-            <img v-if="profile.image" :src="profile.image" alt="店铺封面" />
+            <img v-if="ownedImage(profile.image)" :src="ownedImage(profile.image)" alt="店铺封面" />
             <div>
               <label class="btn btn-secondary m-upload"
                 ><Camera :size="16" /> 更换店铺封面<input
@@ -441,9 +579,8 @@ async function upload(e: Event, field: "image" | "arrival_image" = "image") {
                 placeholder="按需填写"
             /></label>
           </div>
-          <p class="m-muted">
-            联系电话将公开展示，同一经营主体下的摊位共用此号码。
-          </p>
+          <label class="phone-consent"><input type="checkbox" v-model="profile.public_phone_enabled" /> 在公开摊位页展示联系电话</label>
+          <p class="m-muted">关闭公开展示后，已下单的同学仍能通过订单联系商家。同一经营主体下的摊位共用此号码。</p>
           <label
             >通常出摊时段（选填）<input
               v-model="profile.usual_hours"
@@ -463,8 +600,8 @@ async function upload(e: Event, field: "image" | "arrival_image" = "image") {
           </label>
           <div class="m-shop-photo">
             <img
-              v-if="profile.arrival_image"
-              :src="profile.arrival_image"
+              v-if="ownedImage(profile.arrival_image)"
+              :src="ownedImage(profile.arrival_image)"
               alt="找摊参照照片"
             />
             <div>
@@ -486,135 +623,36 @@ async function upload(e: Event, field: "image" | "arrival_image" = "image") {
               </button>
             </div>
           </div>
+          <div v-if="!discoveryOnly" class="m-shop-photo">
+            <img
+              v-if="ownedImage(profile.payment_qr_image)"
+              :src="ownedImage(profile.payment_qr_image)"
+              alt="摊主自有收款码"
+            />
+            <div>
+              <label class="btn btn-secondary m-upload"
+                ><Camera :size="16" /> 上传我的收款码<input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  :disabled="!!busy"
+                  @change="upload($event, 'payment_qr_image')"
+                  aria-label="上传我的收款码" /></label
+              ><small
+                >上传你自己的微信或支付宝收款码。仅给真实自取、已出餐且待现场付款的顾客展示；取消处理中或资金待核实时不展示。钱直接进你的账户，平台不经手。</small
+              ><button
+                v-if="profile.payment_qr_image"
+                type="button"
+                class="m-text-link"
+                @click="profile.payment_qr_image = ''"
+              >
+                移除收款码
+              </button>
+            </div>
+          </div>
           <button class="btn btn-primary" type="submit" :disabled="!!busy">
             <Save :size="16" /> 保存店铺信息
           </button>
         </form>
-      </section>
-    </details>
-    <details
-      id="location"
-      class="m-panel store-details"
-      :open="locationOpen"
-      @toggle="locationOpen = ($event.target as HTMLDetailsElement).open"
-    >
-      <summary>
-        <MapPin :size="20" /><span
-          >位置与经营资料<small>更换取餐位置、收摊时间与资质信息</small></span
-        >
-      </summary>
-      <section class="store-inner-section">
-        <div class="m-panel-head">
-          <h2><MapPin :size="20" /> 取餐位置与时间</h2>
-          <button
-            class="btn btn-secondary"
-            :disabled="!!busy"
-            @click="position"
-          >
-            <Navigation :size="16" /> 获取当前位置
-          </button>
-        </div>
-        <p v-if="!session.config?.amap_key" class="m-info-banner">
-          地图暂未配置。可以先保存地址草稿，请团队协助核实；这不会确认位置或开放接单。
-        </p>
-        <button
-          class="btn btn-secondary"
-          :disabled="!!busy"
-          @click="pickLocation"
-        >
-          在地图上选择位置
-        </button>
-        <div v-if="mapOpen" class="map-picker">
-          <div
-            ref="mapElement"
-            class="map-canvas"
-            aria-label="点击地图设置取餐位置"
-          />
-          <p>
-            点选你的实际摊位位置，再填写同学看得懂的地址。{{
-              location.latitude && location.longitude
-                ? "已选点，尚未保存。"
-                : "尚未选点。"
-            }}
-          </p>
-        </div>
-        <form
-          class="m-form"
-          @submit.prevent="updateStatus(confirmationStatus, true)"
-        >
-          <label
-            >详细取餐地址<input
-              v-model="location.address"
-              required
-              maxlength="200"
-              placeholder="例如：南门夜市入口左侧第三个摊位"
-          /></label>
-          <label
-            >预计收摊时间<input
-              v-model="location.closes_at"
-              type="datetime-local"
-          /></label>
-          <details class="coordinate-details">
-            <summary>手动填写地图坐标</summary>
-            <div class="m-field-row">
-              <label
-                >纬度（高德坐标）<input
-                  v-model="location.latitude"
-                  inputmode="decimal" /></label
-              ><label
-                >经度（高德坐标）<input
-                  v-model="location.longitude"
-                  inputmode="decimal"
-              /></label>
-            </div>
-          </details>
-          <p class="m-setting-note">
-            <ShieldCheck :size="18" />
-            更换取餐地址或坐标后，将暂停在线接单，待运营重新核验。历史订单仍保留原取餐地址，请主动联系顾客。
-          </p>
-          <button class="btn btn-primary" :disabled="!!busy" type="submit">
-            <Save :size="16" /> 确认并保存位置与时间
-          </button>
-          <button
-            class="btn btn-secondary"
-            :disabled="!!busy"
-            type="button"
-            @click="saveAddressDraft"
-          >
-            仅保存地址草稿
-          </button>
-        </form>
-      </section>
-      <section class="store-inner-section">
-        <div class="m-panel-head">
-          <h2><ShieldCheck :size="20" /> 经营信息</h2>
-          <span
-            class="m-status"
-            :class="stall.transaction_enabled ? 'open' : 'paused'"
-            >{{
-              stall.transaction_enabled
-                ? "已开放在线接单"
-                : "仅展示，未开放在线接单"
-            }}</span
-          >
-        </div>
-        <div class="m-qualification">
-          <div>
-            <small>经营主体</small><strong>{{ stall.merchant_name }}</strong>
-          </div>
-          <div>
-            <small>资质公示</small>
-            <p>
-              {{
-                stall.qualification_note ||
-                "尚未公示经营资质，由运营核验后维护。"
-              }}
-            </p>
-          </div>
-        </div>
-        <p class="m-muted">
-          经营资质和交易权限由运营核验维护，到摊付款同样需要符合接单条件。
-        </p>
       </section>
     </details>
     <details class="m-panel store-details">
@@ -658,7 +696,7 @@ async function upload(e: Event, field: "image" | "arrival_image" = "image") {
   color: #755e47;
 }
 #location {
-  scroll-margin-top: 24px;
+  scroll-margin-top: 76px;
 }
 .m-shop-photo small {
   max-width: 100%;
@@ -674,6 +712,7 @@ async function upload(e: Event, field: "image" | "arrival_image" = "image") {
   padding-top: 0;
   padding-bottom: 0;
 }
+.store-services :deep(.merchant-services) { border: 0; box-shadow: none; border-radius: 0; padding: 16px 0; margin: 0; border-top: 1px solid #eee2d1; }
 .store-details > summary {
   display: flex;
   align-items: center;

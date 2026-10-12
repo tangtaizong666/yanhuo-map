@@ -13,14 +13,13 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
-  backend:
+  release:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    restart: unless-stopped
-    # The backend has no public port; only self-controlled containers share this network.
-    # Preserve Caddy's HTTPS scheme while still stripping other proxy headers.
-    command: ["sh", "-c", "python manage.py migrate --noinput && python manage.py collectstatic --noinput && waitress-serve --host=0.0.0.0 --port=8000 --threads=8 --max-request-body-size=6291456 --trusted-proxy='*' --trusted-proxy-headers=x-forwarded-proto config.wsgi:application"]
+    restart: "no"
+    # A failed release never starts the application or any worker.
+    command: ["sh", "-c", "python manage.py migrate --noinput && python manage.py createcachetable && python manage.py collectstatic --noinput"]
     environment: &backend_environment
       DJANGO_ENV: production
       DEMO_MODE: "false"
@@ -50,12 +49,41 @@ services:
     volumes:
       - backend_static:/app/staticfiles
       - backend_media:/app/media
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    # No public port; only the direct-facing Caddy may supply trusted headers.
+    command: ["waitress-serve", "--host=0.0.0.0", "--port=8000", "--threads=8", "--max-request-body-size=6291456", "--trusted-proxy=*", "--trusted-proxy-headers=x-forwarded-proto", "config.wsgi:application"]
+    environment: *backend_environment
+    depends_on:
+      release:
+        condition: service_completed_successfully
+    volumes:
+      - backend_static:/app/staticfiles
+      - backend_media:/app/media
     healthcheck:
       test: ["CMD", "python", "-c", "import http.client,os; c=http.client.HTTPConnection('127.0.0.1',8000,timeout=5); c.request('GET','/api/v1/health',headers={'Host':os.environ['DJANGO_ALLOWED_HOSTS'].split(',')[0],'X-Forwarded-Proto':'https'}); assert c.getresponse().status==200"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 30s
+  callback:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    command: ["waitress-serve", "--host=0.0.0.0", "--port=8088", "--threads=2", "--connection-limit=32", "--channel-timeout=30", "--max-request-body-size=2097152", "--trusted-proxy=*", "--trusted-proxy-headers=x-forwarded-proto", "config.callback_wsgi:application"]
+    environment: *backend_environment
+    depends_on:
+      release:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import http.client; c=http.client.HTTPConnection('127.0.0.1',8088,timeout=3); c.request('GET','/callback-health'); assert c.getresponse().status==200"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
   worker:
     build:
       context: .
@@ -70,6 +98,8 @@ services:
       retries: 3
       start_period: 60s
     depends_on:
+      release:
+        condition: service_completed_successfully
       backend:
         condition: service_healthy
   payment_worker:
@@ -86,6 +116,26 @@ services:
       retries: 3
       start_period: 60s
     depends_on:
+      release:
+        condition: service_completed_successfully
+      backend:
+        condition: service_healthy
+  notification_worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    command: ["python", "manage.py", "process_payment_notifications", "--loop"]
+    environment: *backend_environment
+    healthcheck:
+      test: ["CMD", "python", "manage.py", "check_operations", "--worker", "process_payment_notifications"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      release:
+        condition: service_completed_successfully
       backend:
         condition: service_healthy
   web:
@@ -105,7 +155,10 @@ services:
       - backend_static:/srv/backend-static:ro
       - backend_media:/srv/backend-media:ro
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+      callback:
+        condition: service_healthy
 volumes:
   database:
   backend_static:

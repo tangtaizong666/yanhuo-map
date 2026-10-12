@@ -4,7 +4,7 @@ import io
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
-from threading import Barrier
+from threading import Barrier, Event
 from types import SimpleNamespace
 from unittest import skipUnless
 from unittest.mock import Mock, patch
@@ -13,19 +13,20 @@ from django.contrib.auth.models import Permission, User
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import close_old_connections, connection, connections, transaction
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 
 from .errors import BusinessError
 from .financial import hold_code
 from .financial_export import reconciliation_export
 from .models import FinancialEvidence, MerchantProfile, Order, PaymentAttempt, PaymentRefund, Stall, WorkerHeartbeat
-from .payments import _apply_refund, handle_notification, request_refund, sync_payment
+from .payments import _apply_refund, request_refund, sync_payment
 from .reconciliation import request_operator_refund, verify_and_resolve, verify_external_refund
 from .serializers import OrderSerializer
 from .services import merchant_action
 from .test_payments import PaymentSetup, payment_result, refund_result
 from .wechatpay import GatewayError
+from .payment_test_utils import deliver_notification as handle_notification
 
 
 class ResolutionSetup(PaymentSetup):
@@ -61,7 +62,7 @@ class ResolutionSetup(PaymentSetup):
         self.gateway.query_refund.side_effect = query
 
     def notify_refund(self, refund, state='SUCCESS'):
-        self.gateway.verify_notification.return_value = {'event_type': 'REFUND.' + state,
+        self.gateway.verify_notification.return_value = {'id': uuid.uuid4().hex, 'event_type': 'REFUND.' + state,
             'resource': refund_result(refund, state, notification=True)}
         handle_notification('own-account', {}, b'{}')
 
@@ -70,6 +71,113 @@ class ResolutionSetup(PaymentSetup):
             transaction_id=payment.transaction_id, out_refund_no=number, refund_id='WX-'+number+'-'+payment.mchid,
             amount={'total': payment.amount_cents, 'refund': payment.amount_cents, 'currency': 'CNY'},
             status='SUCCESS', success_time=timezone.now().isoformat()), **changes}
+
+
+class ExternalRefundPacingTests(ResolutionSetup, TestCase):
+    def setUp(self):
+        super().setUp()
+        pacing = override_settings(PAYMENT_QUERY_INTERVAL_SECONDS=5, PAYMENT_QUERY_FAILURE_DELAYS=(10, 20, 30, 60))
+        pacing.enable()
+        self.addCleanup(pacing.disable)
+        self.payment = self.pay()
+        self.paid_gateway()
+
+    def existing_refund(self, **fields):
+        return PaymentRefund.objects.create(order=self.order, payment=self.payment,
+            out_refund_no='EXTERNAL-PACING', amount_cents=self.payment.amount_cents,
+            reason='隔离核验', status='processing', **fields)
+
+    def test_known_refund_respects_its_own_cooldown(self):
+        refund = self.existing_refund(next_query_at=timezone.now() + timedelta(seconds=60))
+        self.gateway.query_refund.side_effect = lambda number: refund_result(refund)
+        with self.assertRaises(BusinessError) as caught:
+            verify_external_refund(self.order.pk, self.payment.pk, refund.out_refund_no, self.operator, '核验')
+        self.assertEqual(caught.exception.detail['code'], 'payment_query_cooldown')
+        self.gateway.query_refund.assert_not_called()
+        self.gateway.query_payment.assert_not_called()
+
+    def test_known_refund_respects_an_active_worker_lease(self):
+        refund = self.existing_refund(request_in_flight_until=timezone.now() + timedelta(seconds=60))
+        self.gateway.query_refund.side_effect = lambda number: refund_result(refund)
+        with self.assertRaises(BusinessError) as caught:
+            verify_external_refund(self.order.pk, self.payment.pk, refund.out_refund_no, self.operator, '核验')
+        self.assertEqual(caught.exception.detail['code'], 'financial_operation_busy')
+        self.gateway.query_refund.assert_not_called()
+        self.gateway.query_payment.assert_not_called()
+
+    def test_unknown_refund_failures_back_off_without_creating_financial_records(self):
+        self.gateway.query_refund.side_effect = GatewayError('NETWORK_UNKNOWN', '待确认', retryable=True)
+        now = timezone.now()
+        for attempt, delay in enumerate((10, 20, 30, 60), start=1):
+            with patch('django.utils.timezone.now', return_value=now):
+                with self.assertRaises(BusinessError):
+                    verify_external_refund(self.order.pk, self.payment.pk, 'UNKNOWN-EXTERNAL', self.operator, '核验')
+                with self.assertRaises(BusinessError) as caught:
+                    verify_external_refund(self.order.pk, self.payment.pk, 'ANOTHER-UNKNOWN', self.operator, '换号核验')
+                self.assertEqual(caught.exception.detail['code'], 'payment_query_cooldown')
+            self.payment.refresh_from_db()
+            self.assertEqual(self.payment.next_query_at, now + timedelta(seconds=delay))
+            self.assertEqual(self.payment.consecutive_query_failures, attempt)
+            self.assertIsNone(self.payment.request_in_flight_until)
+            self.assertFalse(PaymentRefund.objects.exists())
+            self.assertEqual(self.gateway.query_refund.call_count, attempt)
+            now = self.payment.next_query_at
+
+    def test_unknown_refund_keeps_lease_and_success_seeds_refund_cooldown(self):
+        from .reconciliation import _observe
+        now = timezone.now()
+        def query(number):
+            self.payment.refresh_from_db()
+            self.assertGreater(self.payment.request_in_flight_until, now)
+            with self.assertRaises(BusinessError) as caught:
+                _observe(self.order.pk, self.payment.pk, self.operator, '并发付款核验')
+            self.assertEqual(caught.exception.detail['code'], 'financial_operation_busy')
+            return self.external_result(self.payment, number)
+        self.gateway.query_refund.side_effect = query
+        with patch('django.utils.timezone.now', return_value=now):
+            verify_external_refund(self.order.pk, self.payment.pk, 'NEW-EXTERNAL', self.operator, '核验')
+            with self.assertRaises(BusinessError) as caught:
+                verify_external_refund(self.order.pk, self.payment.pk, 'NEW-EXTERNAL', self.operator, '重试')
+            self.assertEqual(caught.exception.detail['code'], 'payment_query_cooldown')
+        refund = PaymentRefund.objects.get()
+        self.payment.refresh_from_db()
+        self.assertEqual(refund.status, 'success')
+        self.assertEqual(refund.next_query_at, now + timedelta(seconds=5))
+        self.assertEqual(self.payment.next_query_at, now + timedelta(seconds=5))
+        self.assertIsNone(self.payment.request_in_flight_until)
+        self.gateway.query_refund.assert_called_once()
+
+    def test_unknown_refund_lost_lease_cannot_apply_success_or_reset_schedule(self):
+        future = timezone.now() + timedelta(minutes=3)
+        def query(number):
+            PaymentAttempt.objects.filter(pk=self.payment.pk).update(
+                request_in_flight_until=future, next_query_at=future, consecutive_query_failures=4)
+            return self.external_result(self.payment, number)
+        self.gateway.query_refund.side_effect = query
+        with self.assertRaises(BusinessError) as caught:
+            verify_external_refund(self.order.pk, self.payment.pk, 'LEASE-LOST', self.operator, '核验')
+        self.assertEqual(caught.exception.detail['code'], 'financial_operation_busy')
+        self.payment.refresh_from_db()
+        self.assertEqual((self.payment.request_in_flight_until, self.payment.next_query_at,
+            self.payment.consecutive_query_failures), (future, future, 4))
+        self.assertFalse(PaymentRefund.objects.exists())
+
+    def test_unknown_refund_does_not_overwrite_a_record_created_during_query(self):
+        future = timezone.now() + timedelta(minutes=3)
+        def query(number):
+            PaymentRefund.objects.create(order=self.order, payment=self.payment, out_refund_no=number,
+                amount_cents=self.payment.amount_cents, reason='另一操作', status='processing',
+                next_query_at=future, request_in_flight_until=future)
+            return self.external_result(self.payment, number)
+        self.gateway.query_refund.side_effect = query
+        with self.assertRaises(BusinessError):
+            verify_external_refund(self.order.pk, self.payment.pk, 'CREATED-DURING-QUERY', self.operator, '核验')
+        refund = PaymentRefund.objects.get()
+        self.assertEqual((refund.status, refund.next_query_at, refund.request_in_flight_until),
+            ('processing', future, future))
+        self.payment.refresh_from_db()
+        self.assertIsNone(self.payment.request_in_flight_until)
+        self.assertEqual(self.payment.consecutive_query_failures, 1)
 
 
 class FinancialResolutionTests(ResolutionSetup, TestCase):
@@ -298,7 +406,8 @@ class FinancialResolutionTests(ResolutionSetup, TestCase):
 
     def test_different_original_merchants_can_import_same_external_refund_number(self):
         first = self.pay(); self.paid_gateway()
-        merchant = MerchantProfile.objects.create(user=self.other, business_name='另一独立商户', is_verified=True)
+        merchant = MerchantProfile.objects.create(user=self.other, business_name='另一独立商户', is_verified=True,
+            qualification_tier='storefront', licensed_business_address='门店', food_preparation_address='后厨')
         stall = Stall.objects.create(merchant=merchant, area=self.stall.area, name='另一摊位', category='小吃')
         order = Order.objects.create(user=self.student, stall=stall, stall_name=stall.name, status='ready',
             payment_method='wechat', payment_status='paid', total_cents=800, paid_at=timezone.now(),
@@ -390,7 +499,7 @@ class FinancialResolutionTests(ResolutionSetup, TestCase):
             call_command('reconcile_payments', limit=1, stdout=io.StringIO())
             sync.assert_not_called()
         PaymentAttempt.objects.filter(pk=payment.pk).update(request_in_flight_until=None)
-        self.gateway.verify_notification.return_value = {'event_type': 'TRANSACTION.SUCCESS', 'resource': payment_result(payment)}
+        self.gateway.verify_notification.return_value = {'id': uuid.uuid4().hex, 'event_type': 'TRANSACTION.SUCCESS', 'resource': payment_result(payment)}
         handle_notification('own-account', {}, b'{}')
         request_refund(self.order.pk, self.vendor, '退款')
         before = FinancialEvidence.objects.count()
@@ -400,6 +509,41 @@ class FinancialResolutionTests(ResolutionSetup, TestCase):
 
 @skipUnless(connection.vendor == 'postgresql', 'Financial retry races need real PostgreSQL row locks.')
 class FinancialResolutionConcurrencyTests(ResolutionSetup, TransactionTestCase):
+    def test_external_refund_http_keeps_one_lease_without_holding_order_lock(self):
+        payment = self.pay()
+        self.paid_gateway()
+        entered, release = Event(), Event()
+        def query(number):
+            self.assertFalse(connection.in_atomic_block)
+            entered.set()
+            if not release.wait(timeout=10):
+                raise AssertionError('External query release timed out')
+            return self.external_result(payment, number)
+        self.gateway.query_refund.side_effect = query
+        def run():
+            close_old_connections()
+            try:
+                return verify_external_refund(self.order.pk, payment.pk, 'EXTERNAL-PARALLEL',
+                    self.operator, '并发核验').pk
+            finally:
+                connections.close_all()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(run)
+            try:
+                self.assertTrue(entered.wait(timeout=10))
+                with transaction.atomic():
+                    Order.objects.select_for_update(nowait=True).get(pk=self.order.pk)
+                with self.assertRaises(BusinessError) as caught:
+                    verify_external_refund(self.order.pk, payment.pk, 'EXTERNAL-OTHER-NUMBER',
+                        self.operator, '另一退款号')
+                self.assertEqual(caught.exception.detail['code'], 'financial_operation_busy')
+                self.gateway.query_refund.assert_called_once()
+            finally:
+                release.set()
+            self.assertEqual(future.result(timeout=10), self.order.pk)
+        self.assertEqual(PaymentRefund.objects.count(), 1)
+        self.assertEqual(PaymentRefund.objects.get().status, 'success')
+
     def test_two_operator_retry_keys_cannot_create_two_active_refunds(self):
         payment, original = self.close_refund()
         self.allow_new_refund(original)

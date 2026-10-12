@@ -27,6 +27,18 @@ python -m venv .venv
 
 ## 接口约定
 
+### 服务能力与展示供应（2026-10-05）
+
+摊位详情、商户摊位响应及商户 `/services` 返回 `capabilities`：`mode`、`public_listing`、`pickup_orders`、`online_payment`、`delivery_orders`。展示项含 `available/reason`，交易项另含 `eligible`。`eligible` 用于判断工作台模式，`available` 包含当前营业与服务配置条件。停业、暂停新单或售罄不改变商户的资格类型；实际下单、开关和支付请求都再次验证。
+
+`transaction_enabled` 在响应中代表有效交易资格；运营保存的原开通标志保留在模型，资质失效不会清空历史订单。未获准的真实流动摊位只提供信息展示；示例演练订单明确保存 `mode=simulation`。禁止用线下收款代替线上下单准入。
+
+真实实体门店还必须有非空白 `license_number` 和明确的 `license_valid_until`（含到期当日）；日期为空按尚未核验处理，不能表示长期有效。未核验商户可逐步补齐证照，撤销核验与关闭服务不受缺证照阻碍；后台新增交易／配送授权使用相同资格规则。许可证号及地址的 Unicode 空白判断在对象与数据库筛选中一致，不会自动补写任何真实商户资料。
+
+找摊菜品新增 `display_availability`（`available` 今天有、`sold_out` 卖完了、`paused` 暂时不卖、空值沿用原状态），商家创建／PATCH 可维护。此字段不修改 `stock`、`stock_version` 或交易用的 `sale_paused`。公开餐点的 `display_only=true` 时按展示状态返回 `availability`，`max_order_quantity=0`；恢复交易资格后重新按线上库存与停售开关判断。旧数据不自动填充“今天有”。
+
+订单 `offline_payment_available` 是当前展示现场付款入口的明确授权；真实自取待取餐、未付款、无线下／线上资金冲突及取消申请时才可能为 true。`stall_payment_qr_image` 在其他状态返回空字符串，模拟订单始终为空。资质失效后的旧线上支付入口收起，查询、关闭和必要售后仍可执行；前端不能仅凭图片地址或旧链接展示付款入口。
+
 ### 试点安全与分页接口（2026-10-03）
 
 订单响应新增 `financial_hold_reason`（无资金限制时空字符串）和 `allowed_actions`。动作列表同时结合当前状态与请求用户权限，供页面控制按钮；每次服务端写操作仍独立检查操作者、状态、款项、库存与模式。只读运营不会拿到写入或退款能力。款项未核清时隐藏取餐码并禁止核销，退款 CLOSED 不再能恢复正常履约。原 `refund` 提供当前未结案尝试或最新摘要；`refunds` 保留尝试历史及 `resolved_at`。原付款、退款编号和模式快照不覆盖。
@@ -48,6 +60,7 @@ python -m venv .venv
 - `GET /stalls?area=&q=&category=&status=&sort=&lat=&lng=`：品类为“小吃/烧烤/饮品/正餐/甜品”；状态支持 open/paused/closed/stale/orderable；排序 recommended/rating/distance。搜索同时匹配摊位及上架商品。没有位置不返回虚构距离，没有评价时 rating 为 null。
 - `GET /stalls/:id` 包含商品、近 20 条评价与经营信息；`POST/DELETE /stalls/:id/follow` 返回更新后的摊位；`GET /follows` 获取持久关注。
 - `POST /orders` 提交 `{stall_id,items:[{product_id,quantity,expected_price_cents}],idempotency_key,note?,contact_phone?}`；`GET /orders`、`GET /orders/:id`。相同 key+相同请求返回原订单；同 key 不同请求返回 409。客户端在一次提交及其网络重试中保留同一个 key，编辑后生成新 key。
+- 摊位详情返回 `location_token`，当前结算页面把已确认位置对应令牌作为 `expected_location_token` 提交。地址或经纬度变化后，新订单返回 409 `location_changed` 与 `current_location`；前端重新读取详情并要求用户重新确认。单纯刷新位置确认时间不使令牌失效。已成功订单的相同请求仍优先幂等重放；旧客户端缺少令牌暂保持兼容，无法享受此位置确认检查。
 - `POST /orders/:id/cancel`（reason）、`POST /orders/:id/review`（rating/content）。先接单后的取消仅提出申请；已收款不能取消。
 - `GET /orders/active-summary` 需要登录，只返回本人的进行中订单数量（pending/preparing/ready/total）及一笔优先提醒订单，待取餐优先、同状态按创建时间排序。响应含 `user_id` 供客户端核对账号，不含取餐码、商品明细、联系方式或备注；使用 `private, no-store`，读取时同样清理过期待接单订单。无进行中订单时 `order: null`。
 - `GET /merchant/stalls`、`GET /merchant/orders?stall=`；`POST /merchant/stalls/:id/status`（status/confirm_location/latitude?/longitude?/address?/closes_at?）。更换位置会撤销交易资格，运营重新核验后才能接单。摊位响应的 status 表示有效状态，session_status 表示原始营业会话状态；单纯确认位置应保留 session_status，避免将暂歇摊位意外恢复营业。已到预计收摊时间的会话，确认重新开摊时新建会话且不继承过期收摊时间；显式提交过去的收摊时间仍会拒绝。
@@ -55,6 +68,8 @@ python -m venv .venv
 - `PATCH /merchant/stalls/:id/profile` 更新 name/description/image/prep_minutes/contact_phone/usual_hours，以及下文认摊与接单字段；其他字段拒绝修改。联系电话属于经营主体，旗下摊位共用；资质与交易权限只能由运营核验。
 - `POST /merchant/stalls/:id/image` 上传 multipart `file`，上限 5 MB、2000 万像素，接受真实可解码的 JPG/PNG/WebP；重新编码为 JPEG 并清除 EXIF，以随机文件名写入 `MEDIA_ROOT`，返回 `{url}`。`/media/` 开发环境由 Django 提供，生产由 Caddy 读取共享媒体卷。数据库与媒体卷必须一起备份。
 - `GET /merchant/reviews?stall=` 查看评价；`POST /merchant/reviews/:id/reply`（content）回复本摊位评价。回复允许更新；content 为空字符串时撤回本人回复，replied_at 置空，用户评价原文及星级不变。操作审计留痕，并通过公共评价的 merchant_reply/replied_at 展示给用户。
+- 商家评价默认 `mode=live`，显式 `mode=simulation` 查看演练评价，每条评价返回订单的 `mode` 快照。公开摊位评分、评价数量、评价预览和已完成订单数量仅统计真实订单，历史模拟评价不计入公开口碑；模拟订单本人的详情仍保留自己的评价。
+- `GET /merchant/orders/:id?stall=` 按商家所有权或运营 `market.view_order` 权限读取一笔当前订单；可选摊位不匹配返回 404。沿用商家字段和动作权限，隐藏学生取餐码，响应为 `private, no-store`，用于同步已载入但刚退出待处理列表的订单。
 - `POST /merchant/orders/:id/action`，自取 action 为 accept/update_prep/reject/ready/confirm_payment/complete/approve_cancel/deny_cancel，配送另有 dispatch/arrive/report_delivery_issue/resolve_delivery_issue。complete 需要 `pickup_code`（8 位）。先确认收款，才能核销；核销一次后不可重用。商家响应隐藏取餐码，学生自己的订单才显示。备餐预估参数及幂等规则详见下文。
 - `POST /feedback`（content/contact?）；`POST /events`（type/stall_id?），事件可为 browse/home_view/stall_view/map_view/checkout_view/location_denied/map_error/api_error。
 - `GET /merchant/metrics?stall=&days=1|7|30&mode=live|simulation`：默认含今天的近 7 个上海时区自然日，模式默认为 `live`。按订单模式快照区分真实与模拟收款；模拟金额不是实际营收或平台余额。保留浏览次数、创建订单数、完成率等字段，以及 paid_orders/average_order_cents/followers/products_active/products_sold_out/today/series/top_products/recent_payments。收款、客单价、热销商品与收款流水按 paid_at 统计；退款按完成日期另计。orders_completed 与完成率使用“期间创建订单中当前已完成”的同一批次；today/series 的完成数按 completed_at 统计。metric_definitions 提供具体口径，浏览事件不是去重人数，转化率仅供参考。
@@ -138,7 +153,7 @@ prep_minutes 为 1–180 的整数，reason 不超过 200 字，idempotency_key 
 商品的 stock 表示**尚未被订单预留的线上可售份数**，不是包含已接订单的现场总余量。商家应单独划分线上份数；现场售出后按实际未预留余量盘点，不能把正在制作或待付款订单的份数重新计入线上库存。
 
 - `Product.sale_paused` 默认 false，可通过商品 PATCH 独立修改。暂停不清零库存、不取消已有订单；恢复只解除该标记，仍检查库存、上下架、摊位营业与交易权限。下单遇到暂停商品返回 409 `product_sale_paused`，附 product_id。
-- `Product.stock_version` 默认 0，商品响应均返回。每次下单预留、取消/超时归还、增量补货、成功盘点更正都会递增；幂等重放和重复释放不再递增。编辑价格、口味、暂停供应等资料不变更库存版本。
+- `Product.stock_version` 默认 0，仅所属商家的商品响应返回；公开商品仅返回 `availability` 和 `max_order_quantity`，不返回精确 `stock` 或版本。每次下单预留、取消/超时归还、增量补货、成功盘点更正都会递增；幂等重放和重复释放不再递增。编辑价格、口味、暂停供应等资料不变更库存版本。
 - 商品 PATCH 含 stock 时整次拒绝，返回 400 `stock_edit_requires_correction`；新建商品仍可设置初始库存。`POST /merchant/stalls/:id/restock` 继续按新增份数补货，不接受绝对覆盖。
 - `POST /merchant/products/:id/stock-correction` 接收 `{stock,expected_stock_version,idempotency_key,reason}`。stock 为 0–100000 的整数，版本为非负整数，key 长度 8–128，reason 为必填说明、不超过 200 字。成功返回 `{product,replayed}`。
 - 更正在摊位、商品锁内先检查已成功的幂等记录，再检查版本。同 key、同内容返回当前最新商品且 `replayed:true`；同 key 不同内容返回 409 `idempotency_conflict`。版本不符返回 409 `stock_version_conflict` 并附最新 product，此时没有执行更正；客户端须让商家重新盘点确认，不能自动用新版本覆盖重试。
@@ -192,7 +207,7 @@ Windows 可复用 `tools/verify_postgres.py` 做隔离验收：将 [EDB 官方 P
 2. 注入 production 环境、随机 SECRET_KEY、明确域名、HTTPS 来源、数据库 SSL 连接和高德配置。`DEMO_MODE=false`。缺少数据库、弱默认密钥或开启演示时启动会失败。
 3. 运行迁移、`collectstatic --noinput`、`createsuperuser`。运行 `python manage.py check --deploy --fail-level WARNING`，并执行全部 PostgreSQL 测试。禁止导入演示数据库。
 4. 使用 Waitress/Gunicorn 等 WSGI 进程（Windows：`.venv\Scripts\waitress-serve.exe --listen=127.0.0.1:8000 config.wsgi:application`），由 Nginx/Caddy 提供 HTTPS、前端 dist、静态文件和 `/api/`、`/admin/` 反向代理。仅可信代理覆盖 X-Forwarded-Proto 时设置 TRUST_PROXY=true。普通 JSON 请求建议限制 1 MB；图片上传接口需允许 multipart 至少 6 MB（应用限制图片 5 MB）。API/登录代理限速，保护数据库、媒体卷与备份目录。
-5. 将 `manage.py expire_orders --loop` 作为独立自动重启服务。健康检查调用 `/api/v1/health`，采集应用错误、超时接单、过期位置与未取餐事件。正式运行建议用共享缓存支撑多进程限流；当前 DRF 限流缓存为进程内缓存，边缘代理必须限制滥用。
+5. 将 `manage.py expire_orders --loop` 作为独立自动重启服务。健康检查调用 `/api/v1/health`，采集应用错误、超时接单、过期位置与未取餐事件。生产配置使用共享 DatabaseCache，发布阶段需运行 `createcachetable`（Compose release 已包含）；开发配置使用进程内缓存。边缘代理继续限制滥用，核销失败计数需在事务提交后保留。
 6. 每日使用 `pg_dump --format=custom --file=<受控备份路径> <数据库>`；备份到隔离的加密存储并规定保留期。恢复演练必须在隔离库使用 `pg_restore --exit-on-error --no-owner --dbname=<恢复库> <备份文件>`，核对订单、库存、外键与 PostGIS 扩展，再切换应用做只读检查。不得直接覆盖生产库。
 7. 正式开启交易前录入学校与区域、真实商户资质和准入范围；位置变更重新核验；双设备验收下单至取餐及超时取消。
 

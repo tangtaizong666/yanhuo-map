@@ -28,8 +28,8 @@ class AuditedAdmin(admin.ModelAdmin):
 
 @admin.register(MerchantProfile)
 class MerchantAdmin(AuditedAdmin):
-    list_display = ['business_name', 'user', 'is_verified', 'license_number']
-    list_filter = ['is_verified']
+    list_display = ['business_name', 'user', 'qualification_tier', 'is_verified', 'license_number', 'license_valid_until']
+    list_filter = ['qualification_tier', 'is_verified']
     search_fields = ['business_name', 'user__username']
 
 
@@ -49,8 +49,54 @@ class ProductInline(admin.TabularInline):
     def has_change_permission(self, request, obj=None): return False
 
 
+class StallAdmissionForm(forms.ModelForm):
+    class Meta:
+        model = Stall
+        fields = '__all__'
+
+    def clean(self):
+        values = super().clean()
+        merchant = values.get('merchant')
+        if merchant is None:
+            return values  # Invalid/missing foreign keys already have field errors.
+        # Admin changeform_view owns the surrounding POST transaction. Lock in
+        # checkout order (stall -> merchant), holding qualification through save.
+        # ModelForm has not copied cleaned_data onto instance at this stage.
+        current = Stall.objects.select_for_update(no_key=True).filter(pk=self.instance.pk).first() if self.instance.pk else None
+        if self.instance.pk and current is None:
+            raise ValidationError('摊位记录已变化，请重新打开后操作。')
+        grants = ('transaction_enabled', 'delivery_approved', 'delivery_enabled')
+        # save_model merges only changed fields. Match that effective state so a
+        # concurrently enabled permission cannot survive an unchecked reassignment.
+        def effective(name):
+            return values.get(name) if current is None or name in self.changed_data else getattr(current, name)
+        effective_grants = {name: effective(name) for name in grants}
+        merchant_id = merchant.pk if current is None or 'merchant' in self.changed_data else current.merchant_id
+        is_demo = effective('is_demo')
+        granting = any(value and (current is None or not getattr(current, name)) for name, value in effective_grants.items())
+        retaining_grants = any(effective_grants.values())
+        changing_subject = current is not None and (
+            merchant_id != current.merchant_id or current.is_demo and not is_demo)
+        if not granting and not (retaining_grants and changing_subject):
+            return values  # Revocation and unrelated repairs remain possible for legacy rows.
+        try:
+            merchant = MerchantProfile.objects.select_for_update(no_key=True).get(pk=merchant_id)
+        except MerchantProfile.DoesNotExist:
+            raise ValidationError('商户档案已变化，请重新选择。') from None
+        values['merchant'] = merchant
+        from .admission import pickup_eligibility_reason
+        # Approval can be prepared while ordering is off. Check qualification as
+        # if ordering were authorized; never save this temporary candidate flag.
+        candidate = Stall(merchant=merchant, is_demo=is_demo, transaction_enabled=True)
+        reason = pickup_eligibility_reason(candidate)
+        if reason:
+            raise ValidationError(f'不能授予交易或配送权限：{reason}')
+        return values
+
+
 @admin.register(Stall)
 class StallAdmin(AuditedAdmin):
+    form = StallAdmissionForm
     list_display = ['name', 'area', 'category', 'transaction_enabled', 'delivery_approved', 'delivery_enabled', 'is_visible', 'is_demo']
     list_filter = ['area', 'transaction_enabled', 'delivery_approved', 'is_demo']
     filter_horizontal = ['delivery_points']
@@ -142,10 +188,23 @@ class AuditAdmin(ReadOnlyAdmin):
     search_fields = ['target', 'actor__username']
 
 
+class FeedbackVerificationForm(forms.ModelForm):
+    class Meta:
+        model = Feedback
+        fields = '__all__'
+
+    def clean(self):
+        values = super().clean()
+        if values.get('verification') in ('confirmed', 'dismissed') and not values.get('verification_note', '').strip():
+            self.add_error('verification_note', '请记录核实方式与结论依据，处理完成本身不代表已核实。')
+        return values
+
+
 @admin.register(Feedback)
 class FeedbackAdmin(AuditedAdmin):
-    list_display = ['created_at', 'kind', 'stall', 'order', 'user', 'content', 'resolved']
-    list_filter = ['resolved', 'kind']
+    form = FeedbackVerificationForm
+    list_display = ['created_at', 'kind', 'stall', 'order', 'user', 'content', 'verification', 'resolved']
+    list_filter = ['resolved', 'kind', 'verification']
     readonly_fields = ['user', 'kind', 'stall', 'order', 'location_snapshot', 'content', 'contact', 'created_at', 'dedupe_key', 'request_hash']
     def has_add_permission(self, request): return False
 

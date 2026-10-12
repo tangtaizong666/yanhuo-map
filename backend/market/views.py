@@ -15,7 +15,7 @@ from django.utils import timezone
 from rest_framework import serializers
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework.exceptions import Throttled
@@ -41,6 +41,8 @@ def csrf(request): SessionAuthentication().enforce_csrf(request)
 
 
 def check_password(password, user):
+    if not password.strip():
+        raise BusinessError('密码不能全部为空白字符。', 'weak_password', status=400)
     try: validate_password(password, user)
     except DjangoValidationError as exc:
         raise BusinessError(' '.join(exc.messages), 'weak_password', status=400)
@@ -75,6 +77,7 @@ def merchant_stall(stall_id, user, locked=False, permission='market.view_stall')
 
 
 @api_view(['GET'])
+@permission_classes([AllowAny])
 def config(request):
     areas = Area.objects.all()
     if not settings.DEMO_MODE: areas = areas.filter(is_demo=False)
@@ -87,14 +90,17 @@ def config(request):
 
 
 @api_view(['GET'])
+@permission_classes([AllowAny])
 def me(request): return JsonResponse(user_data(request.user), safe=False)
 
 
 @api_view(['GET'])
+@permission_classes([AllowAny])
 def csrf_token(request): return Response({'csrfToken': get_token(request)})
 
 
 @api_view(['POST'])
+@permission_classes([AllowAny])
 @throttle_classes([])
 def login_view(request):
     csrf(request)
@@ -111,6 +117,7 @@ def login_view(request):
 
 
 @api_view(['POST'])
+@permission_classes([AllowAny])
 @throttle_classes([AuthThrottle])
 def register(request):
     csrf(request)
@@ -128,6 +135,7 @@ def register(request):
 
 
 @api_view(['POST'])
+@permission_classes([AllowAny])
 def logout_view(request):
     csrf(request)
     logout(request)
@@ -147,8 +155,8 @@ def profile(request):
 @permission_classes([IsAuthenticated])
 @throttle_classes([AuthThrottle])
 def password(request):
-    old = serializers.CharField(max_length=128).run_validation(request.data.get('old_password'))
-    new = serializers.CharField(max_length=128).run_validation(request.data.get('new_password'))
+    old = serializers.CharField(max_length=128, trim_whitespace=False).run_validation(request.data.get('old_password'))
+    new = serializers.CharField(max_length=128, trim_whitespace=False).run_validation(request.data.get('new_password'))
     with transaction.atomic():
         user = User.objects.select_for_update().get(pk=request.user.pk)
         if not user.is_active or not user.check_password(old):
@@ -156,6 +164,8 @@ def password(request):
         check_password(new, user)
         user.set_password(new)
         user.save(update_fields=['password'])
+        from .auth_limits import clear_account_failures
+        transaction.on_commit(lambda: clear_account_failures(user.username))
     update_session_auth_hash(request, user)
     return Response({'detail': '密码已更新，其他设备需要重新登录。'})
 
@@ -174,7 +184,7 @@ def account(request):
                 or PaymentAttempt.objects.filter(order__user=user, status__in=PaymentAttempt.ACTIVE_STATUSES).exists()
                 or PaymentRefund.objects.filter(order__user=user, resolved_at__isnull=True).exclude(status='success').exists()):
             raise BusinessError('还有进行中的订单，请处理完成后再注销。', 'active_orders')
-        supplied = serializers.CharField(max_length=128).run_validation(request.data.get('password'))
+        supplied = serializers.CharField(max_length=128, trim_whitespace=False).run_validation(request.data.get('password'))
         if not user.check_password(supplied): raise BusinessError('请输入正确密码确认注销。', 'invalid_password', status=400)
         audit(user, 'account_deactivated', user.id)
         Follow.objects.filter(user=user).delete()
@@ -195,43 +205,14 @@ def account(request):
 
 
 @api_view(['GET'])
+@permission_classes([AllowAny])
 def stalls(request):
-    query = visible_stalls()
-    area = request.query_params.get('area')
-    if area:
-        try: query = query.filter(area_id=int(area))
-        except ValueError: raise BusinessError('校园区域无效。', status=400)
-    q = request.query_params.get('q', '').strip()[:100]
-    if q: query = query.filter(Q(name__icontains=q) | Q(products__name__icontains=q, products__is_active=True) | Q(description__icontains=q)).distinct()
-    category = request.query_params.get('category')
-    if category and category != 'all': query = query.filter(category=category)
-    context = stall_context(request)
-    status_filter = request.query_params.get('status')
-    query = filter_status(query, status_filter, context['config'])
-    if context.get('point') and connection.vendor == 'postgresql':
-        lat, lng = context['point']
-        query = query.annotate(distance_m_db=RawSQL(
-            '(SELECT ST_Distance(coordinates, ST_SetSRID(ST_MakePoint(%s, %s),4326)::geography) '
-            'FROM market_stalllocation WHERE stall_id = market_stall.id)', (lng, lat)))
-    candidates = list(query.order_by('id'))
-    if status_filter == 'orderable':
-        candidates = [stall for stall in candidates if stall.can_order(context['config'])]
-    elif status_filter and status_filter != 'all':
-        candidates = [stall for stall in candidates if stall.effective_status(context['config']) == status_filter]
-    data = list(StallSerializer(candidates, many=True, context=context).data)
-    sort = request.query_params.get('sort')
-    if sort == 'distance' and context.get('point'):
-        data.sort(key=lambda x: x['distance_m'] if x['distance_m'] is not None else float('inf'))
-    elif sort in ('rating', 'popular'):
-        data.sort(key=lambda x: (x['rating'] or 0, x['review_count']), reverse=True)
-    elif not sort or sort in ('recommended', 'freshness'):
-        # Fresh open stalls first, including stalls that only accept walk-ins.
-        data.sort(key=lambda x: (x['last_confirmed_at'] or '', -x['id']), reverse=True)
-        data.sort(key=lambda x: {'open': 0, 'paused': 1, 'stale': 2, 'closed': 3}.get(x['status'], 4))
-    return Response(data)
+    from .discovery_api import stalls_response
+    return stalls_response(request, stall_context(request))
 
 
 @api_view(['GET'])
+@permission_classes([AllowAny])
 def stall_detail(request, stall_id): return Response(serialize_stall(get_object_or_404(visible_stalls(), pk=stall_id), request))
 
 
@@ -241,17 +222,18 @@ def follow(request, stall_id):
     stall = get_object_or_404(visible_stalls(), pk=stall_id)
     if request.method == 'POST': Follow.objects.get_or_create(user=request.user, stall=stall)
     else: Follow.objects.filter(user=request.user, stall=stall).delete()
-    return Response(serialize_stall(stall, request))
+    return Response({'id': stall.pk, 'is_followed': request.method == 'POST'}, headers={'Cache-Control': 'private, no-store'})
 
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def follows(request):
-    ids = Follow.objects.filter(user=request.user).values_list('stall_id', flat=True)
-    return Response(StallSerializer(visible_stalls().filter(id__in=ids), many=True, context=stall_context(request)).data)
+    from .discovery_api import stalls_response
+    return stalls_response(request, stall_context(request), following=True)
 
 
 @api_view(['POST'])
+@permission_classes([AllowAny])
 def event(request):
     csrf(request)
     from .operations import EventInput
@@ -340,6 +322,18 @@ def merchant_orders(request):
     return order_list_response(query, request, merchant=True)
 
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def merchant_order_detail(request, order_id):
+    query = owned_or_permitted(order_query(), request.user, 'market.view_order')
+    if request.query_params.get('stall'):
+        stall_id = serializers.IntegerField(min_value=1).run_validation(request.query_params['stall'])
+        query = query.filter(stall_id=stall_id)
+    order = get_object_or_404(query, pk=order_id)
+    return Response(OrderSerializer(order, context={'merchant': True, 'request': request}).data,
+        headers={'Cache-Control': 'private, no-store'})
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def merchant_status(request, stall_id):
@@ -413,15 +407,16 @@ def merchant_order_action(request, order_id):
     code = serializers.CharField(max_length=8, allow_blank=True).run_validation(request.data.get('pickup_code', ''))
     reason = serializers.CharField(max_length=200, allow_blank=True).run_validation(request.data.get('reason', ''))
     options = {}
+    if 'idempotency_key' in request.data:
+        options['idempotency_key'] = serializers.CharField(min_length=8, max_length=128).run_validation(request.data['idempotency_key'])
     if action in ('accept', 'update_prep'):
         if 'prep_minutes' in request.data:
             options['prep_minutes'] = serializers.IntegerField(min_value=1, max_value=180).run_validation(request.data['prep_minutes'])
-        if 'idempotency_key' in request.data:
-            options['idempotency_key'] = serializers.CharField(min_length=8, max_length=128).run_validation(request.data['idempotency_key'])
     return Response(OrderSerializer(merchant_action(order_id, request.user, action, code, reason, **options), context={'merchant': True, 'request': request}).data)
 
 
 @api_view(['GET'])
+@permission_classes([AllowAny])
 @throttle_classes([])
 def health(request):
     try:

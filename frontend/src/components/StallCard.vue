@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Heart, Star, MapPin, Clock3, ArrowUpRight } from "lucide-vue-next";
 import { confirmedText, statusText, money } from "../lib/api";
-import type { Stall } from "../lib/types";
+import type { StallSummary as Stall } from "../lib/types";
 import { productAvailable, preparationLabel } from "../lib/availability";
 import ReceivingNotice from "./ReceivingNotice.vue";
 defineProps<{ stall: Stall; compact?: boolean; followBusy?: boolean }>();
@@ -32,6 +32,7 @@ defineEmits<{ follow: [stall: Stall] }>();
       <Heart :size="17" :fill="stall.is_followed ? 'currentColor' : 'none'" />
     </button>
     <div class="stall-body">
+      <div class="stall-head-info">
       <RouterLink :to="`/stalls/${stall.id}`" class="stall-title"
         ><h3>{{ stall.name }}</h3>
         <ArrowUpRight :size="18"
@@ -57,6 +58,7 @@ defineEmits<{ follow: [stall: Stall] }>();
         <Clock3 :size="12" />{{ preparationLabel(stall.prep_minutes)
         }}<small>接单后更新</small>
       </p>
+      </div>
       <div
         v-if="!compact && stall.products.some(productAvailable)"
         class="stall-menu-peek"
@@ -90,7 +92,7 @@ defineEmits<{ follow: [stall: Stall] }>();
           }}</span
         >
       </div>
-      <ReceivingNotice :stall="stall" compact />
+      <ReceivingNotice class="stall-receiving" :stall="stall" compact />
     </div>
   </article>
 </template>
@@ -357,20 +359,24 @@ defineEmits<{ follow: [stall: Stall] }>();
     overflow: visible;
   }
   .stall-photo {
-    height: 100%;
-    min-height: 155px;
+    height: 112px;
+    min-height: 0;
     border-radius: 10px;
   }
   .stall-photo .badge {
     top: 6px;
     left: 6px;
-    font-size: 11px;
+    font-size: 12px;
     padding: 4px 5px;
   }
-  .stall-body {
-    padding: 2px 0 0;
-    min-width: 0;
-  }
+  .stall-body { display: contents; }
+  .stall-head-info { min-width: 0; }
+  .stall-menu-peek, .stall-bottom, .stall-receiving { grid-column: 1 / -1; }
+  .stall-menu-peek { margin-top: 0; }
+  .stall-desc { display: none; }
+  .prep-summary { font-size: 12px; margin: 7px 0 0; }
+  .prep-summary small { display: none; }
+  .stall-bottom { margin-top: 0; padding-top: 0; }
   .stall-title h3 {
     font-size: 16px;
   }
@@ -388,7 +394,7 @@ defineEmits<{ follow: [stall: Stall] }>();
   }
   .stall-rating {
     margin-top: 7px;
-    font-size: 11px;
+    font-size: 12px;
     gap: 6px;
   }
   .stall-rating > span:not(:first-child):not(.distance) {
@@ -396,10 +402,10 @@ defineEmits<{ follow: [stall: Stall] }>();
   }
   .stall-desc {
     margin-top: 7px;
-    font-size: 11px;
+    font-size: 12px;
   }
   .stall-address {
-    font-size: 11px;
+    font-size: 12px;
     margin-top: 5px;
   }
   .stall-bottom {
@@ -412,18 +418,18 @@ defineEmits<{ follow: [stall: Stall] }>();
     border-top: 0;
   }
   .freshness {
-    font-size: 11px;
+    font-size: 12px;
   }
   .fulfillment {
-    font-size: 11px;
+    font-size: 12px;
     padding: 1px 3px;
   }
   .compact {
     grid-template-columns: 90px 1fr;
   }
   .compact .stall-photo {
-    height: 110px;
-    min-height: 110px;
+    height: 90px;
+    min-height: 0;
   }
   .compact .stall-bottom {
     padding-right: 18px;
@@ -434,11 +440,9 @@ defineEmits<{ follow: [stall: Stall] }>();
   }
   .stall-menu-peek a {
     padding: 5px;
-    font-size: 10px;
+    font-size: 12px;
   }
-  .stall-menu-peek a:nth-child(2) {
-    display: none;
-  }
+
 }
 @media (max-width: 370px) {
   .stall-card {
@@ -447,7 +451,7 @@ defineEmits<{ follow: [stall: Stall] }>();
     padding: 10px;
   }
   .stall-photo {
-    height: 124px;
+    height: 98px;
   }
   .stall-rating > span:nth-child(3) {
     display: none;

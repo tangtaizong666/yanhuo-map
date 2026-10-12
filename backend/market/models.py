@@ -37,12 +37,20 @@ class Area(models.Model):
 
 
 class MerchantProfile(models.Model):
+    # Online-food rules require a physical storefront matching the licensed address.
+    # Mobile vendors can publish information; online reservations also require admission.
+    TIERS = [('mobile_vendor', '流动摊位（找摊与信息展示）'), ('storefront', '实体门店（经核验可开通线上交易）')]
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='merchant_profile')
     business_name = models.CharField('经营主体', max_length=120)
     contact_phone = models.CharField('公开联系电话', max_length=30, blank=True)
     qualification_note = models.TextField('经营资质公示', blank=True)
     is_verified = models.BooleanField('资质已核验', default=False)
     license_number = models.CharField('许可证号', max_length=100, blank=True)
+    qualification_tier = models.CharField('经营资质类型', max_length=20, choices=TIERS, default='mobile_vendor',
+        help_text='公开展示不等于交易准入；只有经营资格核验有效并获运营授权的实体门店才开放线上下单、支付与配送。')
+    licensed_business_address = models.CharField('证照载明经营场所', max_length=200, blank=True)
+    food_preparation_address = models.CharField('实际加工制作地址', max_length=200, blank=True)
+    license_valid_until = models.DateField('许可证有效期至', null=True, blank=True)
     wechat_pay_account = models.CharField('独立微信收款配置标识', max_length=64, null=True, blank=True, unique=True,
         help_text='仅绑定该经营主体自有商户号；密钥由部署配置管理。')
     def save(self, *args, **kwargs):
@@ -50,7 +58,26 @@ class MerchantProfile(models.Model):
         super().save(*args, **kwargs)
     class Meta:
         verbose_name = verbose_name_plural = '商户档案'
+        constraints = [models.CheckConstraint(name='storefront_requires_addresses', condition=Q(qualification_tier='mobile_vendor')
+            | (Q(qualification_tier='storefront') & ~Q(licensed_business_address='') & ~Q(food_preparation_address='')))]
     def __str__(self): return self.business_name
+    def clean(self):
+        super().clean()
+        if self.qualification_tier == 'storefront':
+            from .admission import has_admission_text
+            missing = {name: '实体门店需填写此项。' for name in ('licensed_business_address', 'food_preparation_address')
+                if not has_admission_text(getattr(self, name))}
+            if self.is_verified:
+                if not has_admission_text(self.license_number):
+                    missing['license_number'] = '核验通过的实体门店需填写经营许可证号。'
+                if self.license_valid_until is None:
+                    missing['license_valid_until'] = '核验通过的实体门店需填写已核验的许可证有效期。'
+                elif self.license_valid_until < timezone.localdate():
+                    missing['license_valid_until'] = '经营许可证已过有效期，不能标记资质核验通过。'
+            if missing: raise ValidationError(missing)
+    def online_trade_reason(self):
+        from .admission import merchant_trade_reason
+        return merchant_trade_reason(self)
 
 
 class DeliveryPoint(models.Model):
@@ -74,8 +101,11 @@ class DeliveryPoint(models.Model):
 
 
 class Stall(models.Model):
+    public_phone_enabled = models.BooleanField('允许公开联系电话', default=False)
     arrival_note = models.CharField('认摊说明', max_length=200, blank=True)
     arrival_image = models.CharField('认摊现场照片', max_length=500, blank=True)
+    # The vendor's own WeChat/Alipay personal QR; the platform only displays it and never touches the money.
+    payment_qr_image = models.CharField('摊主自有收款码', max_length=500, blank=True)
     location_draft_address = models.CharField('待核验位置草稿', max_length=200, blank=True)
     accepting_orders = models.BooleanField('接收新订单', default=True)
     prep_capacity = models.PositiveSmallIntegerField('同时备餐订单上限', null=True, blank=True,
@@ -134,19 +164,8 @@ class Stall(models.Model):
         if self.receiving_seen_at is None: return 'unknown'
         return 'recent' if self.receiving_seen_at >= timezone.now()-timedelta(seconds=90) else 'stale'
     def order_unavailable_reason(self, config=None, *, existing_order=False):
-        if not self.is_visible: return '摊位尚未公开。'
-        status = self.effective_status(config)
-        if status == 'stale': return '位置确认已过期，请等待商家重新确认。'
-        if status == 'closed': return '摊位已收摊，暂不接收新订单。'
-        if status == 'paused': return '商家暂时休息，暂不接收新订单。'
-        if not existing_order and not self.accepting_orders: return '商家正在忙碌，已暂停接收新订单；仍可查看摊位。'
-        if not self.transaction_enabled or not self.merchant.is_verified: return '此摊位仅支持线下到访，尚未开放在线点单。'
-        if not hasattr(self, 'location'): return '商家尚未确认取餐位置。'
-        if not existing_order:
-            gate = self.new_order_gate_code()
-            if gate == 'ordering_stopped': return '本场线上接单已截止，已下订单仍正常处理。'
-            if gate == 'prep_capacity_reached': return '正在处理的订单已达上限，请稍后再试；出餐后会自动恢复名额。'
-        return ''
+        from .admission import pickup_unavailable_reason
+        return pickup_unavailable_reason(self, config, existing_order=existing_order)
 
 
 class StallLocation(models.Model):
@@ -172,6 +191,8 @@ class BusinessSession(models.Model):
 
 
 class Product(models.Model):
+    display_availability = models.CharField('找摊展示供应状态', max_length=12, blank=True, default='',
+        choices=[('', '沿用原供应状态'), ('available', '今天有'), ('sold_out', '卖完了'), ('paused', '暂时不卖')])
     sale_paused = models.BooleanField('暂停供应', default=False)
     stock_version = models.PositiveBigIntegerField('库存版本', default=0, editable=False)
     taste_options = models.JSONField('免费口味选项', default=list, blank=True)
@@ -324,6 +345,8 @@ class PaymentAttempt(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     paid_at = models.DateTimeField(null=True, blank=True)
     last_checked_at = models.DateTimeField(null=True, blank=True)
+    next_query_at = models.DateTimeField(null=True, blank=True)
+    consecutive_query_failures = models.PositiveSmallIntegerField(default=0)
     request_in_flight_until = models.DateTimeField(null=True, blank=True)
     error_code = models.CharField(max_length=80, blank=True)
     error_message = models.CharField(max_length=200, blank=True)
@@ -355,6 +378,8 @@ class PaymentRefund(models.Model):
     created_at = models.DateTimeField(default=timezone.now)
     completed_at = models.DateTimeField(null=True, blank=True)
     last_checked_at = models.DateTimeField(null=True, blank=True)
+    next_query_at = models.DateTimeField(null=True, blank=True)
+    consecutive_query_failures = models.PositiveSmallIntegerField(default=0)
     resolved_at = models.DateTimeField('核验结案时间', null=True, blank=True)
     replaces = models.ForeignKey('self', null=True, blank=True, on_delete=models.PROTECT, related_name='retries')
     source = models.CharField(max_length=16, default='application', choices=[('application', '订单申请'), ('retry', '运营重试'), ('external', '外部退款核验'), ('compensation', '异常付款补偿')])
@@ -391,6 +416,9 @@ class Review(models.Model):
 
 
 class Feedback(models.Model):
+    verification = models.CharField('位置反馈核实结果', max_length=16, default='unreviewed',
+        choices=[('unreviewed', '尚未核实'), ('confirmed', '已核实属实'), ('dismissed', '核实未成立')])
+    verification_note = models.CharField('运营核实记录（不公开）', max_length=500, blank=True)
     order = models.ForeignKey(Order, null=True, blank=True, on_delete=models.PROTECT, related_name='help_reports')
     KINDS = [('general', '意见建议'), ('not_found', '没找到摊位'), ('wrong_location', '位置不对'), ('mismatch', '信息不符')]
     kind = models.CharField(max_length=20, choices=KINDS, default='general')
@@ -475,6 +503,7 @@ class AuditLog(models.Model):
 
 
 from .recovery_models import AccountRecovery  # noqa: E402,F401
-from .security_models import AuthenticationFailureBucket, ProductCreation  # noqa: E402,F401
+from .security_models import AuthenticationFailureBucket, ProductCreation, MerchantOrderOperation  # noqa: E402,F401
 from .operational_models import WorkerHeartbeat  # noqa: E402,F401
 from .financial_models import FinancialEvidence  # noqa: E402,F401
+from .notification_models import PaymentNotification  # noqa: E402,F401

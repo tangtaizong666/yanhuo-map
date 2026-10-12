@@ -116,11 +116,11 @@ class OperationsTests(TestCase):
         fresh.current_session = BusinessSession.objects.create(stall=fresh, status='open')
         fresh.save()
         BusinessSession.objects.filter(pk=self.stall.current_session_id).update(last_confirmed_at=timezone.now()-timedelta(minutes=16))
-        rows = self.api.get('/api/v1/stalls', {'sort': 'recommended'}).data
+        rows = self.api.get('/api/v1/stalls', {'sort': 'recommended'}).data['results']
         self.assertEqual([row['id'] for row in rows], [fresh.pk, self.stall.pk])
         self.assertFalse(rows[0]['can_order'])
         self.assertEqual(rows[1]['status'], 'stale')
-        self.assertEqual(self.api.get('/api/v1/stalls', {'status': 'orderable'}).data, [])
+        self.assertEqual(self.api.get('/api/v1/stalls', {'status': 'orderable'}).data['results'], [])
         config = self.api.get('/api/v1/config').data
         self.assertEqual((config['stale_minutes'], config['public_base_url']), (15, 'https://campus.example'))
 

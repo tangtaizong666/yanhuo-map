@@ -1,0 +1,19 @@
+[Unit]
+Description=Yanhuo encrypted offsite backup
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+OnFailure=yanhuo-backup-alert.service
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+EnvironmentFile=/etc/yanhuo/backup.env
+ExecStart=/usr/bin/python3 /srv/yanhuo/scripts/backup.py backup
+TimeoutStartSec=45min
+# On timeout Python's finally may not run. Alert/status sees the durable checkpoint;
+# the operator must run the documented resume command before another backup.
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

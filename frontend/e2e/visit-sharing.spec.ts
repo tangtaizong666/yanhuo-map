@@ -94,6 +94,13 @@ async function fixture(page: Page, publicBase = "") {
   return state;
 }
 
+async function expandArrivalUtilities(page: Page) {
+  const visit = page.getByRole("region", { name: "到摊指引" });
+  await expect(visit).toBeVisible();
+  const more = visit.getByRole("button", { name: "联系与更多信息" });
+  if (await more.isVisible()) await more.click();
+}
+
 test("guest location report captures displayed context, recovers an unknown result using the same request, and never changes trading state", async ({
   page,
 }) => {
@@ -102,6 +109,7 @@ test("guest location report captures displayed context, recovers an unknown resu
   const visit = page.getByRole("region", { name: "到摊指引" });
   await expect(visit).toContainText("认准绿色棚顶");
   await expect(visit).toContainText("暂停线上接单");
+  await expandArrivalUtilities(page);
   await visit.getByRole("button", { name: /没找到摊位/ }).click();
   const dialog = page.getByRole("dialog", { name: /没找到 南门煎饼/ });
   await dialog.getByLabel("位置不对", { exact: true }).check();
@@ -154,6 +162,7 @@ test("blank optional fields are valid and copy fallback gives a selectable addre
   );
   await page.goto("/stalls/831");
   const visit = page.getByRole("region", { name: "到摊指引" });
+  await expandArrivalUtilities(page);
   await visit.getByRole("button", { name: "复制地址", exact: true }).click();
   await expect(visit.getByLabel("可复制的摊位地址")).toHaveValue(
     /南门外第二棵树旁.*绿色棚顶/,
@@ -174,6 +183,7 @@ test("public sharing uses the configured domain without session or order secrets
   await expect
     .poll(() => state.events.filter((event) => event.type === "qr_open").length)
     .toBe(1);
+  await expandArrivalUtilities(page);
   await page.getByRole("button", { name: "分享小摊", exact: true }).click();
   const share = page.getByRole("dialog", {
     name: "把好味道分享出去",
@@ -205,6 +215,7 @@ test("local QR explicitly warns about reachability and the dialog fits mobile an
 }, info) => {
   await fixture(page);
   await page.goto("/stalls/831");
+  await expandArrivalUtilities(page);
   await page.getByRole("button", { name: "分享小摊", exact: true }).click();
   const share = page.getByRole("dialog", {
     name: "把好味道分享出去",
@@ -219,6 +230,24 @@ test("local QR explicitly warns about reachability and the dialog fits mobile an
     await expect(share.getByRole("button", { name: "复制链接" })).toBeVisible();
     if (width === 390)
       await page.screenshot({ path: info.outputPath("share-mobile.png") });
+  }
+  await share.getByRole("button", { name: "关闭分享" }).click();
+  await expect(page.getByRole("button", { name: "分享小摊", exact: true })).toBeFocused();
+  await page.setViewportSize({ width: 360, height: 900 });
+  await expect(page.getByRole("button", { name: /^(联系与更多信息|收起辅助信息)$/ })).toBeVisible();
+  const collapse = page.getByRole("button", { name: "收起辅助信息" });
+  if (await collapse.isVisible()) await collapse.click();
+  await expect(page.getByRole("button", { name: "联系与更多信息" })).toHaveAttribute("aria-expanded", "false");
+  for (const closeWith of ["button", "escape"]) {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.getByRole("button", { name: "分享小摊", exact: true }).click();
+    await page.setViewportSize({ width: 360, height: 900 });
+    await expect(page.locator(".stall-share-trigger")).toBeHidden();
+    await expect(share).toBeVisible();
+    if (closeWith === "button") await share.getByRole("button", { name: "关闭分享" }).click();
+    else await page.keyboard.press("Escape");
+    await expect(share).toBeHidden();
+    await expect(page.getByRole("button", { name: "联系与更多信息" })).toBeFocused();
   }
 });
 
@@ -240,6 +269,7 @@ test("arrival guidance stays honest without coordinates or photos, includes repo
   await expect(visit).toContainText("位置已过期");
   await expect(visit.getByRole("link", { name: "查看路线" })).toHaveCount(0);
   await expect(visit.locator("img")).toHaveCount(0);
+  await expandArrivalUtilities(page);
   await expect(visit.getByRole("link", { name: "联系商家" })).toHaveAttribute(
     "href",
     "tel:13800138000",
@@ -256,10 +286,12 @@ test("new merchant application entry is discoverable without changing the studen
   page,
 }) => {
   await fixture(page);
+  const initialCsrf = page.waitForResponse("**/api/v1/auth/csrf");
   await page.goto("/stalls/831");
   await expect(
     page.getByRole("link", { name: "我是商家，申请入驻" }),
   ).toHaveAttribute("href", "/merchant/apply");
+  await initialCsrf;
   await page.goto("/login?role=merchant&returnTo=%2Fmerchant%2Fapply");
   await expect(
     page.getByRole("button", { name: "注册并申请", exact: true }),

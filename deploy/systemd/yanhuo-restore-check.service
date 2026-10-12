@@ -1,0 +1,13 @@
+[Unit]
+Description=Verify Yanhuo restic files and isolated PostGIS recovery
+After=docker.service network-online.target
+Requires=docker.service
+OnFailure=yanhuo-backup-alert.service
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+EnvironmentFile=/etc/yanhuo/backup.env
+ExecStart=/usr/bin/python3 /srv/yanhuo/scripts/backup.py restore-check
+TimeoutStartSec=2h
