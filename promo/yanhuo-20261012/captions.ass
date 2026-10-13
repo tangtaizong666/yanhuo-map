@@ -1,0 +1,26 @@
+﻿[Script Info]
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+ScaledBorderAndShadow: yes
+WrapStyle: 2
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Main,Microsoft YaHei,56,&H00F7F9FF,&H000000FF,&H600E1017,&H90101010,0,0,0,0,100,100,3,0,1,1.6,1.2,2,100,100,100,1
+Style: Product,Microsoft YaHei,56,&H00283140,&H000000FF,&HFF000000,&HFF000000,0,0,0,0,100,100,3,0,1,0,0,2,100,100,100,1
+Style: Brand,Microsoft YaHei,118,&H00F2F5FF,&H000000FF,&H800E1017,&H90101010,-1,0,0,0,100,100,7,0,1,0,1,7,110,110,340,1
+Style: Small,Microsoft YaHei,28,&H00F2F5FF,&H000000FF,&H50000000,&H90101010,0,0,0,0,100,100,0,0,1,1,0.8,2,80,80,54,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:01.00,0:00:06.70,Main,,0,0,0,,{\fad(450,450)}下课，只想来碗热的。
+Dialogue: 0,0:00:07.80,0:00:12.50,Main,,0,0,0,,{\fad(450,450)}今天，还在老地方吗？
+Dialogue: 0,0:00:13.00,0:00:16.50,Main,,0,0,0,,{\fad(450,0)}先看一眼，再出发。
+Dialogue: 0,0:00:16.50,0:00:20.50,Product,,0,0,0,,{\fad(0,0)}先看一眼，再出发。
+Dialogue: 0,0:00:23.30,0:00:27.70,Main,,0,0,0,,{\fad(450,450)}走，就去这家。
+Dialogue: 0,0:00:48.20,0:00:52.80,Main,,0,0,0,,{\fad(450,450)}这一口，没白惦记。
+Dialogue: 0,0:00:54.00,0:01:00.00,Brand,,0,0,0,,{\fad(650,600)}烟火地图
+Dialogue: 0,0:00:54.70,0:01:00.00,Main,,0,0,0,,{\an7\pos(118,508)\fs43\fsp3\fad(650,600)}找到惦记的那一口。
+Dialogue: 0,0:00:55.10,0:01:00.00,Small,,0,0,0,,{\an7\pos(120,597)\fs26\fad(650,600)}校园周边找摊 · 先看出摊，再出发
+Dialogue: 0,0:00:54.00,0:01:00.00,Small,,0,0,0,,{\fad(650,600)}创意情境 · 非项目实地拍摄 · 界面为演示 · 片尾含 AI 画面

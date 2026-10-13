@@ -1,0 +1,14 @@
+{
+  "scope": "导演方案与静态图，不是视频验收",
+  "json_html_consistent": true,
+  "timeline_seconds": 90,
+  "beats": 9,
+  "target_frames_at_60fps": 5400,
+  "local_image_exists": true,
+  "sources_valid": true,
+  "desktop_browser": "通过：本地页面文字与概念图正常显示，人工截图检查",
+  "video_test": "未执行；无新版视频",
+  "application_tests": "未执行；未修改应用代码",
+  "ci": "尚未查询本轮提交",
+  "deployment": "未部署"
+}

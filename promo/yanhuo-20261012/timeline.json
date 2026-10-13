@@ -1,0 +1,38 @@
+{
+  "title": "烟火地图 · 这一口，没白惦记",
+  "width": 1920,
+  "height": 1080,
+  "fps": 30,
+  "duration": 60,
+  "narration": false,
+  "story": "虚构广告情境：下课惦记热面 → 担心摊位不在老地方 → 查看出摊与商家确认的位置 → 决定出发 → 烹饪 → 夹起第一口。开头和结尾使用同一碗面的素材呼应。",
+  "shots": [
+    {"source":"leaves-4980183.mp4", "in":2, "duration":4, "grade":"outdoor", "note":"下课后的树影与自然光，建立时刻"},
+    {"source":"noodles-4223987.mp4", "in":0.2, "duration":3, "crop":"1440:810:240:135", "grade":"food", "note":"食欲闪现：惦记的是这碗面，后半段回到同一素材"},
+    {"source":"gardenwalk-5177680.mp4", "in":4.8, "duration":5, "grade":"outdoor", "note":"校外步道与长影，准备出发"},
+    {"source":"phone-5665074.mp4", "in":0.3, "duration":4.5, "grade":"phone", "note":"悬念与决定：今天还在老地方吗；看手机的动作连接产品"},
+    {"source":"assets/product-scenario.png", "kind":"still", "duration":4, "grade":"none", "note":"叙事转折：按已有功能制作的独立广告演示，虚构摊位、出摊状态和位置，全程显式标注；不是实际录屏，不改业务数据"},
+    {"source":"phone-5665074.mp4", "in":4.3, "duration":2.5, "grade":"phone", "note":"手指轻点，完成查看，音乐主和弦确认决定"},
+    {"source":"gardenwalk-5177680.mp4", "in":7, "duration":3.5, "grade":"outdoor", "note":"确认后再次迈步，行动有了目的"},
+    {"source":"leaves-4980183.mp4", "in":8, "duration":3, "grade":"outdoor", "note":"路途短过渡，音乐重新推进"},
+    {"source":"sauce-2620043.mp4", "in":2.4, "duration":5.5, "grade":"food", "note":"进入烹饪场景，开始兑现期待"},
+    {"source":"wok-5336203.mp4", "in":6.2, "duration":3, "grade":"wok", "note":"旺火翻炒，节奏加快"},
+    {"source":"sauce-2620043.mp4", "in":10, "duration":3, "grade":"food", "note":"调味动作接续烹饪"},
+    {"source":"wok-5336203.mp4", "in":13.1, "duration":3, "grade":"wok", "note":"锅中食物跃起，配合音乐高潮"},
+    {"source":"sauce-2620043.mp4", "in":22.6, "duration":3, "grade":"food", "note":"收汁与锅气，为端面镜头蓄势"},
+    {"source":"noodles-4223987.mp4", "in":0, "duration":3, "grade":"food", "note":"同一碗面到手，回应开头的食欲闪现"},
+    {"source":"noodles-4223987.mp4", "in":8.5, "duration":3, "crop":"1728:972:96:54", "grade":"food", "note":"夹起第一口，完成这次寻找"},
+    {"source":"assets/brand-scene-noodles-ai.png", "kind":"still", "duration":7, "grade":"none", "motion":"gentle-push", "note":"AI 创意片尾，改为同类炒面；后期轻微推近，非实拍动态镜头"}
+  ],
+  "captions": [
+    {"start":1, "end":6.7, "text":"下课，只想来碗热的。"},
+    {"start":7.8, "end":12.5, "text":"今天，还在老地方吗？"},
+    {"start":13, "end":16.5, "text":"先看一眼，再出发。", "fade_out":0},
+    {"start":16.5, "end":20.5, "text":"先看一眼，再出发。", "style":"product", "fade_in":0, "fade_out":0},
+    {"start":23.3, "end":27.7, "text":"走，就去这家。"},
+    {"start":48.2, "end":52.8, "text":"这一口，没白惦记。"},
+    {"start":54, "end":60, "text":"烟火地图\n找到惦记的那一口。", "style":"brand",
+     "supporting_text":"校园周边找摊 · 先看出摊，再出发",
+     "disclosure":"创意情境 · 非项目实地拍摄 · 界面为演示 · 片尾含 AI 画面"}
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "date": "2026-10-13",
+  "assets": [
+    {
+      "file": "storyboard-natural.png",
+      "kind": "AI生成静态概念分镜",
+      "creator": "OpenAI 内置 image_gen",
+      "work": "本任务生成，无外部作品网址",
+      "license": "非第三方下载素材；使用适用的生成服务条款，不额外声称独占版权或第三方许可",
+      "reference": "storyboard-concept.png 为本任务较早生成的虚构角色参考；仅新版自然动机图用于导演页",
+      "prompt_file": "image-prompt.txt",
+      "notices": [
+        "全体人物虚构、AI生成",
+        "静态分镜不是动态视频",
+        "手机屏幕为占位，未作为实际产品演示验收"
+      ]
+    },
+    {
+      "file": "storyboard-concept.png",
+      "kind": "本任务早期AI概念图，仅角色参考，不是新版剧情",
+      "creator": "OpenAI 内置 image_gen",
+      "work": "本任务生成，无外部作品网址",
+      "license": "适用生成服务条款",
+      "prompts": {
+        "initial": "Create a cinematic director's storyboard concept board for an original Chinese campus light-comedy advertisement for a mobile street-food stall finder, called 烟火地图. This is a concept board, not finished video. Landscape canvas, precisely 3 columns by 2 rows, six equal 16:9 film stills with narrow ivory gutters. Photorealistic premium live-action advertising look, not drawing or cartoon. Consistent fictional adult Chinese college friends, both age 22, no resemblance to real people: A has short slightly tousled hair, rust-orange overshirt over cream T-shirt, dark jeans, green backpack, expressive overconfidence; B has tidy short black hair, navy hoodie, pale canvas shoulder bag, calm understated humor. Same simple campus gate/path at late afternoon progressing to blue hour, leafy plane trees, tactile natural textures, restrained warm orange and cool blue contrast, believable faces and hands. Same fictional middle-aged food vendor, apron, modest small blue noodle cart with an orange canopy and warm yellow lamp. Read left-to-right, top-to-bottom. Panel1: medium two-shot A strides toward camera pointing confidently along the path, B looks skeptical, lively natural acting. Panel2: very wide shot, both stand looking at an empty rectangular patch beside a campus wall where a cart used to stand, B gives A a dry sideways glance, humorous negative space, no sad or ruined environment. Panel3: over-shoulder medium close-up B checking his phone while A leans in, a credible small cream-and-warm-orange app on phone but no readable text needed, avoid floating graphics. Panel4: blue cart under orange canopy at the new spot near the campus gate, vendor stands beside stationary cart confirming his phone, establishing information comes from him, students not present in this shot. Panel5: A confidently points left, B gently tugs his sleeve to the right toward the clearly visible orange canopy in background, natural comic timing, both faces remain identical. Panel6: students seated beside the cart, each holding the same kind of freshly stir-fried thin noodles in a kraft paper bowl, A sheepishly smiling as B points playfully at his phone, warm lamp and steam behind, satisfying human ending. Focus on story acting and spatial continuity, cinematic 35mm/50mm perspectives, eye-level natural camera, modest depth of field. No UI cards, no presentation text, no slogans, no logos, no subtitles, no numbers, no watermark, no excessive teal-orange grading, no fantasy GPS graphics.",
+        "edit": "Edit this six-panel photorealistic director's concept storyboard. Keep the same 3x2 grid and exact same two fictional adult Chinese students, facial identities, wardrobe, colors, premium natural advertising photography, vendor, cart, campus world, aspect ratio and narrow gutters. The story is now titled internally 'I know this place': orange-shirt A secretly uses the stall-finder while navy-hoodie B is distracted, then tries to claim credit, and B discovers the phone at the meal. Make only these story adjustments: Panel2 add a distinct slightly leaning plane tree beside the EMPTY old stall spot, both students look at that empty place; tree is the visual anchor for a later return, no text. Panel3 replace the shared phone view: orange-shirt A is in close foreground sneakily checking HIS smartphone, B is small in background crouching to tie a shoe, not watching; the phone is a subtle cream-and-orange app with simple unreadable shapes, NO map route line or moving dot. Panel5 A now correctly points right toward the orange canopy and blue cart visible ahead, B follows skeptically; B is NOT pulling A's sleeve. Panel6 A's smartphone lies face up visibly between them on the bench, B points at that phone with a knowing smile as A sheepishly smiles caught out; BOTH still hold their noodle bowls, natural anatomically correct hands. Keep Panel1 and Panel4 visually unchanged. No captions, no text, no watermarks. This is static concept art only."
+      }
+    }
+  ],
+  "inspiration": [
+    {
+      "author": "Motion / Akroil Motion Studio",
+      "title": "Food Product Commercial — Cinematic Product Visualization",
+      "url": "https://dribbble.com/shots/27687058-Food-Product-Commercial-Cinematic-Product-Visualization",
+      "use": "参考食品质感、局部近景和暖光组织，不复制该作品图像、视频或声音",
+      "license": "未获得素材转载许可；本项目未下载或嵌入其素材"
+    }
+  ],
+  "project_evidence": [
+    "frontend/src/components/StallVisitInfo.vue",
+    "frontend/src/components/StallShare.vue",
+    "frontend/src/components/merchant/MerchantStore.vue",
+    "backend/market/views.py"
+  ],
+  "video_generation": {
+    "connection_checked": true,
+    "result": "USER_NOT_LOGGED_IN",
+    "tasks_submitted": 0,
+    "paid_actions": 0
+  }
+}

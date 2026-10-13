@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>烟火地图 · 广告情境界面</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden}
+body{background:#fffaf2;color:#392b23;font-family:"Microsoft YaHei",sans-serif}
+.scene{width:1920px;height:1080px;position:absolute;transform-origin:top left;background:#fffaf2}
+header{height:124px;margin:0 104px;border-bottom:1px solid #e8ddd0;display:flex;align-items:center;justify-content:space-between}
+.brand{display:flex;gap:18px;align-items:center;font-weight:700;font-size:39px;letter-spacing:3px}
+.mark{width:46px;height:46px;border:9px solid #df7538;border-radius:50% 50% 50% 0;transform:rotate(-45deg);margin-right:7px}
+.context{font-size:26px;color:#746b61;letter-spacing:2px}
+.main{position:relative;margin:74px 104px 0;height:696px;display:grid;grid-template-columns:720px 1fr;gap:70px}
+.content{padding-top:18px}.eyebrow{font-size:28px;color:#8b725e;letter-spacing:5px}
+h1{font-size:68px;margin:23px 0 26px;letter-spacing:2px;line-height:1.25;font-weight:700}
+.status{display:inline-flex;align-items:center;gap:13px;color:#346443;font-size:31px;font-weight:600;background:#eaf1e6;padding:11px 24px;border-radius:50px}
+.dot{width:12px;height:12px;background:#49794b;border-radius:50%}
+.rule{height:1px;background:#e8ddd0;margin:45px 0 36px;width:640px}
+.location{font-size:39px;line-height:1.6;letter-spacing:1px;margin-bottom:15px}
+.source{font-size:30px;color:#74665b;line-height:1.6}
+.pin{display:inline-block;width:25px;height:25px;border:5px solid #da783f;border-radius:50% 50% 50% 0;transform:rotate(-45deg);margin:0 18px 4px 4px}
+.photo{width:100%;height:640px;object-fit:cover;object-position:center;display:block;border-radius:4px}
+.meal{margin-top:17px;font-size:26px;color:#77685e;letter-spacing:2px}
+.label{position:absolute;bottom:55px;left:104px;right:104px;text-align:center;font-size:28px;letter-spacing:1px;color:#685d54}
+</style>
+<main class="scene" id="scene">
+  <header><div class="brand"><i class="mark"></i>烟火地图</div><div class="context">校园周边 · 找到惦记的那一口</div></header>
+  <div class="main">
+    <section class="content">
+      <div class="eyebrow">示例摊位</div><h1>南门小炒摊</h1>
+      <div class="status"><span class="dot"></span>出摊中</div>
+      <div class="rule"></div>
+      <div class="location"><span class="pin"></span>示例校园南门步道旁</div>
+      <div class="source">商家刚刚确认位置</div>
+    </section>
+    <section><img class="photo" src="noodles-story.jpg" alt="创意情境中的一碗炒面"></section>
+  </div>
+  <div class="label">广告情境演示 · 虚构摊位与位置 · 非实时营业信息</div>
+</main>
+<script>
+function fit(){const s=Math.min(innerWidth/1920,innerHeight/1080);document.getElementById('scene').style.transform=`scale(${s})`}
+fit();addEventListener('resize',fit);
+</script>
+</html>
