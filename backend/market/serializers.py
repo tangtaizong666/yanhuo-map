@@ -260,6 +260,7 @@ class OrderSerializer(serializers.ModelSerializer):
     review = ReviewSerializer(read_only=True, default=None)
     current_address = serializers.CharField(source='stall.location.address', read_only=True, default='')
     stall_payment_qr_image = serializers.SerializerMethodField()
+    stall_payment_qr_updated_at = serializers.SerializerMethodField()
     offline_payment_available = serializers.SerializerMethodField()
     location_changed = serializers.SerializerMethodField()
     wechat_payment = serializers.SerializerMethodField()
@@ -277,7 +278,7 @@ class OrderSerializer(serializers.ModelSerializer):
             'total_cents', 'created_at', 'accepted_at', 'ready_at', 'completed_at', 'paid_at', 'expires_at', 'pickup_code',
             'estimated_ready_at', 'prep_updated_at', 'prep_delay_reason',
             'pickup_address', 'pickup_latitude', 'pickup_longitude', 'current_address', 'location_changed',
-            'note', 'contact_phone', 'merchant_contact_phone', 'stall_payment_qr_image', 'offline_payment_available', 'cancel_requested', 'cancel_reason', 'review', 'items',
+            'note', 'contact_phone', 'merchant_contact_phone', 'stall_payment_qr_image', 'stall_payment_qr_updated_at', 'offline_payment_available', 'cancel_requested', 'cancel_reason', 'review', 'items',
             'fulfillment_type', 'items_total_cents', 'delivery_fee_cents', 'delivery_point_id',
             'delivery_point_name', 'delivery_point_address', 'delivery_point_latitude', 'delivery_point_longitude',
             'recipient_name', 'delivery_eta_min_at', 'delivery_eta_max_at', 'dispatched_at', 'arrived_at', 'delivery_issue']
@@ -296,6 +297,11 @@ class OrderSerializer(serializers.ModelSerializer):
             return ''
         from .media_policy import public_image
         return public_image(obj.stall.payment_qr_image)
+    def get_stall_payment_qr_updated_at(self, obj):
+        # Shown beside the code so students can notice a recently swapped image.
+        if not self.get_stall_payment_qr_image(obj) or not obj.stall.payment_qr_updated_at:
+            return None
+        return serializers.DateTimeField().to_representation(obj.stall.payment_qr_updated_at)
     def get_location_changed(self, obj):
         loc = getattr(obj.stall, 'location', None)
         return bool(loc and (loc.address != obj.pickup_address or

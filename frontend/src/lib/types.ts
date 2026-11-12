@@ -327,6 +327,7 @@ export interface Order {
   cancel_requested: boolean;
   merchant_contact_phone?: string;
   stall_payment_qr_image?: string;
+  stall_payment_qr_updated_at?: string | null;
   offline_payment_available?: boolean;
   cancel_reason: string;
   review: Review | null;

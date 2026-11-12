@@ -303,6 +303,31 @@ class MarketTests(TestCase):
         self.assertEqual(self.client.get(base+'v3/ip?callback=alert(1)', HTTP_REFERER='http://testserver/').status_code, 400)
         self.assertEqual(self.client.get(base+'v3/ip', HTTP_ORIGIN='https://evil.example').status_code, 403)
 
+    @override_settings(AMAP_KEY='test-key', AMAP_SECURITY_CODE='top-secret', AMAP_PROXY_DAILY_LIMIT=2)
+    def test_map_proxy_daily_ceiling_stops_upstream_calls(self):
+        from unittest.mock import patch
+        from django.core.cache import cache
+        cache.clear()
+        url = '/api/v1/amap-proxy/_AMapService/v3/ip'
+        with patch('market.proxy.urllib.request.OpenerDirector.open', side_effect=TimeoutError) as upstream:
+            self.assertEqual(self.client.get(url, HTTP_REFERER='http://testserver/').status_code, 502)
+            self.assertEqual(self.client.get(url, HTTP_REFERER='http://testserver/').status_code, 502)
+            response = self.client.get(url, HTTP_REFERER='http://testserver/')
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(upstream.call_count, 2)
+
+    @override_settings(AMAP_KEY='test-key', AMAP_SECURITY_CODE='top-secret')
+    def test_map_proxy_has_its_own_per_client_limit(self):
+        from unittest.mock import patch
+        from django.core.cache import cache
+        from .proxy import AmapProxyThrottle
+        cache.clear()
+        url = '/api/v1/amap-proxy/_AMapService/v3/ip'
+        with patch.object(AmapProxyThrottle, 'rate', '2/minute'), patch.object(AmapProxyThrottle, 'num_requests', 2, create=True), \
+                patch('market.proxy.urllib.request.OpenerDirector.open', side_effect=TimeoutError):
+            codes = [self.client.get(url, HTTP_REFERER='http://testserver/').status_code for _ in range(3)]
+        self.assertEqual(codes, [502, 502, 429])
+
 
 @skipUnless(connection.vendor == 'postgresql', 'Real row-lock concurrency tests require PostgreSQL; SQLite demo is not production.')
 class PostgreSQLConcurrencyTests(TransactionTestCase):

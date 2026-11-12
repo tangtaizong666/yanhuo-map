@@ -3,10 +3,33 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from django.conf import settings
+from django.core.cache import cache
 from django.http import HttpResponse, JsonResponse
-from rest_framework.decorators import api_view, permission_classes
+from django.utils import timezone
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny
+from rest_framework.throttling import SimpleRateThrottle
+from .auth_limits import client_ip
 from .errors import BusinessError
+
+
+class AmapProxyThrottle(SimpleRateThrottle):
+    # Origin/Referer are forgeable, so a per-client limit is the real guard on the key's quota.
+    scope = 'amap_proxy'
+    rate = '60/minute'
+    def get_cache_key(self, request, view):
+        return self.cache_format % {'scope': self.scope, 'ident': client_ip(request)}
+
+
+def daily_quota_exhausted():
+    # A site-wide ceiling below the AMap console quota keeps scripted abuse from spending all of it.
+    limit = settings.AMAP_PROXY_DAILY_LIMIT
+    key = f'amap_proxy_day:{timezone.localdate().isoformat()}'
+    if cache.add(key, 1, 2 * 86400):
+        return False
+    try: count = cache.incr(key)
+    except ValueError: count = 1
+    return count > limit
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -15,6 +38,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
+@throttle_classes([AmapProxyThrottle])
 def amap_proxy(request, upstream_path=''):
     if not settings.AMAP_KEY or not settings.AMAP_SECURITY_CODE:
         return JsonResponse({'detail': '地图服务尚未配置。', 'code': 'map_unavailable'}, status=503)
@@ -28,6 +52,8 @@ def amap_proxy(request, upstream_path=''):
     allowed_hosts = {request.get_host(), *[urllib.parse.urlparse(o).netloc for o in settings.CSRF_TRUSTED_ORIGINS]}
     if not source or urllib.parse.urlparse(source).netloc not in allowed_hosts:
         raise BusinessError('地图请求来源无效。', 'invalid_origin', status=403)
+    if daily_quota_exhausted():
+        return JsonResponse({'detail': '今日地图服务额度已用完，请先用列表找摊。', 'code': 'map_quota_exhausted'}, status=429)
     query = request.GET.copy()
     query['key'], query['jscode'] = settings.AMAP_KEY, settings.AMAP_SECURITY_CODE
     # Disallow query forwarding fields that can ask the upstream to fetch arbitrary URLs.

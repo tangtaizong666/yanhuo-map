@@ -128,7 +128,7 @@ def _apply_payment(order, payment, data):
             # Re-read under the same stall lock as settings/location writes. The
             # gateway observation may have taken seconds since the original read.
             order.stall = Stall.objects.select_for_update(no_key=True).get(pk=order.stall_id)
-            from .delivery import active_points, service_enabled, service_approved
+            from .delivery import active_points, delivery_window_open, service_enabled, service_approved
             point_open = active_points(order.stall).select_for_update().filter(pk=order.delivery_point_id).exists()
             # Payment success starts the acceptance clock; it never proves delivery.
             # Expired/stopped service is compensated without resurrecting fulfilment.
@@ -136,7 +136,7 @@ def _apply_payment(order, payment, data):
             # reserved order. All existing operational/qualification checks remain.
             if (paid_at > payment.expires_at or not order.stall.can_order(existing_order=True)
                     or not service_enabled(order.stall) or not service_approved(order.stall)
-                    or not order.stall.delivery_starts_at <= timezone.localtime().time().replace(tzinfo=None) < order.stall.delivery_ends_at
+                    or not delivery_window_open(order.stall)
                     or not point_open or not order.stall.delivery_points.filter(pk=order.delivery_point_id).exists()):
                 from .services import release_inventory
                 order.status, order.cancel_reason = 'cancelled', '付款时配送服务已暂停，正在全额退款'

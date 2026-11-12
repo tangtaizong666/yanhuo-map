@@ -20,6 +20,7 @@ from django.db.models import Count, Exists, F, IntegerField, OuterRef, Q, Sum, S
 from django.db.models.functions import TruncDate
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.conf import settings
 from rest_framework import serializers
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -166,8 +167,8 @@ def delivery(request, stall_id):
         if values.get('enabled') is True and admission_reason:
             raise BusinessError(admission_reason, 'delivery_unavailable')
         for key, value in values.items(): setattr(stall, 'simulation_delivery_enabled' if key == 'enabled' and eligible(stall) else 'delivery_' + key, value)
-        if stall.delivery_starts_at >= stall.delivery_ends_at:
-            raise BusinessError('配送时间需为同日开始时间早于结束时间的区间。', 'invalid_delivery_window', status=400)
+        if stall.delivery_starts_at == stall.delivery_ends_at:
+            raise BusinessError('配送开始与结束时间不能相同；结束早于开始表示跨过午夜。', 'invalid_delivery_window', status=400)
         if stall.delivery_eta_min_minutes > stall.delivery_eta_max_minutes:
             raise BusinessError('预计送达时间下限不能大于上限。', 'invalid_delivery_eta', status=400)
         if point_ids is not None:
@@ -273,6 +274,16 @@ def profile(request, stall_id):
             merchant.contact_phone = values.pop('contact_phone')
             merchant.save(update_fields=['contact_phone'])
             stall.merchant = merchant
+        if 'payment_qr_image' in values:
+            qr = values['payment_qr_image']
+            # Students pay this image directly, so only this stall's own uploads qualify.
+            if qr == stall.payment_qr_image:
+                values.pop('payment_qr_image')
+            elif qr and not qr.startswith(f'{settings.MEDIA_URL}merchants/{stall.pk}/'):
+                raise BusinessError('收款码需在本摊位上传，不能使用其他图片。', 'invalid_payment_qr', status=400)
+            else:
+                audit(request.user, 'payment_qr_changed', stall.id, before=stall.payment_qr_image, after=qr)
+                values['payment_qr_updated_at'] = timezone.now()
         for key, value in values.items():
             setattr(stall, key, value)
         if values:

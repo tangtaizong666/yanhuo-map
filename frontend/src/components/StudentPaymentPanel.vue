@@ -138,6 +138,22 @@ const showStallPaymentQr = computed(
     (!payment.value || payment.value.status === "closed") &&
     !!props.order.stall_payment_qr_image,
 );
+// A collection code changed within a day is the usual sign of a swapped image.
+const qrRecentlyChanged = computed(() => {
+  const at = props.order.stall_payment_qr_updated_at;
+  return !!at && Date.now() - new Date(at).getTime() < 24 * 60 * 60 * 1000;
+});
+const qrUpdatedLabel = computed(() => {
+  const at = props.order.stall_payment_qr_updated_at;
+  return at
+    ? new Date(at).toLocaleString("zh-CN", {
+        month: "numeric",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "";
+});
 const visible = computed(
   () =>
     [
@@ -795,6 +811,16 @@ onUnmounted(() => {
       <figcaption>
         <strong>摊主收款码 · 应付 ¥{{ money(order.total_cents) }}</strong>
         到摊后扫码付给摊主本人，平台不经手款项。付款后请向摊主出示取餐码，由摊主确认收款。
+        <small
+          v-if="qrUpdatedLabel"
+          :class="{ 'qr-recent': qrRecentlyChanged }"
+          :role="qrRecentlyChanged ? 'alert' : undefined"
+          >{{
+            qrRecentlyChanged
+              ? `收款码在 ${qrUpdatedLabel} 刚更换过，付款前请当面向摊主核对收款人名称。`
+              : `收款码更新于 ${qrUpdatedLabel}`
+          }}</small
+        >
       </figcaption>
     </figure>
     <p v-if="error" class="error-message" role="alert">{{ error }}</p>
@@ -882,6 +908,17 @@ onUnmounted(() => {
   display: block;
   margin-bottom: 4px;
   font-size: 14px;
+}
+.stall-qr small {
+  display: block;
+  margin-top: 6px;
+}
+.stall-qr small.qr-recent {
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: #fff1e6;
+  color: #9a3412;
+  font-weight: 600;
 }
 .offline-option {
   display: flex;

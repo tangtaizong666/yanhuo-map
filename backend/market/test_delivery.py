@@ -170,7 +170,8 @@ class DeliveryTests(DeliverySetup, TestCase):
         other_area = Area.objects.create(name='其他校园', latitude=30, longitude=120)
         foreign_point = DeliveryPoint.objects.create(area=other_area, name='其他校门', address='校门', latitude=30, longitude=120, is_active=True)
         self.assertEqual(self.api.patch(endpoint, {'point_ids': [foreign_point.pk]}, format='json').status_code, 400)
-        self.assertEqual(self.api.patch(endpoint, {'starts_at': '18:00', 'ends_at': '08:00'}, format='json').status_code, 400)
+        self.assertEqual(self.api.patch(endpoint, {'starts_at': '18:00', 'ends_at': '18:00'}, format='json').status_code, 400)
+        self.assertEqual(self.api.patch(endpoint, {'starts_at': '18:00', 'ends_at': '01:00'}, format='json').status_code, 200)
         self.assertEqual(self.api.patch(endpoint, {'eta_min_minutes': 60, 'eta_max_minutes': 20}, format='json').status_code, 400)
         response = self.api.patch(endpoint, {'enabled': False, 'fee_cents': 500, 'point_ids': [self.point.pk]}, format='json')
         self.assertEqual(response.status_code, 200)
@@ -458,3 +459,17 @@ class DeliveryConcurrencyTests(DeliverySetup, TransactionTestCase):
         order.refresh_from_db()
         self.assertEqual((order.status, order.payment_status), ('cancelled', 'refunding'))
         self.assertIsNone(order.completed_at)
+
+
+class DeliveryWindowTests(TestCase):
+    def test_overnight_window_crosses_midnight(self):
+        from types import SimpleNamespace
+        from datetime import datetime
+        from .delivery import delivery_window_open
+        stall = SimpleNamespace(delivery_starts_at=time(18), delivery_ends_at=time(1))
+        at = lambda h, m=0: datetime(2026, 10, 22, h, m)
+        for hour, minute, expected in [(17, 59, False), (18, 0, True), (23, 59, True), (0, 30, True), (1, 0, False), (12, 0, False)]:
+            self.assertIs(delivery_window_open(stall, at(hour, minute)), expected, (hour, minute))
+        stall.delivery_starts_at, stall.delivery_ends_at = time(11), time(14)
+        self.assertTrue(delivery_window_open(stall, at(11)))
+        self.assertFalse(delivery_window_open(stall, at(14)))

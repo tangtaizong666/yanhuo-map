@@ -106,6 +106,7 @@ class Stall(models.Model):
     arrival_image = models.CharField('认摊现场照片', max_length=500, blank=True)
     # The vendor's own WeChat/Alipay personal QR; the platform only displays it and never touches the money.
     payment_qr_image = models.CharField('摊主自有收款码', max_length=500, blank=True)
+    payment_qr_updated_at = models.DateTimeField('收款码更新时间', null=True, blank=True)
     location_draft_address = models.CharField('待核验位置草稿', max_length=200, blank=True)
     accepting_orders = models.BooleanField('接收新订单', default=True)
     prep_capacity = models.PositiveSmallIntegerField('同时备餐订单上限', null=True, blank=True,

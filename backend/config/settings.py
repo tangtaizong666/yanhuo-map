@@ -26,6 +26,7 @@ if PUBLIC_BASE_URL:
 AMAP_KEY = os.getenv('AMAP_KEY', '')
 AMAP_SECURITY_CODE = os.getenv('AMAP_SECURITY_CODE', '')
 AMAP_PROXY = '/api/v1/amap-proxy/_AMapService'
+AMAP_PROXY_DAILY_LIMIT = int(os.getenv('AMAP_PROXY_DAILY_LIMIT', '20000'))
 # Payment credentials stay in an operator-owned server file, never in frontend settings.
 WECHAT_PAY_ENABLED = os.getenv('WECHAT_PAY_ENABLED', 'false').lower() == 'true'
 WECHAT_PAY_CONFIG_FILE = os.getenv('WECHAT_PAY_CONFIG_FILE', '')

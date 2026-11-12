@@ -168,3 +168,41 @@ class PaymentVisibilityTests(TestCase):
         self.stall.payment_qr_image = 'https://untrusted.example/collection.png'
         self.stall.save(update_fields=['payment_qr_image'])
         self.assertEqual(self.details()['stall_payment_qr_image'], '')
+
+
+@override_settings(DEMO_MODE=False)
+class PaymentQrChangeTests(TestCase):
+    def setUp(self):
+        self.student, self.other, self.vendor, self.stall, self.product = fixtures()
+        self.client = APIClient()
+        self.client.force_authenticate(self.vendor)
+        self.endpoint = f'/api/v1/merchant/stalls/{self.stall.pk}/profile'
+
+    def test_code_must_be_this_stalls_upload_and_change_is_audited(self):
+        from .models import AuditLog
+        foreign = f'/media/merchants/{self.stall.pk + 1000}/qr.jpg'
+        response = self.client.patch(self.endpoint, {'payment_qr_image': foreign}, format='json')
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertEqual(self.client.patch(self.endpoint, {'payment_qr_image': '/images/demo.jpg'}, format='json').status_code, 400)
+        own = f'/media/merchants/{self.stall.pk}/qr.jpg'
+        response = self.client.patch(self.endpoint, {'payment_qr_image': own}, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.stall.refresh_from_db()
+        self.assertEqual(self.stall.payment_qr_image, own)
+        changed_at = self.stall.payment_qr_updated_at
+        self.assertIsNotNone(changed_at)
+        self.assertTrue(AuditLog.objects.filter(action='payment_qr_changed', target=str(self.stall.pk)).exists())
+        # Re-saving the same image (the store form sends every field) is not a change.
+        self.client.patch(self.endpoint, {'payment_qr_image': own, 'usual_hours': '18:00-23:00'}, format='json')
+        self.stall.refresh_from_db()
+        self.assertEqual(self.stall.payment_qr_updated_at, changed_at)
+        self.assertEqual(AuditLog.objects.filter(action='payment_qr_changed').count(), 1)
+        # Clearing the code is allowed.
+        self.assertEqual(self.client.patch(self.endpoint, {'payment_qr_image': ''}, format='json').status_code, 200)
+
+    def test_legacy_code_survives_unrelated_profile_saves(self):
+        self.stall.payment_qr_image = '/media/merchants/test/collection-code.png'
+        self.stall.save(update_fields=['payment_qr_image'])
+        response = self.client.patch(self.endpoint, {'payment_qr_image': self.stall.payment_qr_image,
+            'usual_hours': '18:00-23:00'}, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
