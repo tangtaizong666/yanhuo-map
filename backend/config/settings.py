@@ -142,6 +142,15 @@ X_FRAME_OPTIONS = 'DENY'
 if os.getenv('TRUST_PROXY', 'false').lower() == 'true':
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 LOGGING = {'version': 1, 'disable_existing_loggers': False,
+    'formatters': {'timed': {'format': '%(asctime)s %(levelname)s %(name)s %(message)s'}},
     'handlers': {'console': {'class': 'logging.StreamHandler'}},
     'loggers': {'market': {'handlers': ['console'], 'level': 'INFO'},
                 'django.request': {'handlers': ['console'], 'level': 'WARNING', 'propagate': False}}}
+# Container consoles are lost on restart; an optional rotating file keeps warnings
+# and unhandled request errors for later diagnosis of payment or order incidents.
+LOG_FILE = os.getenv('DJANGO_LOG_FILE', '').strip()
+if LOG_FILE:
+    Path(LOG_FILE).parent.mkdir(parents=True, exist_ok=True)
+    LOGGING['handlers']['file'] = {'class': 'logging.handlers.RotatingFileHandler', 'filename': LOG_FILE,
+        'maxBytes': 5 * 1024 * 1024, 'backupCount': 5, 'encoding': 'utf-8', 'level': 'WARNING', 'formatter': 'timed'}
+    for name in LOGGING['loggers']: LOGGING['loggers'][name]['handlers'].append('file')

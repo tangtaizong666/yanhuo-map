@@ -510,6 +510,7 @@ class AuditLog(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     class Meta:
         verbose_name = verbose_name_plural = '业务审计日志'
+        indexes = [models.Index(fields=['target', '-created_at'], name='audit_target_time_idx')]
 
 
 from .recovery_models import AccountRecovery  # noqa: E402,F401

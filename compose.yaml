@@ -150,6 +150,8 @@ services:
       - "443:443/udp"
     environment:
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?Set PUBLIC_DOMAIN}
+      # Space-separated CIDRs allowed to open /admin/; the default allows every address.
+      ADMIN_ALLOWED_IPS: ${ADMIN_ALLOWED_IPS:-0.0.0.0/0 ::/0}
     volumes:
       - caddy_data:/data
       - caddy_config:/config

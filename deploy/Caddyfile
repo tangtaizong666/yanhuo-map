@@ -29,6 +29,10 @@
         }
     }
     handle /admin/* {
+        # Operators may narrow the back office to known addresses (space-separated
+        # CIDRs in ADMIN_ALLOWED_IPS). Unset keeps the previous open behaviour.
+        @admin_outside not remote_ip {$ADMIN_ALLOWED_IPS:0.0.0.0/0 ::/0}
+        respond @admin_outside 403
         reverse_proxy backend:8000 {
             header_up X-Real-IP {remote_host}
         }

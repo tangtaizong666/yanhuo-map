@@ -483,3 +483,23 @@ class OperationsConcurrencyTests(TransactionTestCase):
                         lambda: review_application(application.pk, staff, 'approved'))
         self.assertEqual(a.approved_stall_id, b.approved_stall_id)
         self.assertEqual(Stall.objects.filter(merchant__user=self.student).count(), 1)
+
+
+class PruneEventsTests(TestCase):
+    def test_only_old_browsing_events_are_deleted(self):
+        from io import StringIO
+        from datetime import timedelta
+        from django.core.management import call_command
+        from django.core.management.base import CommandError
+        from django.utils import timezone
+        from .models import Event
+        old = timezone.now() - timedelta(days=200)
+        rows = [Event.objects.create(type=kind) for kind in ('stall_view', 'order_completed', 'stall_view')]
+        Event.objects.filter(pk__in=[rows[0].pk, rows[1].pk]).update(created_at=old)
+        out = StringIO()
+        call_command('prune_events', '--dry-run', stdout=out)
+        self.assertIn('would_delete=1', out.getvalue())
+        self.assertEqual(Event.objects.count(), 3)
+        call_command('prune_events', stdout=StringIO())
+        self.assertEqual(list(Event.objects.order_by('pk').values_list('pk', flat=True)), [rows[1].pk, rows[2].pk])
+        with self.assertRaises(CommandError): call_command('prune_events', '--days', '7')
