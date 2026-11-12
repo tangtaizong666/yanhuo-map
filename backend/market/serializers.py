@@ -301,8 +301,8 @@ class OrderSerializer(serializers.ModelSerializer):
     def get_stall_payment_qr_image(self, obj):
         if not self.get_offline_payment_available(obj):
             return ''
-        from .media_policy import public_image
-        return public_image(obj.stall.payment_qr_image)
+        from .media_policy import protected_qr_image
+        return protected_qr_image(obj.stall.payment_qr_image, stall_id=obj.stall_id)
     def get_stall_payment_qr_updated_at(self, obj):
         # Shown beside the code so students can notice a recently swapped image.
         if not self.get_stall_payment_qr_image(obj) or not obj.stall.payment_qr_updated_at:

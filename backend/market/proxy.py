@@ -1,10 +1,11 @@
+from datetime import timedelta
 import re
 from threading import BoundedSemaphore
 import urllib.error
 import urllib.parse
 import urllib.request
 from django.conf import settings
-from django.core.cache import cache
+from django.db.models import F
 from django.http import HttpResponse, JsonResponse
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
@@ -12,6 +13,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.throttling import SimpleRateThrottle
 from .auth_limits import client_ip_bucket
 from .errors import BusinessError
+from .security_models import DailyQuotaCounter
 
 _proxy_slots = BoundedSemaphore(4)
 FORBIDDEN_QUERY_KEYS = frozenset({'url', 'target', 'host', 'redirect', 'jscode[]', 'key[]'})
@@ -26,19 +28,28 @@ class AmapProxyThrottle(SimpleRateThrottle):
 
 
 def daily_quota_exhausted():
-    # A site-wide ceiling below the AMap console quota keeps scripted abuse from spending all of it.
+    # Database-atomic daily ceiling keeps concurrent workers from racing past the AMap console quota.
     limit = settings.AMAP_PROXY_DAILY_LIMIT
-    ttl = 2 * 86400
-    key = f'amap_proxy_day:{timezone.localdate().isoformat()}'
-    if cache.add(key, 1, ttl):
-        return 1 > limit
-    try:
-        count = cache.incr(key)
-        cache.touch(key, ttl)
-    except ValueError:
-        cache.set(key, 1, ttl)
-        count = 1
-    return count > limit
+    if limit <= 0:
+        return True
+    today = timezone.localdate()
+    now = timezone.now()
+    updated = DailyQuotaCounter.objects.filter(
+        scope='amap_proxy', day=today, count__lt=limit
+    ).update(count=F('count') + 1, updated_at=now)
+    if updated:
+        return False
+    if DailyQuotaCounter.objects.filter(scope='amap_proxy', day=today).exists():
+        return True
+    _, created = DailyQuotaCounter.objects.get_or_create(
+        scope='amap_proxy', day=today, defaults={'count': 0, 'updated_at': now}
+    )
+    if created:
+        DailyQuotaCounter.objects.filter(day__lt=today - timedelta(days=90)).delete()
+    updated = DailyQuotaCounter.objects.filter(
+        scope='amap_proxy', day=today, count__lt=limit
+    ).update(count=F('count') + 1, updated_at=now)
+    return updated == 0
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):

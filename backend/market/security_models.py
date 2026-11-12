@@ -10,6 +10,18 @@ class AuthenticationFailureBucket(models.Model):
     updated_at = models.DateTimeField(default=timezone.now, db_index=True)
 
 
+class DailyQuotaCounter(models.Model):
+    scope = models.CharField(max_length=64)
+    day = models.DateField()
+    count = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['scope', 'day'], name='unique_daily_quota_scope_day'),
+        ]
+
+
 class ProductCreation(models.Model):
     stall = models.ForeignKey('market.Stall', on_delete=models.CASCADE)
     idempotency_key = models.CharField(max_length=128)

@@ -8,7 +8,7 @@ from django.contrib.auth.models import User
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from .models import MerchantProfile, Order, PaymentAttempt, PaymentRefund, Stall
+from .models import MerchantProfile, Order, PaymentAttempt, PaymentRefund, Stall, pickup_code
 from .tests import fixtures
 
 
@@ -25,8 +25,10 @@ class PaymentMetricsTests(TestCase):
     def order(self, cents=800, *, paid_at=None, method='wechat', payment_status='paid', stall=None,
               created_at=None):
         stall = stall or self.stall
+        taken = Order.objects.filter(stall=stall).values_list('pickup_code', flat=True)
         return Order.objects.create(
             user=self.student, stall=stall, stall_name=stall.name, status='ready',
+            pickup_code=pickup_code(taken),
             total_cents=cents, payment_status=payment_status, payment_method=method,
             paid_at=paid_at, created_at=created_at or self.now - timedelta(days=10),
             expires_at=self.now + timedelta(minutes=5), ready_at=self.now,

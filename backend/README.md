@@ -37,7 +37,7 @@ python -m venv .venv
 
 找摊菜品新增 `display_availability`（`available` 今天有、`sold_out` 卖完了、`paused` 暂时不卖、空值沿用原状态），商家创建／PATCH 可维护。此字段不修改 `stock`、`stock_version` 或交易用的 `sale_paused`。公开餐点的 `display_only=true` 时按展示状态返回 `availability`，`max_order_quantity=0`；恢复交易资格后重新按线上库存与停售开关判断。旧数据不自动填充“今天有”。
 
-订单 `offline_payment_available` 是当前展示现场付款入口的明确授权；真实自取待取餐、未付款、无线下／线上资金冲突及取消申请时才可能为 true。`stall_payment_qr_image` 在其他状态返回空字符串，模拟订单始终为空。资质失效后的旧线上支付入口收起，查询、关闭和必要售后仍可执行；前端不能仅凭图片地址或旧链接展示付款入口。
+订单 `offline_payment_available` 是当前展示现场付款入口的明确授权；真实自取待取餐、未付款、无线下／线上资金冲突及取消申请时才可能为 true。收款码必须经 `?purpose=payment_qr` 上传为本摊位受保护的 `qr-*` 文件（Caddy 与后端均仅向所属商家及符合现场付款条件的学生本人返回，普通公开图片路径拒绝写入且不会作为收款码下发）；`stall_payment_qr_image` 在其他状态返回空字符串，模拟订单始终为空。资质失效后的旧线上支付入口收起，查询、关闭和必要售后仍可执行；前端不能仅凭图片地址或旧链接展示付款入口。
 
 ### 试点安全与分页接口（2026-10-03）
 
@@ -70,7 +70,7 @@ python -m venv .venv
 - `GET /merchant/reviews?stall=` 查看评价；`POST /merchant/reviews/:id/reply`（content）回复本摊位评价。回复允许更新；content 为空字符串时撤回本人回复，replied_at 置空，用户评价原文及星级不变。操作审计留痕，并通过公共评价的 merchant_reply/replied_at 展示给用户。
 - 商家评价默认 `mode=live`，显式 `mode=simulation` 查看演练评价，每条评价返回订单的 `mode` 快照。公开摊位评分、评价数量、评价预览和已完成订单数量仅统计真实订单，历史模拟评价不计入公开口碑；模拟订单本人的详情仍保留自己的评价。
 - `GET /merchant/orders/:id?stall=` 按商家所有权或运营 `market.view_order` 权限读取一笔当前订单；可选摊位不匹配返回 404。沿用商家字段和动作权限，隐藏学生取餐码，响应为 `private, no-store`，用于同步已载入但刚退出待处理列表的订单。
-- `POST /merchant/orders/:id/action`，自取 action 为 accept/update_prep/reject/ready/confirm_payment/complete/approve_cancel/deny_cancel，配送另有 dispatch/arrive/report_delivery_issue/resolve_delivery_issue。complete 需要 `pickup_code`（8 位）。先确认收款，才能核销；核销一次后不可重用。商家响应隐藏取餐码，学生自己的订单才显示。备餐预估参数及幂等规则详见下文。
+- `POST /merchant/orders/:id/action`，自取 action 为 accept/update_prep/reject/ready/confirm_payment/complete/approve_cancel/deny_cancel，配送另有 dispatch/arrive/report_delivery_issue/resolve_delivery_issue。complete 需要 `pickup_code`（默认 4 位数字，同摊位进行中订单数据库级唯一，极端饱和时回退 8 位）。先确认收款，才能核销；核销一次后不可重用。商家响应隐藏取餐码，学生自己的订单才显示。备餐预估参数及幂等规则详见下文。
 - `POST /feedback`（content/contact?）；`POST /events`（type/stall_id?），事件可为 browse/home_view/stall_view/map_view/checkout_view/location_denied/map_error/api_error。
 - `GET /merchant/metrics?stall=&days=1|7|30&mode=live|simulation`：默认含今天的近 7 个上海时区自然日，模式默认为 `live`。按订单模式快照区分真实与模拟收款；模拟金额不是实际营收或平台余额。保留浏览次数、创建订单数、完成率等字段，以及 paid_orders/average_order_cents/followers/products_active/products_sold_out/today/series/top_products/recent_payments。收款、客单价、热销商品与收款流水按 paid_at 统计；退款按完成日期另计。orders_completed 与完成率使用“期间创建订单中当前已完成”的同一批次；today/series 的完成数按 completed_at 统计。metric_definitions 提供具体口径，浏览事件不是去重人数，转化率仅供参考。
 - `GET /health` 数据库就绪检查。服务端异常记录 `market` 日志，客户端上报 api_error 用于统计。
@@ -171,7 +171,7 @@ prep_minutes 为 1–180 的整数，reason 不超过 200 字，idempotency_key 
 
 ### 到摊查单与订单求助
 
-- `POST /merchant/stalls/:id/pickup-lookup` 接收 `{pickup_code,number?}`。取餐码严格为 8 位数字，仅查询所属摊位状态为 ready 的自取订单；number 为可选完整订单号。单一结果返回商家订单对象，仍隐藏 pickup_code；查询不收款、不核销、不推进状态。
+- `POST /merchant/stalls/:id/pickup-lookup` 接收 `{pickup_code,number?}`。取餐码为 4 位数字（兼容极端饱和回退或历史 8 位数字），仅查询所属摊位状态为 ready 的自取订单；number 为可选完整订单号。单一结果返回商家订单对象，仍隐藏 pickup_code；查询不收款、不核销、不推进状态。
 - 未匹配返回 404 `pickup_order_not_found`；多个待取单重码时返回 409 `pickup_code_ambiguous`，要求补充完整订单号，绝不返回候选订单列表。接口按账号限制 60 次/分钟，响应禁止缓存，审计仅记录匹配订单 ID 和摊位 ID，不记录输入取餐码。正式多进程部署仍需共享限流缓存及边缘限制。
 - 订单响应新增 `merchant_contact_phone`，取当前经营主体联系电话；本人可读订单即使摊位暂时隐藏，也能取得该联系入口。没有电话时为空，不编造联系方式。
 - `POST /feedback` 可在原 content/contact/idempotency_key 请求中增加 `order_id`（UUID），无需新增 kind。必须登录且订单属于本人；自动关联对应摊位，即使摊位隐藏也能提交。若另传 stall_id，必须与订单一致。联系方式仍不公开给其他用户；成功仅代表提交运营人工处理，不表示商家收到或已处理。
@@ -180,7 +180,7 @@ prep_minutes 为 1–180 的整数，reason 不超过 200 字，idempotency_key 
 
 ## 地图安全代理
 
-同时配置 `AMAP_KEY` 和 `AMAP_SECURITY_CODE` 才向前端提供 Web key。前端设置 `_AMapSecurityConfig.serviceHost` 为 `/api/v1/amap-proxy/_AMapService`，再加载 JS API。服务器只向固定高德主机转发有限路径，拒绝非同源来源、任意 URL、重定向和超大响应，并注入安全码；安全码不会进入前端配置。没有配置时地图明确返回 503，列表正常可用。上线前须用真实高德 key 和白名单域名做验收。
+同时配置 `AMAP_KEY` 和 `AMAP_SECURITY_CODE` 才向前端提供 Web key。前端设置 `_AMapSecurityConfig.serviceHost` 为 `/api/v1/amap-proxy/_AMapService`，再加载 JS API。服务器只向固定高德主机转发有限路径，拒绝非同源来源、任意 URL、重定向和超大响应，并注入安全码；安全码不会进入前端配置。全站每日转发总额度由数据库原子计数器（`DailyQuotaCounter`）跨进程统一扣减，超限返回 429 而不透支控制台配额；没有配置时地图明确返回 503，列表正常可用。上线前须用真实高德 key 和白名单域名做验收。
 
 ## 验证
 

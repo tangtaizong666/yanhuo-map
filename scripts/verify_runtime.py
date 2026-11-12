@@ -322,6 +322,39 @@ print('RESULT ' + json.dumps({'stall_id': stall.pk, 'product_id': product.pk}))
         media_path = json.loads(uploaded)['url']
         media, _ = request(media_path)
         require(media.startswith(b'\xff\xd8'), 'Uploaded media did not round-trip through Caddy')
+        qr_uploaded, _ = request(f"/api/v1/merchant/stalls/{fixture['stall_id']}/image?purpose=payment_qr", multipart,
+            {'Content-Type': f'multipart/form-data; boundary={boundary}',
+             'X-CSRFToken': csrf, 'Referer': origin + '/'}, expected=201)
+        qr_path = json.loads(qr_uploaded)['url']
+        require(qr_path.startswith(f"/media/merchants/{fixture['stall_id']}/qr-"),
+                'Payment QR upload did not use protected qr-* path')
+        request(f"/api/v1/merchant/stalls/{fixture['stall_id']}/profile",
+                json.dumps({'payment_qr_image': media_path}).encode(),
+                {'Content-Type': 'application/json', 'X-CSRFToken': csrf, 'Referer': origin + '/'}, expected=400)
+        request(f"/api/v1/merchant/stalls/{fixture['stall_id']}/profile",
+                json.dumps({'payment_qr_image': qr_path}).encode(),
+                {'Content-Type': 'application/json', 'X-CSRFToken': csrf, 'Referer': origin + '/'}, expected=200)
+        qr_media, qr_headers = request(qr_path)
+        require(qr_media.startswith(b'\xff\xd8') and qr_headers.get('Cache-Control') == 'private, no-store',
+                'Authenticated merchant could not read protected payment QR with private no-store headers')
+        anon_opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
+            urllib.request.HTTPSHandler(context=context),
+        )
+        with anon_opener.open(urllib.request.Request(origin + media_path), timeout=15) as anon_pub:
+            require(anon_pub.status == 200 and anon_pub.read().startswith(b'\xff\xd8'),
+                    'Anonymous client could not read public stall media')
+        try:
+            with anon_opener.open(urllib.request.Request(origin + qr_path), timeout=15):
+                raise RuntimeError('Anonymous client unexpectedly read protected payment QR through Caddy')
+        except urllib.error.HTTPError as exc:
+            try:
+                exc.read()
+                require(exc.status == 404 and exc.headers.get('Cache-Control') == 'private, no-store',
+                        f'Protected payment QR through Caddy returned unexpected {exc.status} / {exc.headers.get("Cache-Control")}')
+            finally:
+                exc.close()
         require(any(cookie.name == 'sessionid' and cookie.secure for cookie in jar), 'Session cookie is not secure')
         self.report['stages']['https'] = {'status': 'passed', 'origin': origin,
             'trust': 'temporary CA used only by this client; system trust unchanged', 'checks': checks,

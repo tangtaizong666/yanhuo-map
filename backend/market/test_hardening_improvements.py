@@ -2,7 +2,10 @@
 import io
 import tempfile
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from threading import Barrier
+from unittest import skipUnless
 from unittest.mock import Mock, patch
 
 from PIL import Image
@@ -10,7 +13,8 @@ from django.conf import settings
 from django.contrib.auth.models import Permission, User
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import RequestFactory, TestCase, override_settings
+from django.db import IntegrityError, close_old_connections, connection, connections, transaction
+from django.test import RequestFactory, TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -18,6 +22,7 @@ from .auth_limits import client_ip_bucket
 from .delivery import delivery_settings
 from .errors import BusinessError
 from .models import (
+    OPEN_ORDER_STATUSES,
     FinancialEvidence,
     MerchantProfile,
     Order,
@@ -25,6 +30,8 @@ from .models import (
     Stall,
     pickup_code,
 )
+from .proxy import daily_quota_exhausted
+from .security_models import DailyQuotaCounter
 from .payments import close_payment, start_payment, sync_payment
 from .reconciliation import confirm_uncreated_payment
 from .services import create_order, merchant_action
@@ -478,3 +485,88 @@ class SecurityCapacityAndThrottleHardeningTests(DeliverySetup, TestCase):
             )
             statuses.append(res.status_code)
         self.assertIn(429, statuses)
+
+    @override_settings(AMAP_PROXY_DAILY_LIMIT=3)
+    def test_amap_daily_quota_counter_enforces_exact_db_ceiling_and_prunes_stale_days(self):
+        today = timezone.localdate()
+        DailyQuotaCounter.objects.create(
+            scope='amap_proxy', day=today - timedelta(days=95), count=12
+        )
+        outcomes = [daily_quota_exhausted() for _ in range(5)]
+        self.assertEqual(outcomes, [False, False, False, True, True])
+        row = DailyQuotaCounter.objects.get(scope='amap_proxy', day=today)
+        self.assertEqual(row.count, 3)
+        self.assertFalse(
+            DailyQuotaCounter.objects.filter(day=today - timedelta(days=95)).exists()
+        )
+        with override_settings(AMAP_PROXY_DAILY_LIMIT=0):
+            self.assertTrue(daily_quota_exhausted())
+
+    def test_active_order_pickup_code_constraint_blocks_same_stall_duplicates_only_while_open(self):
+        first, _ = create_order(self.student, payload(self.stall, self.product))
+        second, _ = create_order(self.other, payload(self.stall, self.product))
+        for active_state in OPEN_ORDER_STATUSES:
+            Order.objects.filter(pk=first.pk).update(status=active_state)
+            with self.assertRaises(IntegrityError), transaction.atomic():
+                Order.objects.filter(pk=second.pk).update(pickup_code=first.pickup_code)
+
+        # Another stall may independently hold the same active pickup code.
+        other_merchant = MerchantProfile.objects.create(
+            user=User.objects.create_user('other-stall-owner', password='Password123!'),
+            business_name='另一商户',
+            is_verified=True,
+        )
+        other_stall = Stall.objects.create(
+            merchant=other_merchant, area=self.stall.area, name='另一摊', category='小吃'
+        )
+        foreign_order = Order.objects.create(
+            user=self.student,
+            stall=other_stall,
+            stall_name=other_stall.name,
+            status='ready',
+            pickup_code=first.pickup_code,
+            total_cents=1000,
+            expires_at=timezone.now() + timedelta(minutes=10),
+            pickup_address='北门',
+            pickup_latitude=30.0,
+            pickup_longitude=120.0,
+            idempotency_key=uuid.uuid4().hex,
+            request_hash='foreign-stall',
+        )
+        self.assertEqual(foreign_order.pickup_code, first.pickup_code)
+
+        # Once terminal, the same stall can reuse that pickup code.
+        for terminal_state in ('completed', 'cancelled', 'rejected'):
+            Order.objects.filter(pk=first.pk).update(status=terminal_state)
+            Order.objects.filter(pk=second.pk).update(
+                status='ready', pickup_code=first.pickup_code
+            )
+            second.refresh_from_db()
+            self.assertEqual(second.pickup_code, first.pickup_code)
+            Order.objects.filter(pk=second.pk).update(pickup_code=pickup_code({first.pickup_code}))
+
+
+@skipUnless(connection.vendor == 'postgresql', 'PostgreSQL race test')
+class DailyQuotaPostgreSQLRaceTests(TransactionTestCase):
+    @override_settings(AMAP_PROXY_DAILY_LIMIT=3)
+    def test_concurrent_cold_start_amap_quota_allows_exact_ceiling(self):
+        gate = Barrier(8)
+
+        def call_quota():
+            close_old_connections()
+            try:
+                gate.wait(timeout=10)
+                return daily_quota_exhausted()
+            finally:
+                connections.close_all()
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = [pool.submit(call_quota) for _ in range(8)]
+            results = [future.result(timeout=30) for future in futures]
+
+        self.assertEqual(results.count(False), 3)
+        self.assertEqual(results.count(True), 5)
+        counter = DailyQuotaCounter.objects.get(
+            scope='amap_proxy', day=timezone.localdate()
+        )
+        self.assertEqual(counter.count, 3)

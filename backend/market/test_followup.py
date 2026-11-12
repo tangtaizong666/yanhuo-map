@@ -12,7 +12,7 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from .models import MerchantProfile, Order, PaymentAttempt, PaymentRefund, Stall
+from .models import MerchantProfile, Order, PaymentAttempt, PaymentRefund, Stall, pickup_code
 from .tests import fixtures
 
 
@@ -31,11 +31,12 @@ class MerchantFollowupContractTests(TestCase):
 
     def order(self, *, stall=None, **changes):
         stall = stall or self.stall
+        taken = Order.objects.filter(stall=stall).values_list('pickup_code', flat=True)
         values = dict(user=self.student, stall=stall, stall_name=stall.name,
             status='cancelled', payment_method='wechat', payment_status='paid', total_cents=1000,
             created_at=timezone.now()-timedelta(days=90), expires_at=timezone.now()+timedelta(minutes=15),
             pickup_address='下单时的交接位置', pickup_latitude=31.23, pickup_longitude=121.47,
-            pickup_code='18724635', idempotency_key=uuid.uuid4().hex, request_hash='followup-contract')
+            pickup_code=pickup_code(taken), idempotency_key=uuid.uuid4().hex, request_hash='followup-contract')
         return Order.objects.create(**{**values, **changes})
 
     def payment(self, order, **changes):

@@ -75,13 +75,14 @@ class QualificationTierTests(TestCase):
     def test_vendor_qr_only_shown_on_unpaid_offline_orders(self):
         self.merchant.qualification_tier = 'storefront'
         self.merchant.save()
-        self.stall.payment_qr_image = '/media/merchants/1/qr.jpg'
+        qr_url = f'/media/merchants/{self.stall.pk}/qr-storefront.jpg'
+        self.stall.payment_qr_image = qr_url
         self.stall.save()
         self.assertNotIn('payment_qr_image', StallSerializer(self.stall, context={}).data)
         order, _ = create_order(self.student, payload(self.stall, self.product))
         self.assertEqual(OrderSerializer(order).data['stall_payment_qr_image'], '')
         order.status = 'ready'
-        self.assertEqual(OrderSerializer(order).data['stall_payment_qr_image'], '/media/merchants/1/qr.jpg')
+        self.assertEqual(OrderSerializer(order).data['stall_payment_qr_image'], qr_url)
         order.payment_status = 'paid'
         self.assertEqual(OrderSerializer(order).data['stall_payment_qr_image'], '')
         order.payment_status, order.status = 'unpaid', 'cancelled'

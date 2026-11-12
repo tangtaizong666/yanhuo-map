@@ -230,6 +230,7 @@ def order_number():
 
 
 PICKUP_CODE_DIGITS = 4
+OPEN_ORDER_STATUSES = ('pending_payment', 'pending', 'preparing', 'ready', 'delivering', 'arrived')
 
 
 def active_prep_q(now=None, prefix=''):
@@ -319,6 +320,11 @@ class Order(models.Model):
         indexes = [models.Index(fields=['user', '-created_at', '-id'], name='order_user_history_idx'),
             models.Index(fields=['stall', '-created_at', '-id'], name='order_stall_history_idx')]
         constraints = [models.UniqueConstraint(fields=['user', 'idempotency_key'], name='unique_order_request'),
+            models.UniqueConstraint(
+                fields=['stall', 'pickup_code'],
+                condition=Q(status__in=OPEN_ORDER_STATUSES),
+                name='unique_active_stall_pickup_code',
+            ),
             models.CheckConstraint(condition=Q(total_cents__gte=1), name='order_positive_amount')]
 
 
@@ -528,7 +534,7 @@ class AuditLog(models.Model):
 
 
 from .recovery_models import AccountRecovery  # noqa: E402,F401
-from .security_models import AuthenticationFailureBucket, ProductCreation, MerchantOrderOperation  # noqa: E402,F401
+from .security_models import AuthenticationFailureBucket, DailyQuotaCounter, ProductCreation, MerchantOrderOperation  # noqa: E402,F401
 from .operational_models import WorkerHeartbeat  # noqa: E402,F401
 from .financial_models import FinancialEvidence  # noqa: E402,F401
 from .notification_models import PaymentNotification  # noqa: E402,F401

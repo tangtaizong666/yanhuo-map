@@ -119,6 +119,23 @@ class RuntimeVerificationSafetyTests(unittest.TestCase):
             mutation.assert_not_called()
         self.assertTrue(self.run.directory.exists())
 
+    def test_caddyfile_protected_qr_precedes_public_media_and_matches_backend_route(self):
+        repo_root = Path(__file__).resolve().parents[2]
+        caddyfile = (repo_root / 'deploy' / 'Caddyfile').read_text(encoding='utf-8')
+        urls_py = (repo_root / 'backend' / 'config' / 'urls.py').read_text(encoding='utf-8')
+        qr_matcher_pos = caddyfile.find('@protected_qr path /media/merchants/*/qr-*')
+        qr_handle_pos = caddyfile.find('handle @protected_qr')
+        static_pos = caddyfile.find('handle_path /static/*')
+        public_media_pos = caddyfile.find('handle_path /media/*')
+        self.assertGreaterEqual(qr_matcher_pos, 0, 'Missing @protected_qr matcher in Caddyfile')
+        self.assertGreater(qr_handle_pos, qr_matcher_pos)
+        self.assertGreater(static_pos, qr_handle_pos)
+        self.assertGreater(public_media_pos, static_pos, '@protected_qr must precede public /media/* file_server')
+        qr_block = caddyfile[qr_handle_pos:static_pos]
+        self.assertIn('reverse_proxy backend:8000', qr_block)
+        self.assertNotIn('file_server', qr_block)
+        self.assertIn(r'media/merchants/(?P<stall_id>[0-9]+)/(?P<filename>qr-[A-Za-z0-9._-]+)', urls_py)
+
 
 if __name__ == '__main__':
     unittest.main()

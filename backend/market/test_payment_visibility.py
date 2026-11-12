@@ -16,7 +16,7 @@ from .tests import fixtures, payload
 class PaymentVisibilityTests(TestCase):
     def setUp(self):
         self.student, self.other, self.vendor, self.stall, self.product = fixtures()
-        self.stall.payment_qr_image = '/media/merchants/test/collection-code.png'
+        self.stall.payment_qr_image = f'/media/merchants/{self.stall.pk}/qr-collection-code.png'
         self.stall.save(update_fields=['payment_qr_image'])
         self.client = APIClient()
         self.client.force_authenticate(self.student)
@@ -169,6 +169,18 @@ class PaymentVisibilityTests(TestCase):
         self.stall.save(update_fields=['payment_qr_image'])
         self.assertEqual(self.details()['stall_payment_qr_image'], '')
 
+    def test_unprotected_public_media_path_is_never_released_as_collection_code(self):
+        self.ready()
+        for unprotected in (
+            f'/media/merchants/{self.stall.pk}/public-dish.jpg',
+            f'/media/merchants/{self.stall.pk + 999}/qr-foreign.jpg',
+            '/images/demo.jpg',
+        ):
+            with self.subTest(unprotected=unprotected):
+                self.stall.payment_qr_image = unprotected
+                self.stall.save(update_fields=['payment_qr_image'])
+                self.assertEqual(self.details()['stall_payment_qr_image'], '')
+
 
 @override_settings(DEMO_MODE=False)
 class PaymentQrChangeTests(TestCase):
@@ -179,12 +191,26 @@ class PaymentQrChangeTests(TestCase):
         self.endpoint = f'/api/v1/merchant/stalls/{self.stall.pk}/profile'
 
     def test_code_must_be_this_stalls_upload_and_change_is_audited(self):
+        from django.core.files.base import ContentFile
+        from django.core.files.storage import default_storage
         from .models import AuditLog
-        foreign = f'/media/merchants/{self.stall.pk + 1000}/qr.jpg'
+        foreign = f'/media/merchants/{self.stall.pk + 1000}/qr-foreign.jpg'
         response = self.client.patch(self.endpoint, {'payment_qr_image': foreign}, format='json')
         self.assertEqual(response.status_code, 400, response.data)
         self.assertEqual(self.client.patch(self.endpoint, {'payment_qr_image': '/images/demo.jpg'}, format='json').status_code, 400)
-        own = f'/media/merchants/{self.stall.pk}/qr.jpg'
+        # Even a real uploaded public image in this stall's directory must not be accepted as a QR code.
+        public_rel = default_storage.save(f'merchants/{self.stall.pk}/public-dish.jpg', ContentFile(b'public'))
+        self.addCleanup(lambda: default_storage.delete(public_rel))
+        public_own = default_storage.url(public_rel)
+        rejected_public = self.client.patch(self.endpoint, {'payment_qr_image': public_own}, format='json')
+        self.assertEqual((rejected_public.status_code, rejected_public.data['code']), (400, 'invalid_payment_qr'))
+        # An unbacked qr-* path that does not exist in storage must also be rejected.
+        unbacked = f'/media/merchants/{self.stall.pk}/qr-missing.jpg'
+        rejected_unbacked = self.client.patch(self.endpoint, {'payment_qr_image': unbacked}, format='json')
+        self.assertEqual((rejected_unbacked.status_code, rejected_unbacked.data['code']), (400, 'invalid_payment_qr'))
+        qr_rel = default_storage.save(f'merchants/{self.stall.pk}/qr-valid.jpg', ContentFile(b'qr-image'))
+        self.addCleanup(lambda: default_storage.delete(qr_rel))
+        own = default_storage.url(qr_rel)
         response = self.client.patch(self.endpoint, {'payment_qr_image': own}, format='json')
         self.assertEqual(response.status_code, 200, response.data)
         self.stall.refresh_from_db()

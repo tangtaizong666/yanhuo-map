@@ -51,13 +51,15 @@ class StrictInput(serializers.Serializer):
 
 
 class ImageAddress(serializers.CharField):
-    def __init__(self, **kwargs):
+    def __init__(self, *, allow_protected_qr=False, **kwargs):
+        self.allow_protected_qr = allow_protected_qr
         super().__init__(max_length=500, allow_blank=True, **kwargs)
 
     def to_internal_value(self, data):
         value = super().to_internal_value(data)
-        from .media_policy import public_image
-        if value and not public_image(value):
+        from .media_policy import owned_media_path, public_image
+        validator = owned_media_path if self.allow_protected_qr else public_image
+        if value and not validator(value):
             raise serializers.ValidationError('请上传图片或选择本站素材，不支持外部图片地址。')
         return value
 
@@ -85,7 +87,7 @@ class StallProfileInput(StrictInput):
     usual_hours = serializers.CharField(max_length=100, allow_blank=True, required=False)
     arrival_note = serializers.CharField(max_length=200, allow_blank=True, required=False)
     arrival_image = ImageAddress(required=False)
-    payment_qr_image = ImageAddress(required=False)
+    payment_qr_image = ImageAddress(allow_protected_qr=True, required=False)
     location_draft_address = serializers.CharField(max_length=200, allow_blank=True, required=False)
     accepting_orders = serializers.BooleanField(required=False)
     name = serializers.CharField(max_length=80, required=False)
@@ -302,19 +304,23 @@ def profile(request, stall_id):
             merchant.save(update_fields=['contact_phone'])
             stall.merchant = merchant
         if 'payment_qr_image' in values:
+            from .media_policy import protected_qr_image
             qr = values['payment_qr_image']
-            # Students pay this image directly, so only this stall's own uploads qualify.
+            # Students pay this image directly, so only this stall's dedicated protected qr-* upload qualifies.
             if qr == stall.payment_qr_image:
                 values.pop('payment_qr_image')
-            elif qr and not qr.startswith(f'{settings.MEDIA_URL}merchants/{stall.pk}/'):
-                raise BusinessError('收款码需在本摊位上传，不能使用其他图片。', 'invalid_payment_qr', status=400)
             else:
+                if qr:
+                    valid_qr = protected_qr_image(qr, stall_id=stall.pk)
+                    rel_path = valid_qr.removeprefix(settings.MEDIA_URL) if valid_qr else ''
+                    if not valid_qr or not default_storage.exists(rel_path):
+                        raise BusinessError('收款码需在本摊位专用收款码入口上传，不能使用普通公开图片或其他图片。', 'invalid_payment_qr', status=400)
                 old_qr = stall.payment_qr_image
                 audit(request.user, 'payment_qr_changed', stall.id, before=old_qr, after=qr)
                 values['payment_qr_updated_at'] = timezone.now()
-                old_prefix = f'{settings.MEDIA_URL}merchants/{stall.pk}/qr-'
-                if old_qr and old_qr.startswith(old_prefix):
-                    old_rel = old_qr.removeprefix(settings.MEDIA_URL)
+                old_valid = protected_qr_image(old_qr, stall_id=stall.pk)
+                if old_valid:
+                    old_rel = old_valid.removeprefix(settings.MEDIA_URL)
                     transaction.on_commit(lambda rel=old_rel: default_storage.delete(rel))
         for key, value in values.items():
             setattr(stall, key, value)
@@ -403,9 +409,10 @@ def _qr_not_found():
 
 def protected_payment_qr(request, stall_id, filename):
     """Serve qr-* collection images only to the owning merchant or eligible pickup payer."""
+    from .media_policy import QR_FILENAME_RE
     if request.method not in ('GET', 'HEAD'):
         return HttpResponseNotAllowed(['GET', 'HEAD'])
-    if not re.fullmatch(r'qr-[A-Za-z0-9._-]+\.(?:jpg|jpeg|png|webp)', filename):
+    if not QR_FILENAME_RE.fullmatch(filename):
         return _qr_not_found()
     if not request.user.is_authenticated:
         return _qr_not_found()

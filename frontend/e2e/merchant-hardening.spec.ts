@@ -21,13 +21,16 @@ async function fixture(page: Page) {
     pickup_address: '校园南门', note: '', contact_phone: '',
     created_at: new Date().toISOString(), expires_at: new Date(Date.now()+240000).toISOString(),
     items: [{ product_id: 713, name: product.name, image: '', quantity: 1, unit_price_cents: 1000, portions: [] }] }
-  const state = { order, stall, actions: [] as any[], restocks: [] as any[], unexpected: [] as string[],
-    loseAction: true, loseRestock: true }
+  const state = { order, stall, actions: [] as any[], restocks: [] as any[], corrections: [] as any[],
+    unexpected: [] as string[], csrfRequests: 0,
+    restockAppliedKeys: new Set<string>(), correctionAppliedKeys: new Set<string>(),
+    loseAction: true, loseRestock: true, loseCorrection: true,
+    failRestockCsrfOnce: false, failCorrectionCsrfOnce: false }
   await page.route('https://**/*', route => route.abort())
   await page.route('**/api/v1/**', async route => {
     const req = route.request(), url = new URL(req.url()), path = url.pathname.replace('/api/v1', '')
     const send = (json: any) => route.fulfill({ json })
-    if (path === '/auth/csrf') return fulfillCsrf(route)
+    if (path === '/auth/csrf') { state.csrfRequests += 1; return fulfillCsrf(route) }
     if (path === '/config') return send({ user, demo_mode: false, areas: [], amap_key: '', stale_minutes: 60 })
     if (path === '/auth/me') return send(user)
     if (path === '/events') return send({})
@@ -45,9 +48,36 @@ async function fixture(page: Page) {
     }
     if (path === '/merchant/stalls/713/restock') {
       const body = req.postDataJSON(); state.restocks.push(body)
+      if (state.failRestockCsrfOnce) {
+        state.failRestockCsrfOnce = false
+        return route.fulfill({ status: 403, json: { detail: 'CSRF Failed: CSRF token missing or incorrect.' } })
+      }
+      const replayed = state.restockAppliedKeys.has(body.idempotency_key)
+      if (!replayed) {
+        state.restockAppliedKeys.add(body.idempotency_key)
+        product.stock += body.items[0].quantity
+        product.stock_version += 1
+      }
       if (state.loseRestock) { state.loseRestock = false; return route.abort('failed') }
-      product.stock += body.items[0].quantity
-      return send({ ...stall })
+      return send({ products: stall.products, replayed })
+    }
+    if (path === '/merchant/products/713/stock-correction') {
+      const body = req.postDataJSON(); state.corrections.push(body)
+      if (state.failCorrectionCsrfOnce) {
+        state.failCorrectionCsrfOnce = false
+        return route.fulfill({ status: 403, json: { detail: 'CSRF Failed: CSRF token missing or incorrect.' } })
+      }
+      const replayed = state.correctionAppliedKeys.has(body.idempotency_key)
+      if (!replayed) {
+        if (body.expected_stock_version !== product.stock_version) {
+          return route.fulfill({ status: 409, json: { code: 'stock_version_conflict', detail: '库存版本已变化', product } })
+        }
+        state.correctionAppliedKeys.add(body.idempotency_key)
+        product.stock = body.stock
+        product.stock_version += 1
+      }
+      if (state.loseCorrection) { state.loseCorrection = false; return route.abort('failed') }
+      return send({ product: { ...product }, replayed })
     }
     state.unexpected.push(`${req.method()} ${path}`)
     return route.fulfill({ status: 500, json: { detail: 'Unexpected isolated request' } })
@@ -104,7 +134,7 @@ test('hidden stall activation explains ownership and never offers public sharing
   expect(state.unexpected).toEqual([])
 })
 
-test('quick restock keeps supply paused and reuses the whole batch after a network failure', async ({ page }) => {
+test('quick restock and stock correction survive aborted response, reload, and stale CSRF 403 without double-applying', async ({ page }) => {
   const state = await fixture(page)
   await page.goto('/merchant/products')
   await page.locator('.restock summary').click()
@@ -112,11 +142,60 @@ test('quick restock keeps supply paused and reuses the whole batch after a netwo
   await page.getByRole('button', { name: '香菇饭本批加10份', exact: true }).click()
   await expect(page.getByLabel('香菇饭本次新增份数')).toHaveValue('15')
   await page.getByRole('button', { name: '确认本次补货', exact: true }).click()
-  await expect(page.getByRole('button', { name: '重试确认这批补货', exact: true })).toBeEnabled()
+  await expect.poll(() => state.restocks.length).toBe(1)
+  expect(state.stall.products[0]!.stock).toBe(17)
+  expect(state.stall.products[0]!.stock_version).toBe(2)
+
+  // Reload after the server applied the batch but the response was lost; first retry hits CSRF 403.
+  await page.reload()
+  await expect(page.getByText('上一次补货结果尚未确认')).toBeVisible()
+  await expect(page.getByLabel('香菇饭本次新增份数')).toBeDisabled()
+  state.failRestockCsrfOnce = true
   await page.getByRole('button', { name: '重试确认这批补货', exact: true }).click()
   await expect.poll(() => state.restocks.length).toBe(2)
+  // Transient 403 must NOT discard sessionStorage or unlock the batch.
+  await expect(page.getByRole('button', { name: '重试确认这批补货', exact: true })).toBeEnabled()
+  await expect(page.getByLabel('香菇饭本次新增份数')).toBeDisabled()
+
+  const csrfBeforeReplay = state.csrfRequests
+  await page.getByRole('button', { name: '重试确认这批补货', exact: true }).click()
+  await expect.poll(() => state.restocks.length).toBe(3)
+  expect(state.csrfRequests).toBeGreaterThan(csrfBeforeReplay)
   expect(state.restocks[1]).toEqual(state.restocks[0])
+  expect(state.restocks[2]).toEqual(state.restocks[0])
   expect(state.restocks[0].items).toEqual([{ product_id: 713, quantity: 15 }])
+  expect(state.stall.products[0]!.stock).toBe(17)
+  expect(state.stall.products[0]!.stock_version).toBe(2)
   expect(state.stall.products[0]!.sale_paused).toBe(true)
+  await expect(page.getByText('本次补货已确认')).toBeVisible()
+
+  // Now verify inventory correction under the same aborted-response -> reload -> CSRF 403 -> replay sequence.
+  await page.locator('.inventory-correction summary').click()
+  await page.getByLabel('香菇饭更正后线上可卖份数').fill('9')
+  await page.getByLabel('香菇饭库存更正原因').fill('盘点核对线上余量')
+  await page.getByRole('button', { name: '确认更正线上可卖份数', exact: true }).click()
+  await expect.poll(() => state.corrections.length).toBe(1)
+  expect(state.stall.products[0]!.stock).toBe(9)
+  expect(state.stall.products[0]!.stock_version).toBe(3)
+
+  await page.reload()
+  await expect(page.getByText('上次更正结果待确认')).toBeVisible()
+  await expect(page.getByLabel('香菇饭更正后线上可卖份数')).toBeDisabled()
+  state.failCorrectionCsrfOnce = true
+  await page.getByRole('button', { name: '确认原更正结果', exact: true }).click()
+  await expect.poll(() => state.corrections.length).toBe(2)
+  await expect(page.getByRole('button', { name: '确认原更正结果', exact: true })).toBeEnabled()
+  await expect(page.getByLabel('香菇饭更正后线上可卖份数')).toBeDisabled()
+
+  const csrfBeforeCorrectionReplay = state.csrfRequests
+  await page.getByRole('button', { name: '确认原更正结果', exact: true }).click()
+  await expect.poll(() => state.corrections.length).toBe(3)
+  expect(state.csrfRequests).toBeGreaterThan(csrfBeforeCorrectionReplay)
+  expect(state.corrections[1]).toEqual(state.corrections[0])
+  expect(state.corrections[2]).toEqual(state.corrections[0])
+  expect(state.corrections[0].expected_stock_version).toBe(2)
+  expect(state.stall.products[0]!.stock).toBe(9)
+  expect(state.stall.products[0]!.stock_version).toBe(3)
+  await expect(page.getByText('线上剩余可卖份数已确认为 9 份')).toBeVisible()
   expect(state.unexpected).toEqual([])
 })

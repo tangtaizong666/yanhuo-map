@@ -13,6 +13,7 @@ export class ApiError extends Error {
 }
 const REQUEST_TIMEOUT_MS = 20_000;
 let csrfPromise: Promise<void> | null = null;
+let csrfNeedsRefresh = false;
 const csrf = () =>
   decodeURIComponent(
     document.cookie
@@ -54,6 +55,7 @@ function ensureCsrf(): Promise<void> {
             submitted: false,
           },
         );
+      csrfNeedsRefresh = false;
     } catch (error) {
       if (error instanceof ApiError) throw error;
       throw new ApiError(
@@ -122,7 +124,8 @@ export async function api<T = any>(
   try {
     controller.signal.throwIfAborted();
     await verifyIdentity();
-    if (mutating && !csrf()) await waitFor(ensureCsrf(), controller.signal);
+    if (mutating && (csrfNeedsRefresh || !csrf()))
+      await waitFor(ensureCsrf(), controller.signal);
     controller.signal.throwIfAborted();
     // The user can return from another tab while a shared CSRF request waits.
     // Recheck immediately before dispatch, not only when the action was clicked.
@@ -174,6 +177,7 @@ export async function api<T = any>(
     // Identity can also change while a slow response body is being consumed.
     requireCurrentIdentity();
     if (!response.ok) {
+      if (mutating && response.status === 403) csrfNeedsRefresh = true;
       if (data?.code === "session_changed" && requestEpoch === sessionEpoch())
         window.dispatchEvent(
           new CustomEvent("session-changed", { detail: { epoch: requestEpoch } }),

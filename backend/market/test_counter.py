@@ -10,7 +10,7 @@ from unittest.mock import patch
 from django.contrib import admin
 from django.contrib.auth.models import User
 from django.core.cache import cache
-from django.db import close_old_connections, connection, connections
+from django.db import IntegrityError, close_old_connections, connection, connections, transaction
 from django.test import RequestFactory, TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -378,13 +378,23 @@ class CounterTests(TestCase):
 
     def test_pickup_lookup_collision_requires_full_number_without_listing_matches(self):
         first, second = self.ready_order(), self.ready_order(self.other)
-        Order.objects.filter(pk=second.pk).update(pickup_code=first.pickup_code)
+        # Database constraint prevents duplicate active pickup codes on the same stall.
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Order.objects.filter(pk=second.pk).update(pickup_code=first.pickup_code)
         url = f'/api/v1/merchant/stalls/{self.stall.pk}/pickup-lookup'
-        ambiguous = self.api.post(url, {'pickup_code': first.pickup_code}, format='json')
+        # Defense-in-depth ambiguity guard still refuses to leak candidate numbers.
+        with patch('market.counter.order_query') as mocked_query:
+            mocked_query.return_value.filter.return_value = [first, second]
+            ambiguous = self.api.post(url, {'pickup_code': first.pickup_code}, format='json')
         self.assertEqual((ambiguous.status_code, ambiguous.data['code']), (409, 'pickup_code_ambiguous'))
         self.assertNotIn(first.number, str(ambiguous.data))
-        result = self.api.post(url, {'pickup_code': first.pickup_code, 'number': second.number}, format='json')
+        result = self.api.post(url, {'pickup_code': second.pickup_code, 'number': second.number}, format='json')
         self.assertEqual(result.data['id'], str(second.pk))
+        # Once the first order finishes, its pickup code may be reused on this stall.
+        Order.objects.filter(pk=first.pk).update(status='completed')
+        Order.objects.filter(pk=second.pk).update(pickup_code=first.pickup_code)
+        reused = self.api.post(url, {'pickup_code': first.pickup_code}, format='json')
+        self.assertEqual(reused.data['id'], str(second.pk))
 
     def test_pickup_lookup_requires_exact_code_and_throttles_attempts(self):
         url = f'/api/v1/merchant/stalls/{self.stall.pk}/pickup-lookup'

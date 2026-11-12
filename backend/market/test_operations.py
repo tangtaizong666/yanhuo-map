@@ -17,7 +17,7 @@ from rest_framework.test import APIClient
 from .admin import ApplicationAdmin
 from .errors import BusinessError
 from .models import (BusinessSession, Event, Feedback, MerchantApplication, MerchantProfile,
-    Order, Product, RestockBatch, SiteConfiguration, Stall, StallLocation)
+    Order, Product, RestockBatch, SiteConfiguration, Stall, StallLocation, pickup_code)
 from .operations import review_application
 from .services import cancel_order, create_order, merchant_action
 from .tests import fixtures, payload
@@ -59,8 +59,11 @@ class OperationsTests(TestCase):
                                'last_confirmed_at': timezone.now().isoformat()})
 
     def historical_order(self, user=None, stall=None, **changes):
-        value = dict(user=user or self.student, stall=stall or self.stall, stall_name='历史摊位',
+        target_stall = stall or self.stall
+        taken = Order.objects.filter(stall=target_stall).values_list('pickup_code', flat=True)
+        value = dict(user=user or self.student, stall=target_stall, stall_name='历史摊位',
             status='completed', mode='live', total_cents=800, payment_status='paid',
+            pickup_code=pickup_code(taken),
             created_at=timezone.now()-timedelta(hours=2), completed_at=timezone.now()-timedelta(hours=1),
             paid_at=timezone.now()-timedelta(hours=1), expires_at=timezone.now()+timedelta(hours=1),
             pickup_address='历史地点', pickup_latitude=31.23, pickup_longitude=121.47,
