@@ -117,7 +117,8 @@ catch { if ($_.Exception.Message -ne 'Process record belongs to another workspac
                 process.communicate(timeout=10)
 
         self.addCleanup(release)
-        deadline = time.monotonic() + 10
+        # The first PowerShell launch on a cold CI runner can take longer than 10s.
+        deadline = time.monotonic() + 45
         while not ready.exists() and time.monotonic() < deadline:
             if process.poll() is not None:
                 self.fail('Synthetic lock holder exited: ' + process.communicate()[1])
