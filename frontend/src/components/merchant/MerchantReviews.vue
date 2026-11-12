@@ -13,6 +13,7 @@ import { notify } from "../../lib/notify";
 const props = defineProps<{ stall: any }>();
 type Review = {
   id: number;
+  mode: "live" | "simulation";
   rating: number;
   content: string;
   display_name: string;
@@ -21,6 +22,7 @@ type Review = {
   replied_at: string | null;
 };
 const reviews = ref<Review[]>([]);
+const mode = ref<"live" | "simulation">("live");
 const loading = ref(true);
 const error = ref("");
 const filter = ref("all");
@@ -93,7 +95,7 @@ const shown = computed(() =>
     ),
 );
 watch(
-  () => props.stall?.id,
+  () => `${props.stall?.id}:${mode.value}`,
   () => {
     reviews.value = [];
     editing.value = null;
@@ -113,7 +115,7 @@ async function load() {
   error.value = "";
   try {
     const result = await api<Review[]>(
-      `/merchant/reviews?stall=${props.stall.id}`,
+      `/merchant/reviews?stall=${props.stall.id}&mode=${mode.value}`,
     );
     if (sequence === loadSequence) reviews.value = result;
   } catch (e) {
@@ -169,16 +171,20 @@ async function withdrawReply(review: Review) {
     <div class="reviews-heading">
       <div>
         <span class="eyebrow">WORDS FROM YOUR GUESTS</span>
-        <h2>听见每一份真实反馈</h2>
-        <p>认真回应，让一次光顾成为下一次期待。</p>
+        <h2>{{ mode === 'simulation' ? '模拟评价演练' : '听见每一份真实反馈' }}</h2>
+        <p>{{ mode === 'simulation' ? '仅用于演练，不计入公开评分与真实订单评价。' : '认真回应，让一次光顾成为下一次期待。' }}</p>
       </div>
       <button class="reviews-refresh" :disabled="loading" @click="load">
         <RefreshCw :size="16" :class="{ spinning: loading }" />刷新评价
       </button>
     </div>
+    <div class="review-filters review-modes" role="group" aria-label="评价模式">
+      <button :aria-pressed="mode === 'live'" :class="{ selected: mode === 'live' }" :disabled="saving != null" @click="mode = 'live'">真实评价</button>
+      <button :aria-pressed="mode === 'simulation'" :class="{ selected: mode === 'simulation' }" :disabled="saving != null" @click="mode = 'simulation'">模拟评价</button>
+    </div>
     <div v-if="!error" class="review-overview">
       <div class="average-score">
-        <span>顾客综合评分</span
+        <span>{{ mode === 'simulation' ? '模拟评分' : '顾客综合评分' }}</span
         ><strong>{{ average }}<small v-if="reviews.length"> / 5</small></strong>
         <div class="score-stars" aria-hidden="true">
           <Star
@@ -193,7 +199,7 @@ async function withdrawReply(review: Review) {
         <p>
           {{
             reviews.length
-              ? `来自 ${reviews.length} 条真实订单评价`
+              ? `来自 ${reviews.length} 条${mode === 'simulation' ? '模拟' : '真实'}订单评价`
               : "完成订单后，顾客可以留下评价"
           }}
         </p>
@@ -288,7 +294,7 @@ async function withdrawReply(review: Review) {
               />
             </div>
           </div>
-          <time>{{ formatTime(review.created_at) }}</time>
+          <time><span v-if="review.mode === 'simulation'">模拟 · </span>{{ formatTime(review.created_at) }}</time>
         </header>
         <p class="review-content">
           {{ review.content || "顾客未填写文字评价" }}
@@ -317,7 +323,7 @@ async function withdrawReply(review: Review) {
           <div>
             <small
               >{{ drafts[review.id]?.length || 0 }} / 500 ·
-              回复将公开展示</small
+              {{ mode === 'simulation' ? '模拟回复，不公开展示' : '回复将公开展示' }}</small
             >
             <div>
               <button :disabled="saving === review.id" @click="editing = null">
@@ -397,6 +403,7 @@ async function withdrawReply(review: Review) {
   gap: 20px;
   margin-bottom: 25px;
 }
+.review-modes { margin-bottom: 18px; }
 .reviews-heading h2 {
   font-size: 25px;
   color: #392e24;

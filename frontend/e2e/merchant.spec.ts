@@ -166,7 +166,7 @@ async function completedReviewFixture(
     const ready = await (
       await student.request.get(`${baseURL}/api/v1/orders/${order.id}`)
     ).json();
-    expect(ready.pickup_code).toMatch(/^\d{8}$/);
+    expect(ready.pickup_code).toMatch(/^\d{4}$/);
     await checked(merchant, `/merchant/orders/${order.id}/action`, {
       action: "complete",
       pickup_code: ready.pickup_code,
@@ -272,7 +272,7 @@ test("merchant creates and uploads a menu item, edits it and controls public ava
     await expect(
       card.getByAltText(uniqueName, { exact: true }),
     ).toHaveAttribute("src", image.url);
-    await card.getByRole("button", { name: "编辑商品", exact: true }).click();
+    await card.getByRole("button", { name: /^编辑商品：/ }).click();
     const editDialog = page.getByRole("dialog", { name: "编辑商品" });
     await editDialog.getByLabel("商品名称", { exact: false }).fill(editedName);
     await editDialog

@@ -10,14 +10,22 @@ def point_data(point):
     return {key: getattr(point, key) for key in ('id', 'name', 'address', 'latitude', 'longitude', 'area_id', 'is_simulation')}
 
 
+def delivery_window_open(stall, now=None):
+    """Night-market windows may cross midnight, e.g. 18:00-01:00."""
+    current = (now or timezone.localtime()).time().replace(tzinfo=None)
+    start, end = stall.delivery_starts_at, stall.delivery_ends_at
+    if start < end: return start <= current < end
+    return current >= start or current < end
+
+
 def service_enabled(stall):
     from .simulation import eligible
     return stall.simulation_delivery_enabled if eligible(stall) else stall.delivery_enabled
 
 
 def service_approved(stall):
-    from .simulation import eligible
-    return eligible(stall) or stall.delivery_approved
+    from .admission import delivery_eligibility_reason
+    return not delivery_eligibility_reason(stall)
 
 
 def available_points(stall):
@@ -46,15 +54,18 @@ def delivery_settings(stall, *, merchant=False, context=None):
         mode='simulation' if simulated else 'live', enabled=service_enabled(stall),
         points=[point_data(p) for p in points], point_ids=[p.pk for p in points])
     reason = ''
-    if not service_approved(stall): reason = '配送尚未通过运营准入核验。'
+    from .admission import delivery_eligibility_reason
+    trade_reason = delivery_eligibility_reason(stall)
+    if trade_reason: reason = trade_reason
+    elif not service_approved(stall): reason = '配送尚未通过运营准入核验。'
     elif not service_enabled(stall): reason = '商家暂未开启配送。'
     elif stall.is_demo and not simulated: reason = '示例摊位不发起真实配送与微信扣款。'
     elif not public_payment_readiness(stall, context).get('available'): reason = '配送需要先完成微信支付，商家尚未开通线上收款。'
     elif not stall.can_order(context.get('config')): reason = '摊位当前无法接单，请查看营业状态和位置确认时间。'
     elif not result['points']: reason = '暂未设置本校园已获准开放的交接点。'
-    elif not (stall.delivery_starts_at < stall.delivery_ends_at and 0 < stall.delivery_eta_min_minutes <= stall.delivery_eta_max_minutes and stall.delivery_capacity > 0):
+    elif not (stall.delivery_starts_at != stall.delivery_ends_at and 0 < stall.delivery_eta_min_minutes <= stall.delivery_eta_max_minutes and stall.delivery_capacity > 0):
         reason = '配送参数尚未配置完整，请联系商家。'
-    elif not stall.delivery_starts_at <= timezone.localtime().time().replace(tzinfo=None) < stall.delivery_ends_at:
+    elif not delivery_window_open(stall):
         reason = f'配送接单时间为 {result["starts_at"]}—{result["ends_at"]}。'
     elif (stall.delivery_active_count if hasattr(stall, 'delivery_active_count') else
             Order.objects.filter(stall=stall, fulfillment_type='delivery', status__in=ACTIVE_DELIVERY_STATUSES).count()) >= stall.delivery_capacity:

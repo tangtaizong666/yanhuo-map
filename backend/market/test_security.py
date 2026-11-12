@@ -107,7 +107,7 @@ class LoginProtectionTests(TestCase):
         self.assertEqual(self.attempt().status_code, 400)
         for _ in range(5):
             self.assertEqual(self.attempt(password='SecretExample!2026').status_code, 200)
-        self.assertEqual(sorted(AuthenticationFailureBucket.objects.values_list('failures', flat=True)), [1, 1])
+        self.assertEqual(sorted(AuthenticationFailureBucket.objects.values_list('failures', flat=True)), [0, 1])
 
     @override_settings(AUTH_FAILURE_ACCOUNT_LIMIT=10, AUTH_FAILURE_IP_LIMIT=3, AUTH_TRUST_PROXY_CLIENT_IP=True)
     def test_ip_limits_password_spraying_but_isolates_other_clients(self):

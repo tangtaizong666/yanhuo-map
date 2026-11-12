@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 
 BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND))
@@ -48,11 +49,11 @@ def main():
     handlers = list(dictionaries(adapted))
     body_handlers = [item for item in handlers if item.get('handler') == 'request_body']
     proxy_handlers = [item for item in handlers if item.get('handler') == 'reverse_proxy']
-    assert body_handlers and all(item.get('max_size') == network.LIMIT for item in body_handlers)
+    assert {item.get('max_size') for item in body_handlers} == {network.LIMIT, 2 * 1024 * 1024}
     assert proxy_handlers and all(item.get('headers', {}).get('request', {}).get('set', {}).get('X-Real-Ip')
         == ['{http.request.remote.host}'] for item in proxy_handlers)
     report = {'caddy_version': version, 'platform': sys.platform, 'deployment_config_validated': True,
-        'request_limit_bytes': network.LIMIT, 'checks': []}
+        'request_limit_bytes': network.LIMIT, 'callback_limit_bytes': 2 * 1024 * 1024, 'checks': []}
     # The upstream deliberately permits 18 MiB so a proxy 413 proves the edge
     # rejected the request, rather than the downstream Waitress limit doing it.
     network.SERVER_CODE = network.SERVER_CODE.replace('max_request_body_size=6291456', 'max_request_body_size=18874368')
@@ -74,9 +75,13 @@ def main():
                 reservation.bind(('127.0.0.1', 0))
                 port = reservation.getsockname()[1]
             config = root / 'Caddyfile'
-            config.write_text('{\n admin off\n auto_https off\n}\n'
-                f'http://:{port} {{\n bind 127.0.0.1\n request_body {{\n  max_size 6MiB\n }}\n'
-                f' reverse_proxy 127.0.0.1:{upstream} {{\n  header_up X-Real-IP {{remote_host}}\n }}\n}}\n', encoding='utf-8')
+            # Exercise the actual production handlers and headers. Only addresses
+            # and the static root change; both upstreams are this disposable WSGI fixture.
+            (root / 'index.html').write_text('<!doctype html><title>Isolated deployment fixture</title>', encoding='utf-8')
+            text = source.read_text(encoding='utf-8').replace('{$PUBLIC_DOMAIN} {', f'http://:{port} {{\n    bind 127.0.0.1')
+            text = text.replace('backend:8000', f'127.0.0.1:{upstream}').replace('callback:8088', f'127.0.0.1:{upstream}')
+            text = text.replace('root * /srv\n', f'root * "{root.as_posix()}"\n')
+            config.write_text('{\n admin off\n auto_https off\n}\n' + text, encoding='utf-8')
             with (root / 'caddy.log').open('wb') as output:
                 process = subprocess.Popen([str(options.caddy), 'run', '--config', str(config), '--adapter', 'caddyfile'],
                     stdout=output, stderr=subprocess.STDOUT, creationflags=flags,
@@ -99,20 +104,35 @@ def main():
                     ]
                     for name, headers, chunks in cases:
                         try:
-                            status, _ = client.request('/' + name, headers, chunks)
+                            status, _ = client.request('/api/' + name, headers, chunks)
                         except AssertionError as exc:
                             raise AssertionError(f'{name}: {exc}; Caddy log: {(root / "caddy.log").read_text(encoding="utf-8")}') from exc
                         assert status == 413, f'{name} returned {status}'
-                        assert not any(row['path'] == '/' + name for row in client.app_calls()), 'Rejected body reached application.'
+                        assert not any(row['path'] == '/api/' + name for row in client.app_calls()), 'Rejected body reached application.'
                         report['checks'].append({'case': name, 'status': status, 'application_called': False})
-                    status, _ = client.request('/header-check',
+                    for suffix, headers, chunks in [
+                        ('length', 'Content-Length: 2097153\r\n', [block, block, b'x']),
+                        ('chunked', 'Transfer-Encoding: chunked\r\n', [b'100000\r\n' + block + b'\r\n'] * 2 + [b'1\r\nx\r\n0\r\n\r\n']),
+                    ]:
+                        path = '/api/v1/payments/wechat/notify/' + suffix
+                        status, _ = client.request(path, headers, chunks)
+                        assert status == 413, f'Callback {suffix} returned {status}'
+                        assert not any(row['path'] == path for row in client.app_calls())
+                        report['checks'].append({'case': 'callback-limit-' + suffix, 'status': status, 'application_called': False})
+                    status, _ = client.request('/api/header-check',
                         'Content-Length: 3\r\nX-Real-IP: 203.0.113.99\r\nX-Forwarded-For: 203.0.113.88\r\n', [b'abc'])
                     assert status == 200
-                    row = next(row for row in client.app_calls() if row['path'] == '/header-check')
+                    row = next(row for row in client.app_calls() if row['path'] == '/api/header-check')
                     assert row['real_ip'] == '127.0.0.1'
                     assert '203.0.113.88' not in (row['forwarded_for'] or '')
                     report['checks'].append({'case': 'untrusted-client-headers', 'status': status,
                         'real_ip': row['real_ip'], 'forwarded_for': row['forwarded_for']})
+                    with urllib.request.urlopen(f'http://127.0.0.1:{port}/student/deep-link', timeout=5) as response:
+                        assert response.status == 200
+                        assert response.headers['X-Frame-Options'] == 'DENY'
+                        assert "frame-ancestors 'none'" in response.headers['Content-Security-Policy']
+                        assert "default-src 'self'" in response.headers['Content-Security-Policy-Report-Only']
+                    report['checks'].append({'case': 'spa-security-headers', 'status': 200, 'csp_resource_policy': 'report-only'})
                 finally:
                     if process.poll() is None:
                         process.terminate()

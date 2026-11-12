@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -9,6 +9,8 @@ from .services import cancel_order, create_order, expire_pending_orders, merchan
 from .tests import fixtures, payload
 
 
+# Historical multi-order fixtures exercise summary ordering and privacy, not admission.
+@override_settings(CHECKOUT_MAX_ACTIVE_PER_STALL=100, CHECKOUT_MAX_ACTIVE_TOTAL=100, CHECKOUT_PER_MINUTE=100)
 class ActiveOrderSummaryTests(TestCase):
     def setUp(self):
         self.student, self.other, self.vendor, self.stall, self.product = fixtures()

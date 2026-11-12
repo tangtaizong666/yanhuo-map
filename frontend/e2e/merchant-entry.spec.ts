@@ -1,5 +1,13 @@
 import { expect, test } from "@playwright/test";
-import { assertNoHorizontalOverflow, login, mutate } from "./helpers";
+import {
+  assertNoHorizontalOverflow,
+  login,
+  mutate,
+  requireIsolatedApi,
+} from "./helpers";
+
+// Two scenarios submit the login form directly instead of using login().
+test.beforeEach(() => requireIsolatedApi());
 
 test("student login returns to the requested checkout", async ({ page }) => {
   await page.goto("/checkout/1");
@@ -32,7 +40,7 @@ test("merchant account logs into its workbench from the shared login and keeps t
   await page.goto("/login");
   await login(page, "vendor", "demo12345");
   await expect(page).toHaveURL(/\/merchant$/);
-  await expect(page.getByRole("heading", { name: "经营首页." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "接单台", exact: true }).first()).toBeVisible();
   await expect(page.locator(".site-header")).toHaveCount(0);
   await expect(
     page.getByRole("navigation", { name: "底部导航", exact: true }),
@@ -40,7 +48,7 @@ test("merchant account logs into its workbench from the shared login and keeps t
   await page.goto("/");
   await expect(page).toHaveURL(/\/merchant$/);
   await page.reload();
-  await expect(page.getByRole("heading", { name: "经营首页." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "接单台", exact: true }).first()).toBeVisible();
   await page
     .getByRole("link", { name: "预览学生端", exact: true })
     .filter({ visible: true })
@@ -63,18 +71,18 @@ test("authenticated merchant hard navigation and reload preserve workbench subse
   await page.goto("/login");
   await login(page, "vendor", "demo12345");
   for (const [section, heading] of [
-    ["products", "商品管理."],
-    ["orders", "订单处理."],
-    ["store", "店铺设置."],
+    ["products", "菜品管理"],
+    ["orders", "接单台"],
+    ["store", "店铺与营业"],
   ]) {
     await page.goto(`/merchant/${section}`);
     await expect(
-      page.getByRole("heading", { name: heading, exact: true }),
+      page.getByRole("heading", { name: heading, exact: true }).first(),
     ).toBeVisible();
     await expect(page).toHaveURL(new RegExp(`/merchant/${section}$`));
     await page.reload();
     await expect(
-      page.getByRole("heading", { name: heading, exact: true }),
+      page.getByRole("heading", { name: heading, exact: true }).first(),
     ).toBeVisible();
     await expect(page).toHaveURL(new RegExp(`/merchant/${section}$`));
   }
@@ -133,5 +141,16 @@ test("student keeps the requested account page, and another tab changing identit
   expect(response.ok()).toBeTruthy();
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect(page).toHaveURL(/\/merchant$/);
-  await expect(page.getByRole("heading", { name: "经营首页." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "接单台", exact: true }).first()).toBeVisible();
+});
+
+test("existing merchant never lands on the application form", async ({ page }) => {
+  await page.goto("/merchant");
+  await page.getByRole("link", { name: /已有账号登录/ }).click();
+  await expect(page).toHaveURL(/role=merchant/);
+  await login(page, "vendor", "demo12345");
+  await expect(page).toHaveURL(/\/merchant$/);
+  await page.goto("/merchant/apply");
+  await expect(page).toHaveURL(/\/merchant$/);
+  await expect(page.getByText("把小摊带到校园地图上")).toHaveCount(0);
 });

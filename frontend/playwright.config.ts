@@ -1,8 +1,9 @@
 import { defineConfig, devices } from '@playwright/test'
 
-// Start the Django demo server and Vite before running npm run test:e2e.
-// Business flows use the real demo API; payment UI contracts explicitly stub
-// requests so the test runner never creates a real financial transaction.
+// For real API flows use scripts/verify_browser_integration.py, which creates
+// disposable servers/data and supplies E2E_ISOLATED + E2E_BASE_URL. Shared API
+// helpers refuse writes and login on the working 5183/8087 preview. Intercepted
+// UI fixtures can also run through playwright.ci.config.ts without a business DB.
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: false,

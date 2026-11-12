@@ -7,10 +7,15 @@
 **/test-results-*
 backend/media
 **/playwright-report
-**/*.sqlite3
+**/*.sqlite3*
+**/*.sqlite
+**/*.db
+**/*.dump
+**/*.backup
+**/*.log
 **/.runtime
-**/.env
-.env.production
+# Include local and environment-specific files; Docker does not use .gitignore.
+**/.env*
 **/*.docx
 **/.git
 **/staticfiles

@@ -200,8 +200,8 @@ async function save() {
       throw new Error(
         "请在更多配送设置中核对接单上限（1–100 单）和送达范围（5–180 分钟）。",
       );
-    if (form.starts_at >= form.ends_at)
-      throw new Error("结束时间应晚于开始时间，首版支持同日配送时段。");
+    if (form.starts_at === form.ends_at)
+      throw new Error("开始与结束时间不能相同；结束早于开始表示跨过午夜。");
     if (form.eta_min_minutes > form.eta_max_minutes)
       throw new Error("预计送达上限不能小于下限。");
     if (form.enabled && !form.point_ids.length)
@@ -414,7 +414,7 @@ onUnmounted(() => {
         <summary>
           <Clock3 :size="17" /><span
             >更多配送设置<small
-              >{{ form.starts_at }}–{{ form.ends_at }} · 起送 ¥{{
+              >{{ form.starts_at }}–{{ form.ends_at < form.starts_at ? "次日" : "" }}{{ form.ends_at }} · 起送 ¥{{
                 form.minimum
               }}
               · 同时 {{ form.capacity }} 单 · {{ form.eta_min_minutes }}–{{
@@ -539,12 +539,19 @@ onUnmounted(() => {
   list-style: none;
 }
 .delivery-advanced summary::after {
-  content: "+";
+  content: "";
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg) translateY(-2px);
+  opacity: 0.55;
+  transition: transform 0.15s;
   margin-left: auto;
-  font-size: 21px;
 }
 .delivery-advanced[open] summary::after {
-  content: "−";
+  transform: rotate(-135deg) translateY(-2px);
 }
 .delivery-advanced summary small {
   display: block;

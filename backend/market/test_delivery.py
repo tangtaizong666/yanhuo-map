@@ -1,3 +1,4 @@
+import uuid
 """Delivery integration/races use an isolated test database and gateway double only."""
 from concurrent.futures import ThreadPoolExecutor
 from datetime import time, timedelta
@@ -8,22 +9,27 @@ from unittest.mock import Mock, patch
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import close_old_connections, connection, connections
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
 from .delivery import delivery_settings
 from .errors import BusinessError
 from .models import Area, DeliveryPoint, Order, PaymentAttempt, PaymentRefund, SiteConfiguration
-from .payments import close_payment, handle_notification, request_refund, start_payment, sync_payment
+from .payments import close_payment, request_refund, start_payment, sync_payment
 from .services import cancel_order, confirm_receipt, create_order, expire_pending_orders, merchant_action
 from .test_payments import payment_result, refund_result
 from .tests import fixtures, payload
 from .wechatpay import GatewayError
+from .payment_test_utils import deliver_notification as handle_notification
 
 
 class DeliverySetup:
     def setUp(self):
+        # These tests exercise financial transitions; default pacing has separate clock/concurrency regressions.
+        pacing = override_settings(PAYMENT_QUERY_INTERVAL_SECONDS=0, PAYMENT_QUERY_FAILURE_DELAYS=(0,),
+            CHECKOUT_MAX_ACTIVE_PER_STALL=100, CHECKOUT_MAX_ACTIVE_TOTAL=100)
+        pacing.enable(); self.addCleanup(pacing.disable)
         self.student, self.other, self.vendor, self.stall, self.product = fixtures()
         self.point = DeliveryPoint.objects.create(area=self.stall.area, name='南门交接点', address='南门校外交接台',
             latitude=31.231, longitude=121.471, is_active=True)
@@ -56,7 +62,7 @@ class DeliverySetup:
         return payment
 
     def notify(self, payment, **changes):
-        self.gateway.verify_notification.return_value = {'event_type': 'TRANSACTION.SUCCESS', 'resource': payment_result(payment, **changes)}
+        self.gateway.verify_notification.return_value = {'id': uuid.uuid4().hex, 'event_type': 'TRANSACTION.SUCCESS', 'resource': payment_result(payment, **changes)}
         handle_notification('own-account', {}, b'{}')
 
     def to_arrived(self, order):
@@ -68,7 +74,7 @@ class DeliverySetup:
     def finish_refund(self, order):
         sync_payment(order.pk)
         refund = PaymentRefund.objects.get(order=order)
-        self.gateway.verify_notification.return_value = {'event_type': 'REFUND.SUCCESS', 'resource': refund_result(refund, notification=True)}
+        self.gateway.verify_notification.return_value = {'id': uuid.uuid4().hex, 'event_type': 'REFUND.SUCCESS', 'resource': refund_result(refund, notification=True)}
         handle_notification('own-account', {}, b'{}')
         handle_notification('own-account', {}, b'{}')
         order.refresh_from_db(); self.product.refresh_from_db()
@@ -164,7 +170,8 @@ class DeliveryTests(DeliverySetup, TestCase):
         other_area = Area.objects.create(name='其他校园', latitude=30, longitude=120)
         foreign_point = DeliveryPoint.objects.create(area=other_area, name='其他校门', address='校门', latitude=30, longitude=120, is_active=True)
         self.assertEqual(self.api.patch(endpoint, {'point_ids': [foreign_point.pk]}, format='json').status_code, 400)
-        self.assertEqual(self.api.patch(endpoint, {'starts_at': '18:00', 'ends_at': '08:00'}, format='json').status_code, 400)
+        self.assertEqual(self.api.patch(endpoint, {'starts_at': '18:00', 'ends_at': '18:00'}, format='json').status_code, 400)
+        self.assertEqual(self.api.patch(endpoint, {'starts_at': '18:00', 'ends_at': '01:00'}, format='json').status_code, 200)
         self.assertEqual(self.api.patch(endpoint, {'eta_min_minutes': 60, 'eta_max_minutes': 20}, format='json').status_code, 400)
         response = self.api.patch(endpoint, {'enabled': False, 'fee_cents': 500, 'point_ids': [self.point.pk]}, format='json')
         self.assertEqual(response.status_code, 200)
@@ -245,6 +252,23 @@ class DeliveryTests(DeliverySetup, TestCase):
         self.assertEqual(refund.amount_cents, 1100); self.assertEqual(order.payment_status, 'refunded')
         self.assertEqual(self.product.stock, 5); self.gateway.refund.assert_called_once()
 
+    def test_cancelled_paid_delivery_keeps_checkout_budget_until_refund_settles(self):
+        with override_settings(CHECKOUT_MAX_ACTIVE_PER_STALL=1, CHECKOUT_MAX_ACTIVE_TOTAL=3):
+            order = self.create(); self.pay(order)
+            cancel_order(order.pk, self.student, '无需配送')
+            order.refresh_from_db(); self.product.refresh_from_db()
+            self.assertTrue(order.inventory_released)
+            self.assertEqual((order.status, order.payment_status), ('cancelled', 'refunding'))
+            self.assertEqual(self.product.stock, 5)
+            with self.assertRaises(BusinessError) as caught:
+                self.create()
+            self.assertEqual(caught.exception.detail['code'], 'stall_reservation_limit')
+            self.finish_refund(order)
+            replacement = self.create()
+            self.assertEqual(replacement.status, 'pending_payment')
+            self.product.refresh_from_db()
+            self.assertEqual(self.product.stock, 4)
+
     def test_merchant_rejection_and_timeout_queues_system_compensation(self):
         rejected = self.create(); self.pay(rejected)
         merchant_action(rejected.pk, self.vendor, 'reject')
@@ -307,7 +331,7 @@ class DeliveryTests(DeliverySetup, TestCase):
         def query(number):
             refund = PaymentRefund.objects.get(out_refund_no=number)
             old_result = refund_result(refund, 'PROCESSING')
-            self.gateway.verify_notification.return_value = {'event_type': 'REFUND.CLOSED', 'resource': refund_result(refund, 'CLOSED', notification=True)}
+            self.gateway.verify_notification.return_value = {'id': uuid.uuid4().hex, 'event_type': 'REFUND.CLOSED', 'resource': refund_result(refund, 'CLOSED', notification=True)}
             handle_notification('own-account', {}, b'{}')
             return old_result
         self.gateway.query_refund.side_effect = query
@@ -435,3 +459,17 @@ class DeliveryConcurrencyTests(DeliverySetup, TransactionTestCase):
         order.refresh_from_db()
         self.assertEqual((order.status, order.payment_status), ('cancelled', 'refunding'))
         self.assertIsNone(order.completed_at)
+
+
+class DeliveryWindowTests(TestCase):
+    def test_overnight_window_crosses_midnight(self):
+        from types import SimpleNamespace
+        from datetime import datetime
+        from .delivery import delivery_window_open
+        stall = SimpleNamespace(delivery_starts_at=time(18), delivery_ends_at=time(1))
+        at = lambda h, m=0: datetime(2026, 10, 22, h, m)
+        for hour, minute, expected in [(17, 59, False), (18, 0, True), (23, 59, True), (0, 30, True), (1, 0, False), (12, 0, False)]:
+            self.assertIs(delivery_window_open(stall, at(hour, minute)), expected, (hour, minute))
+        stall.delivery_starts_at, stall.delivery_ends_at = time(11), time(14)
+        self.assertTrue(delivery_window_open(stall, at(11)))
+        self.assertFalse(delivery_window_open(stall, at(14)))

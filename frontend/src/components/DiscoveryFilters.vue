@@ -3,6 +3,7 @@ import { SlidersHorizontal } from "lucide-vue-next";
 import { useDiscovery } from "../stores/discovery";
 import { computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
+withDefaults(defineProps<{ showSort?: boolean }>(), { showSort: true });
 const filters = useDiscovery();
 const route = useRoute(),
   router = useRouter();
@@ -40,7 +41,7 @@ function choose(mode: "open" | "all" | "follow") {
         我的关注
       </button>
     </div>
-    <label class="sort-control"
+    <label v-if="showSort" class="sort-control"
       ><SlidersHorizontal :size="13" /><select
         v-model="filters.sort"
         aria-label="摊位排序"
@@ -63,6 +64,14 @@ function choose(mode: "open" | "all" | "follow") {
 .filter-chips {
   min-width: 0;
   gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.filter-chips::-webkit-scrollbar {
+  display: none;
+}
+.filter-chips button {
+  flex-shrink: 0;
 }
 .filter-chips button {
   display: flex;
@@ -109,9 +118,11 @@ function choose(mode: "open" | "all" | "follow") {
   .sort-control svg {
     display: none;
   }
+  .sort-control {
+    flex-shrink: 0;
+  }
   .sort-control select {
     font-size: 12px;
-    max-width: 73px;
   }
 }
 </style>

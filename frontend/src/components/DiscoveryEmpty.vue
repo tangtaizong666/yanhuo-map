@@ -2,7 +2,7 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import { Moon, MapPin, ArrowUpRight, RefreshCw } from "lucide-vue-next";
 import { api, statusText } from "../lib/api";
-import type { Stall } from "../lib/types";
+import type { StallSummary as Stall, DiscoveryPage } from "../lib/types";
 import { useSession } from "../stores/session";
 const props = defineProps<{
   area: number;
@@ -26,10 +26,10 @@ const hasFilters = computed(() => !!props.category || !!props.query);
 const title = computed(() => {
   if (loading.value) return "正在看看附近的出摊情况";
   if (error.value) return "暂时无法确认附近的出摊情况";
-  if (!rows.value.length)
-    return props.area ? "这个区域还没有收录摊位" : "这里还没有收录摊位";
   if (props.following && !relevant.value.length)
     return props.area ? "当前区域还没有关注的摊位" : "还没有关注的摊位";
+  if (!rows.value.length)
+    return props.area ? "这个区域还没有收录摊位" : "这里还没有收录摊位";
   if (hasFilters.value || relevant.value.some((s) => s.status === "open"))
     return "暂时没有符合筛选条件的摊位";
   if (relevant.value.some((s) => s.status === "stale"))
@@ -41,13 +41,13 @@ const title = computed(() => {
 const description = computed(() =>
   error.value
     ? "当前没有读到完整信息，请重新加载；不能据此判断商家已收摊。"
-    : !rows.value.length
+    : props.following && !relevant.value.length
+      ? "先看看全部摊位，关注喜欢的小摊，下次就能直接查看它是否营业。"
+      : !rows.value.length
       ? "可以换个校园区域看看。这里还没有资料，不代表现场一定没有摊位。"
       : hasFilters.value
         ? "试试其他品类或清空关键词，已收摊的小摊也可以先了解和关注。"
-        : props.following && !relevant.value.length
-          ? "先看看全部摊位，关注喜欢的小摊，下次就能直接查看它是否营业。"
-          : "以下是已收录的摊位。计划时段仅供参考，出发前请确认当天出摊状态。",
+        : "以下是已收录的摊位。计划时段仅供参考，出发前请确认当天出摊状态。",
 );
 async function load() {
   controller?.abort();
@@ -57,11 +57,11 @@ async function load() {
   error.value = "";
   rows.value = [];
   try {
-    const data = await api<Stall[]>(
-      `/stalls?sort=freshness${props.area ? `&area=${props.area}` : ""}`,
+    const data = await api<DiscoveryPage<Stall>>(
+      `/stalls?sort=freshness${props.area ? `&area=${props.area}` : ""}${props.following ? "&follow=1" : ""}`,
       { signal: controller.signal },
     );
-    if (current === revision) rows.value = data;
+    if (current === revision) rows.value = data.results;
   } catch (e) {
     if (current === revision) error.value = (e as Error).message;
   } finally {
@@ -106,14 +106,8 @@ onUnmounted(() => {
           ><span>{{ statusText(stall.status) }}</span>
         </div>
         <p><MapPin :size="13" />{{ stall.address || stall.area_name }}</p>
-        <p>
-          {{
-            stall.usual_hours
-              ? `通常 ${stall.usual_hours} · 商家计划`
-              : "商家尚未填写通常出摊时段"
-          }}
-        </p>
-        <small>查看小摊，确认再出发<ArrowUpRight :size="14" /></small>
+        <p v-if="stall.usual_hours">通常 {{ stall.usual_hours }} · 商家计划</p>
+        <ArrowUpRight class="resting-arrow" :size="18" aria-hidden="true" />
       </RouterLink>
     </div>
     <div class="empty-actions">
@@ -166,7 +160,8 @@ onUnmounted(() => {
   margin-top: 22px;
 }
 .resting-stalls a {
-  padding: 18px;
+  position: relative;
+  padding: 16px 38px 16px 16px;
   border: 1px solid #ede1d0;
   border-radius: 14px;
   background: #fffaf1;
@@ -189,11 +184,10 @@ onUnmounted(() => {
   margin-top: 8px;
   overflow-wrap: anywhere;
 }
-.resting-stalls small {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 44px;
+.resting-arrow {
+  position: absolute;
+  right: 12px;
+  top: 18px;
   color: #a9531d;
 }
 .resting-stalls svg {
@@ -201,19 +195,46 @@ onUnmounted(() => {
 }
 @media (max-width: 700px) {
   .discovery-empty {
-    padding: 20px;
+    padding: 18px;
   }
   .empty-intro {
     gap: 12px;
   }
   .empty-symbol {
-    padding: 10px;
+    padding: 7px;
+  }
+  .empty-symbol svg {
+    width: 21px;
+    height: 21px;
   }
   .empty-intro h3 {
     font-size: 18px;
   }
   .resting-stalls {
     grid-template-columns: 1fr;
+    gap: 0;
+    margin-top: 14px;
+  }
+  .resting-stalls a {
+    padding: 14px 26px 14px 0;
+    border: 0;
+    border-top: 1px solid var(--line);
+    border-radius: 0;
+    background: none;
+  }
+  .resting-stalls strong {
+    font-size: 16px;
+  }
+  .resting-stalls p {
+    margin-top: 4px;
+    font-size: 14px;
+  }
+  .resting-arrow {
+    right: 0;
+    top: 16px;
+  }
+  .empty-actions {
+    margin-top: 12px;
   }
   .empty-actions .btn {
     flex: 1;

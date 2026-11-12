@@ -40,6 +40,7 @@ class Command(BaseCommand):
         failed = False
         # Oldest checked first avoids starving uncertainty behind newer orders.
         available = Q(request_in_flight_until__isnull=True) | Q(request_in_flight_until__lte=django_timezone.now())
+        available &= Q(next_query_at__isnull=True) | Q(next_query_at__lte=django_timezone.now())
         pending = PaymentAttempt.objects.filter(Q(status__in=PaymentAttempt.ACTIVE_STATUSES) | Q(status='paid', order__payment_review_required=True)).filter(available)
         refunds = PaymentRefund.objects.filter(resolved_at__isnull=True).exclude(status='success').filter(available)
         from market.simulation import enabled

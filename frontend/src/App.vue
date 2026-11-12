@@ -20,6 +20,7 @@ import { notices } from "./lib/notify";
 import { isMerchantPath, safeReturnTo } from "./lib/identity";
 import CartShortcut from "./components/CartShortcut.vue";
 import StudentOrderStatus from "./components/StudentOrderStatus.vue";
+import { sessionEpoch } from "./lib/sessionEpoch";
 const session = useSession(),
   discovery = useDiscovery(),
   route = useRoute(),
@@ -74,6 +75,14 @@ async function refreshIdentity() {
     refreshingIdentity = false;
   }
 }
+function identityChanged(event: Event) {
+  if ((event as CustomEvent).detail?.epoch !== sessionEpoch()) return;
+  // A cookie can change after an earlier /auth/me request has already been
+  // processed. This server rejection supersedes that check even if it is pending.
+  void session.refreshUser().catch(() => {
+    /* The shared write gate retains uncertainty and rechecks on a later retry. */
+  });
+}
 watch(
   () => [
     session.loaded,
@@ -98,10 +107,12 @@ onMounted(() => {
   void load();
   window.addEventListener("focus", refreshIdentity);
   document.addEventListener("visibilitychange", refreshIdentity);
+  window.addEventListener("session-changed", identityChanged);
 });
 onUnmounted(() => {
   window.removeEventListener("focus", refreshIdentity);
   document.removeEventListener("visibilitychange", refreshIdentity);
+  window.removeEventListener("session-changed", identityChanged);
 });
 </script>
 <template>
@@ -157,8 +168,8 @@ onUnmounted(() => {
     <Flame :size="12" />
     {{
       session.config?.services_simulation_enabled
-        ? "模拟体验 · 微信支付与配送仅供试跑，不会扣款或送货"
-        : "校园体验站 · 摊位与账号均为示例，订单仅用于测试"
+        ? "模拟体验 · 不扣款，不送餐"
+        : "校园示例环境 · 订单仅用于测试"
     }}
     <RouterLink
       v-if="session.user?.is_merchant || session.user?.is_staff"

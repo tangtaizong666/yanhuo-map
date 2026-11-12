@@ -12,7 +12,7 @@ import {
   Store,
   AlertCircle,
 } from "lucide-vue-next";
-import { api, formatTime, money, statusText } from "../lib/api";
+import { api, ApiError, formatTime, money, statusText } from "../lib/api";
 import {
   needsFinancialFollowUp,
   refundNeedsFollowUp,
@@ -31,14 +31,24 @@ const router = useRouter();
 const session = useSession();
 const orders = ref<any[]>([]);
 const loading = ref(true);
-const error = ref("");
+const listErrors = ref(new Map<string, string>());
+const pollingError = ref("");
+const unsyncedIds = ref(new Set<string>());
+const error = computed(
+  () =>
+    listErrors.value.get(selected.value) ||
+    pollingError.value ||
+    (unsyncedIds.value.size
+      ? "部分订单状态尚未同步，将自动重试；请打开订单详情核对。"
+      : ""),
+);
 const selected = ref("all");
 const counts = ref<OrderCounts>({});
 const nextCursor = ref<string | null>(null);
 const pages = new Map<string, { rows: Order[]; next: string | null }>();
 let sequence = 0;
 let pageController: AbortController | undefined;
-let polling = false;
+let pollingController: AbortController | undefined;
 let attention = new Set<string>();
 const activeCount = computed(() => counts.value.active ?? active.value.length);
 const followUpCount = computed(
@@ -86,13 +96,29 @@ const filtered = computed(() =>
 );
 let timer: ReturnType<typeof setInterval> | undefined;
 const fetching = ref(false);
+const refreshing = ref(false);
+const busy = computed(() => fetching.value || refreshing.value);
 const lastSynced = ref("");
-const lifetime = new AbortController();
 let disposed = false;
+function cancelPoll() {
+  pollingController?.abort();
+  pollingController = undefined;
+}
+function updateCachedOrders(changed: Order[], removed = new Set<string>()) {
+  for (const [filter, cached] of pages) {
+    const rows = mergeOrders(cached.rows, changed).filter(
+      (row) => !removed.has(row.id) && matchesOrderFilter(row, filter),
+    );
+    pages.set(filter, { rows, next: cached.next });
+  }
+  const cached = pages.get(selected.value);
+  if (cached) orders.value = cached.rows;
+}
 async function load(more = false) {
   if (disposed || (more && (fetching.value || !nextCursor.value))) return;
   const current = ++sequence;
   pageController?.abort();
+  cancelPoll();
   const controller = new AbortController();
   pageController = controller;
   const filter = selected.value;
@@ -107,12 +133,19 @@ async function load(more = false) {
     nextCursor.value = page.next;
     counts.value = page.counts;
     pages.set(filter, { rows: orders.value, next: page.next });
-    for (const row of orders.value)
+    // A page certifies only its returned rows, not orders absent from this filter
+    // or later cursor pages. Apply confirmed changes to every cached filter.
+    for (const row of page.results) {
+      unsyncedIds.value.delete(row.id);
       if (matchesOrderFilter(row, "attention")) attention.add(row.id);
-    lastSynced.value = new Date().toISOString();
-    error.value = "";
+      else attention.delete(row.id);
+    }
+    updateCachedOrders(page.results);
+    listErrors.value.delete(filter);
+    if (!error.value) lastSynced.value = new Date().toISOString();
   } catch (e) {
-    if (!disposed && current === sequence) error.value = (e as Error).message;
+    if (!disposed && current === sequence)
+      listErrors.value.set(filter, (e as Error).message);
   } finally {
     if (!disposed && current === sequence) {
       loading.value = false;
@@ -120,41 +153,77 @@ async function load(more = false) {
     }
   }
 }
-async function pollAttention() {
-  if (document.hidden || disposed || polling || fetching.value) return;
-  polling = true;
+async function refresh() {
+  if (disposed || busy.value) return;
+  refreshing.value = true;
+  const started = sequence + 1;
+  try {
+    await load();
+    if (disposed || started !== sequence) return;
+    // Retrying the visible page alone cannot verify other unresolved orders.
+    if (pollingError.value || unsyncedIds.value.size) await pollAttention(true);
+  } finally {
+    refreshing.value = false;
+  }
+}
+async function pollAttention(manual = false) {
+  if (
+    document.hidden ||
+    disposed ||
+    pollingController ||
+    fetching.value ||
+    (!manual && refreshing.value)
+  )
+    return;
+  const controller = new AbortController();
+  pollingController = controller;
   const started = sequence;
   try {
-    const page = await attentionOrders("/orders", lifetime.signal);
+    const page = await attentionOrders("/orders", controller.signal);
     const currentIds = new Set(page.results.map((row) => row.id));
-    const ended = await Promise.all(
-      [...attention]
-        .filter((id) => !currentIds.has(id))
-        .map((id) => api<Order>(`/orders/${id}`, { signal: lifetime.signal })),
+    const endedIds = [...attention].filter((id) => !currentIds.has(id));
+    // One unreadable order must not fail every later poll.
+    const settled = await Promise.allSettled(
+      endedIds.map((id) =>
+        api<Order>(`/orders/${id}`, { signal: controller.signal }),
+      ),
     );
-    if (disposed || started !== sequence) return;
+    if (disposed || started !== sequence || pollingController !== controller)
+      return;
+    const ended: Order[] = [];
+    const removed = new Set<string>();
+    const unsynced = new Set<string>();
+    settled.forEach((result, index) => {
+      const id = endedIds[index];
+      if (result.status === "fulfilled") ended.push(result.value);
+      else if (
+        result.reason instanceof ApiError &&
+        [403, 404].includes(result.reason.status)
+      )
+        removed.add(id);
+      else {
+        currentIds.add(id); // Transient failure: retry next poll.
+        unsynced.add(id);
+      }
+    });
     attention = currentIds;
+    unsyncedIds.value = unsynced;
     counts.value = page.counts;
-    const changed = mergeOrders(page.results, ended);
-    for (const [filter, cached] of pages) {
-      const updated = mergeOrders(cached.rows, changed).filter((row) =>
-        matchesOrderFilter(row, filter),
-      );
-      pages.set(filter, { rows: updated, next: cached.next });
-    }
-    const cached = pages.get(selected.value);
-    if (cached) orders.value = cached.rows;
-    lastSynced.value = new Date().toISOString();
-    error.value = "";
+    updateCachedOrders(mergeOrders(page.results, ended), removed);
+    // Polling does not certify a failed list/page request.
+    pollingError.value = "";
+    if (!error.value) lastSynced.value = new Date().toISOString();
   } catch (e) {
-    if (!disposed && started === sequence) error.value = (e as Error).message;
+    if (!disposed && started === sequence && pollingController === controller)
+      pollingError.value = (e as Error).message;
   } finally {
-    polling = false;
+    if (pollingController === controller) pollingController = undefined;
   }
 }
 watch(selected, () => {
   sequence++;
   pageController?.abort();
+  cancelPoll();
   const cached = pages.get(selected.value);
   orders.value = cached?.rows || [];
   nextCursor.value = cached?.next || null;
@@ -177,13 +246,13 @@ onMounted(async () => {
       }, 10000);
   } catch (e) {
     if (disposed) return;
-    error.value = (e as Error).message;
+    listErrors.value.set(selected.value, (e as Error).message);
     loading.value = false;
   }
 });
 onUnmounted(() => {
   disposed = true;
-  lifetime.abort();
+  cancelPoll();
   pageController?.abort();
   sequence++;
   clearInterval(timer);
@@ -246,7 +315,7 @@ function paymentSummary(order: any) {
     return order.status === "ready"
       ? "微信支付 · 待付款"
       : "微信支付 · 出餐后可支付";
-  return "微信支付 · 尚未开通，可到摊付款";
+  return "到摊扫码付给摊主";
 }
 function orderAction(order: any) {
   if (refundNeedsFollowUp(order)) return "查看退款进度";
@@ -333,16 +402,16 @@ function orderAction(order: any) {
       <button
         class="refresh-button"
         aria-label="刷新订单"
-        :disabled="fetching"
-        :aria-busy="fetching"
-        @click="load()"
+        :disabled="busy"
+        :aria-busy="busy"
+        @click="refresh()"
       >
         <RefreshCw :size="16" />
       </button>
     </div>
     <p v-if="!loading" class="sync-status" role="status">
       {{
-        fetching
+        busy
           ? "正在同步最新订单…"
           : error
             ? "尚未获取最新订单状态"
@@ -351,8 +420,8 @@ function orderAction(order: any) {
     </p>
     <p v-if="error" class="error-message" role="alert">
       {{ error }}<span v-if="lastSynced"> 当前显示上次同步的记录。</span>
-      <button class="inline-retry" :disabled="fetching" @click="load()">
-        {{ fetching ? "正在重试…" : "重新加载" }}
+      <button class="inline-retry" :disabled="busy" @click="refresh()">
+        {{ busy ? "正在重试…" : "重新加载" }}
       </button>
     </p>
     <div v-if="loading" class="empty-state">
@@ -404,6 +473,9 @@ function orderAction(order: any) {
               : statusText(order.status, order.fulfillment_type)
           }}</span>
         </div>
+        <p v-if="unsyncedIds.has(order.id)" class="order-sync-warning">
+          <AlertCircle :size="16" />状态尚未同步，请打开详情核对。
+        </p>
         <div class="order-food">
           <img
             :src="order.items?.[0]?.image || order.stall_image"
@@ -458,7 +530,7 @@ function orderAction(order: any) {
     <button
       v-if="nextCursor"
       class="btn btn-secondary order-load-more"
-      :disabled="fetching"
+      :disabled="busy"
       @click="load(true)"
     >
       {{ fetching ? "正在加载…" : "加载更多订单" }}
@@ -504,6 +576,21 @@ function orderAction(order: any) {
 .payment-summary.needs-followup {
   background: #fff2df;
   color: #85552d;
+}
+.order-sync-warning {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #85552d;
+  background: #fff2df;
+  border-radius: 8px;
+  padding: 9px 10px;
+  margin: 14px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.order-sync-warning svg {
+  flex: none;
 }
 .orders-toolbar .tabs {
   min-width: 0;

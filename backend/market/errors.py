@@ -19,6 +19,8 @@ def exception_handler(exc, context):
         return Response({'detail': '请求内容过大，请减少提交内容。', 'code': 'request_too_large'}, status=413)
     response = default_handler(exc, context)
     if response is not None:
+        if isinstance(exc, BusinessError) and exc.status_code == 429 and exc.detail.get('retry_after'):
+            response['Retry-After'] = str(exc.detail['retry_after'])
         if not isinstance(response.data, dict) or 'detail' not in response.data:
             response.data = {'detail': '请检查填写内容。', 'errors': response.data}
         if isinstance(exc, NotAuthenticated): response.data['code'] = 'not_authenticated'

@@ -1,6 +1,6 @@
 # 单校园试点运维与资金核验
 
-本指南对应 2026-10-03 安全与可靠性改造。代码支持真实微信 Native/H5 接入；部署开通、真实交易验收及实体手机测试仍是独立上线条件。首批只开放少量已核验商户和有人值守的时段，不开放真实配送。
+本指南对应 2026-10-03 安全与可靠性改造。后续审计新增 CI、单次 release 门控、受限回调入队/独立处理 worker 与加密异机备份工具；具体部署按[发布与48小时观察](deployment-release.md)、[备份恢复](backup-recovery.md)执行。代码支持真实微信 Native/H5 接入及校园交接点配送准备；部署开通、真实交易验收及实体手机测试仍是独立上线条件。首批只开放少量已核验商户和有人值守的时段；配送需各商户完成预付款、交接点、异常处理及收餐的实机验收后才开放。
 
 ## 验证与升级
 
@@ -21,7 +21,7 @@
 1. 保存本次代码版本、依赖锁、镜像标识、环境变量清单与备份编号。暂停新单；已有付款和售后继续由值守人员处理。
 2. 完成下述一致性备份，并在隔离环境实际恢复。数据库、媒体与支付密钥缺一不可。
 3. 更新依赖与镜像。在新版本接流量前运行迁移；新增权限应按职责显式授予。旧 `is_staff` 不再隐含全部商家权限。
-4. 启动后端、`expire_orders --loop` 和 `reconcile_payments --loop`；通过业务健康和两个 worker 心跳检查，再逐商户恢复新单。
+4. release 成功后启动后端、受限 callback、`expire_orders --loop`、`reconcile_payments --loop` 和 `process_payment_notifications --loop`；通过业务健康、三个 worker 心跳与全局通知积压检查，再逐商户恢复新单。
 5. 抽查自取、到摊收款、库存、价格变动、位置过期、退款限制及商家默认首页。运营人员留守观察核款积压。
 
 迁移保存既有数据和原交易编号，不自动解决历史异常。退款由一对一改为多次尝试后，不可把生产库直接退回旧版 schema：旧代码无法正确处理多次退款。代码回滚优先使用兼容当前 schema 的修正版；确需整库恢复时，应先停写并保存故障时完整快照，核对备份时间之后的微信账单和回调，再由负责人执行恢复。不能因回滚丢掉实际收款或重复发起退款。
@@ -34,13 +34,16 @@
 .\backend\.venv\Scripts\python.exe backend/manage.py check_operations
 .\backend\.venv\Scripts\python.exe backend/manage.py check_operations --worker expire_orders
 .\backend\.venv\Scripts\python.exe backend/manage.py check_operations --worker reconcile_payments
+.\backend\.venv\Scripts\python.exe backend/manage.py check_operations --worker process_payment_notifications
 ```
 
 命令输出 JSON，正常退出 0；worker 缺失、超过默认 120 秒未成功或出现错误时退出非零。整体检查还报告正式支付在途数、未结案退款数、待人工核款订单数及最老待处理秒数；超过默认 600 秒或存在人工核款时为 `attention`。阈值可通过 `--max-heartbeat-age`、`--max-payment-age` 调整。没有心跳记录表示尚未观测到成功运行，不能标绿。
 
-Compose 对两个 worker 分别配置健康检查。容器 unhealthy 是可见信号，不等于已经接通短信或值班告警；生产部署应将非零退出和 unhealthy 接入现有监控。心跳后台记录上次尝试、上次成功、上次失败、累计异常次数与错误类别，不记录远端原文或凭据。公网 `/api/v1/health` 不消耗游客限流额度。
+Compose 对三个 worker 分别配置健康检查。全局诊断还需监控通知死信、冲突和最老未处理时间，仅看心跳不足以证明队列健康。容器 unhealthy 是可见信号，不等于已经接通短信或值班告警；生产部署应将非零退出和 unhealthy 接入现有监控。心跳后台记录上次尝试、上次成功、上次失败、累计异常次数与错误类别，不记录远端原文或凭据。公网 `/api/v1/health` 不消耗游客限流额度。
 
-`expire_orders --batch-size 100` 有界处理、跳过已锁订单并逐条提交；只读订单接口不再清理全站订单。下单只清理目标摊位相关到期预约。资金未明记录由核款流程处理，不能用超时释放付款限制。登录失败计数超过保留期限后由该 worker 分批清理；商品创建幂等记录长期保留。
+`expire_orders --batch-size 100` 有界处理、跳过已锁订单并逐条提交；只读订单接口不再清理全站订单。下单前清理当前用户跨摊位及目标摊位可安全释放的到期预约。资金未明记录由核款流程处理，不能用超时释放付款限制。登录失败计数超过保留期限后由该 worker 分批清理；商品创建幂等记录长期保留。
+
+全局 `check_operations` 同时输出 `order_expiry`：可安全释放但尚未处理的到期单数、超过宽限的单数与最长过期秒数。默认超过到期时间 120 秒报警，可用 `--max-expiry-age` 调整；只查数量，不核销、不取消、不释放库存。工作进程即使持续更新心跳，长期行锁跳过的订单仍可被发现。资金待核、在途付款、未结退款和停用的模拟交易不计入安全释放积压，继续按资金告警或运行模式处理。
 
 ## 运营权限与资金处理
 
@@ -72,7 +75,7 @@ Compose 对两个 worker 分别配置健康检查。容器 unhealthy 是可见�
 
 ## 备份与隔离恢复
 
-试点至少每日备份，发布或迁移前额外备份；按可接受的数据损失和恢复时间制定留存规则。备份应加密、限制访问并保留校验值，不能提交到 Git、放到公网媒体目录或写到日志。
+试点目标 RPO 1小时/RTO 2小时，新增工具默认每30分钟加密异机备份，发布或迁移前额外备份；真实目标和恢复耗时须按[备份恢复手册](backup-recovery.md)验收。备份应加密、限制访问并保留校验值，不能提交到 Git、放到公网媒体目录或写到日志。
 
 备份集合必须包括：
 
@@ -95,6 +98,6 @@ Compose 对两个 worker 分别配置健康检查。容器 unhealthy 是可见�
 
 ## 请求入口约束
 
-DRF 固定 3.17.2，Pillow 固定 12.3.0。Caddy 和 Waitress 均限制请求体 6 MiB；应用上传处理器累计文件流超过 5 MiB 提前终止，图片只以 JPEG/PNG/WebP 解析，再做像素检查、重新编码和 EXIF 清除。Caddy 配置依据 [request_body 官方文档](https://caddyserver.com/docs/caddyfile/directives/request_body)。
+DRF 固定 3.17.2，Pillow 固定 12.3.0。Caddy 和主应用 Waitress 限制普通请求体 6 MiB，独立回调路径及进程限制 2 MiB；应用上传处理器累计文件流超过 5 MiB 提前终止，图片只以 JPEG/PNG/WebP 解析，再做像素检查、重新编码和 EXIF 清除。Caddy 配置依据 [request_body 官方文档](https://caddyserver.com/docs/caddyfile/directives/request_body)。
 
-后台和 API 共用 PostgreSQL 原子失败计数，默认账号 10 次/IP 60 次/15 分钟；成功不计失败额度。只在后端无法被外部绕过、可信代理覆盖 X-Real-IP 的边界开启 `AUTH_TRUST_PROXY_CLIENT_IP`；不信任客户端自填 X-Forwarded-For。校园 NAT 下 IP 阈值需根据观测调整，不能为某一用户关闭所有账号的防护。
+后台和 API 共用数据库原子失败计数。默认账号累计 10 次失败后进入 5/10/20/30 秒递增冷却，拒绝期间的请求不延长冷却；IP 仍限制 900 秒窗口内 60 次失败。成功登录、改密或恢复可清账号失败计数，不清共享 IP 的失败预算。只在后端无法被外部绕过、可信代理覆盖 X-Real-IP 的边界开启 `AUTH_TRUST_PROXY_CLIENT_IP`；不信任客户端自填 X-Forwarded-For。校园 NAT 下 IP 阈值需根据观测调整，不能为某一用户关闭所有账号的防护。

@@ -14,7 +14,8 @@ from .services import create_order, expire_pending_orders
 from .tests import fixtures, payload
 
 
-@override_settings(PASSWORD_HASHERS=['django.contrib.auth.hashers.MD5PasswordHasher'])
+@override_settings(PASSWORD_HASHERS=['django.contrib.auth.hashers.MD5PasswordHasher'],
+    CHECKOUT_MAX_ACTIVE_PER_STALL=100, CHECKOUT_MAX_ACTIVE_TOTAL=100, CHECKOUT_PER_MINUTE=100)
 class ExpiryBatchTests(TestCase):
     def setUp(self):
         self.student, self.other, self.vendor, self.stall, self.product = fixtures()
@@ -44,7 +45,8 @@ class ExpiryBatchTests(TestCase):
 
 
 @skipUnless(connection.vendor == 'postgresql', 'Requires real PostgreSQL row locks')
-@override_settings(PASSWORD_HASHERS=['django.contrib.auth.hashers.MD5PasswordHasher'])
+@override_settings(PASSWORD_HASHERS=['django.contrib.auth.hashers.MD5PasswordHasher'],
+    CHECKOUT_MAX_ACTIVE_PER_STALL=100, CHECKOUT_MAX_ACTIVE_TOTAL=100, CHECKOUT_PER_MINUTE=100)
 class ExpiryWorkerConcurrencyTests(TransactionTestCase):
     def setUp(self):
         self.student, self.other, self.vendor, self.stall, self.product = fixtures()
@@ -81,6 +83,27 @@ class ExpiryWorkerConcurrencyTests(TransactionTestCase):
         first.refresh_from_db(); second.refresh_from_db()
         self.assertEqual((first.status, second.status), ('pending', 'cancelled'))
         self.assertEqual(expire_pending_orders(limit=1), 1)
+
+    def test_locked_expiry_backlog_is_visible_even_when_worker_reports_success(self):
+        from .runtime_health import WORKERS, operations_status, record_worker_success
+        order = create_order(self.student, payload(self.stall, self.product))[0]
+        Order.objects.filter(pk=order.pk).update(expires_at=timezone.now()-timedelta(minutes=3))
+        for name in WORKERS:
+            record_worker_success(name)
+
+        def observe_locked_queue():
+            processed = expire_pending_orders(limit=1)
+            record_worker_success('expire_orders', processed)
+            return processed, operations_status()
+
+        processed, status = self.while_locked(order, observe_locked_queue)
+        self.assertEqual(processed, 0)
+        self.assertTrue(all(row['healthy'] for row in status['workers']))
+        self.assertEqual(status['status'], 'attention')
+        self.assertEqual(status['order_expiry']['overdue_count'], 1)
+        self.assertTrue(status['order_expiry']['overdue'])
+        self.assertEqual(expire_pending_orders(limit=1), 1)
+        self.assertEqual(operations_status()['status'], 'ok')
 
     def test_other_stall_checkout_does_not_wait_for_expired_order_lock(self):
         old = create_order(self.student, payload(self.stall, self.product))[0]

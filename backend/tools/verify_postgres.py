@@ -112,7 +112,9 @@ def main():
         run([PG/'bin/pg_ctl.exe', '-D', DATA, '-l', TEMP/'postgres.log', '-o', '-h 127.0.0.1 -p 55432', '-w', 'start'])
         run([PG/'bin/createdb.exe', 'yanhuo_check'])
         run([sys.executable, 'manage.py', 'migrate', '--noinput'])
-        run([sys.executable, 'manage.py', 'test', *(sys.argv[1:] or ['market']), '--verbosity', '2', '--noinput'])
+        # The full suite includes password hashing and multi-process contention;
+        # allow it to finish on developer laptops as well as CI runners.
+        run([sys.executable, 'manage.py', 'test', *(sys.argv[1:] or ['market']), '--verbosity', '2', '--noinput'], timeout=1200)
         run([sys.executable, 'manage.py', 'seed_demo'])
         smoke = """from django.contrib.auth.models import User
 from market.models import Stall, Product

@@ -19,8 +19,11 @@ export function safeReturnTo(value: unknown) {
 
 export function loginDestination(user: User | null, returnTo: unknown) {
   const target = safeReturnTo(returnTo);
-  if (user?.is_merchant || user?.is_staff)
+  if (user?.is_merchant || user?.is_staff) {
+    // An approved merchant has nothing left to apply for; open the workspace instead.
+    if (target.split(/[?#]/, 1)[0] === "/merchant/apply") return "/merchant";
     return isMerchantPath(target) ? target : "/merchant";
+  }
   if (target.split(/[?#]/, 1)[0] === "/merchant/apply") return target;
   if (user?.merchant_application_status && target === "/")
     return "/merchant/apply";

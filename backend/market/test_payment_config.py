@@ -38,8 +38,10 @@ class PaymentConfigurationTests(SimpleTestCase):
         gateway_patch = patch('market.payment_config.WechatPayClient', side_effect=client)
         self.gateway = gateway_patch.start()
         self.addCleanup(gateway_patch.stop)
-        self.first = SimpleNamespace(pk=1, is_verified=True, wechat_pay_account='shop_one')
-        self.second = SimpleNamespace(pk=2, is_verified=True, wechat_pay_account='shop_two')
+        self.first = SimpleNamespace(pk=1, is_verified=True, wechat_pay_account='shop_one',
+            online_trade_reason=lambda: '')
+        self.second = SimpleNamespace(pk=2, is_verified=True, wechat_pay_account='shop_two',
+            online_trade_reason=lambda: '')
 
     def account(self, identity, mchid, name):
         return {'merchant_profile_id': identity, 'enabled': True, 'mode': 'direct',

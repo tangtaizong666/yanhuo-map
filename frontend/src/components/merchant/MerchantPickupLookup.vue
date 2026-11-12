@@ -31,8 +31,8 @@ watch(code, () => {
 onBeforeUnmount(clear);
 async function lookup() {
   if (busy.value || session.user?.id !== owner) return;
-  if (!/^\d{8}$/.test(code.value.trim())) {
-    error.value = "请输入同学出示的完整 8 位取餐码。";
+  if (!/^(\d{4}|\d{8})$/.test(code.value.trim())) {
+    error.value = "请输入同学出示的4 位取餐码。";
     return;
   }
   if (ambiguous.value && !number.value.trim()) {
@@ -85,11 +85,11 @@ async function lookup() {
     </div>
     <form @submit.prevent="lookup">
       <label
-        >8 位取餐码<input
+        >4 位取餐码<input
           v-model="code"
           inputmode="numeric"
-          pattern="[0-9]{8}"
-          minlength="8"
+          pattern="[0-9]{4}([0-9]{4})?"
+          minlength="4"
           maxlength="8"
           autocomplete="off"
           required

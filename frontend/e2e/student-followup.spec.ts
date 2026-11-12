@@ -35,7 +35,7 @@ function order(id: string, overrides: Record<string, any> = {}): any {
     },
     total_cents: 1600,
     created_at: new Date().toISOString(),
-    pickup_code: "12345678",
+    pickup_code: "1234",
     pickup_address: "南门取餐点",
     contact_phone: "",
     merchant_contact_phone: "13800138000",

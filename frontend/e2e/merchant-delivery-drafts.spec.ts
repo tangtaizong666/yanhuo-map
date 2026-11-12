@@ -89,7 +89,19 @@ async function setup(page: Page) {
     if (path === "/auth/me") return send(user);
     if (path === "/auth/csrf") return fulfillCsrf(route);
     if (path === "/merchant/stalls") return send([stall(996), stall(997)]);
-    if (path === "/merchant/orders") return send([]);
+    if (path === "/merchant/orders")
+      return send({
+        results: [],
+        next: null,
+        counts: {
+          all: 0,
+          active: 0,
+          followup: 0,
+          attention: 0,
+          completed: 0,
+          cancelled: 0,
+        },
+      });
     if (path === "/merchant/metrics")
       return send({
         mode: "simulation",
@@ -129,6 +141,7 @@ async function setup(page: Page) {
     });
   });
   await page.goto("/merchant/store");
+  await page.locator('.store-services > summary').click();
   await expect(page.getByLabel("配送费（元）", { exact: true })).toHaveValue(
     "2",
   );
@@ -299,6 +312,7 @@ test("late save from a previous stall cannot replace the selected stall's form",
   await save(page).click();
   await expect.poll(() => fixture.writes.length).toBe(1);
   await page.getByLabel("选择管理的摊位", { exact: true }).selectOption("997");
+  await page.locator('.store-services > summary').click();
   await expect(fee(page)).toHaveValue("9");
   fixture.release();
   await expect(fee(page)).toHaveValue("9");
@@ -312,8 +326,13 @@ test("account change discards the previous account's unsaved draft", async ({
   const fixture = await setup(page);
   await fee(page).fill("7");
   fixture.changeAccount();
+  const changedIdentity = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/v1/auth/me",
+  );
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-  await expect(page.locator(".m-avatar")).toContainText("另");
+  expect((await (await changedIdentity).json()).id).toBe(1996);
+  await expect(page.locator('.store-services')).not.toHaveAttribute('open');
+  await page.locator('.store-services > summary').click();
   await expect(fee(page)).toHaveValue("2");
   await expect(page.locator(".delivery-sync")).toContainText("当前设置已保存");
   expect(fixture.writes).toEqual([]);

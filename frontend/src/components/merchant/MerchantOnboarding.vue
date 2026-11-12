@@ -138,8 +138,8 @@ onBeforeUnmount(() => {
     </div>
     <template v-if="!session.user"
       ><p>登录后可以保存资料、查看入驻进度。无需提供学号。</p>
-      <RouterLink class="btn btn-primary" to="/login?returnTo=/merchant/apply"
-        >登录或注册后申请 <ArrowRight :size="17" /></RouterLink
+      <RouterLink class="btn btn-primary" :to="{ path: '/login', query: { role: 'merchant', returnTo: '/merchant' } }"
+        >已有账号登录 / 新商家注册 <ArrowRight :size="17" /></RouterLink
     ></template>
     <template v-else>
       <p v-if="loading" role="status">正在读取入驻资料…</p>
@@ -210,7 +210,7 @@ onBeforeUnmount(() => {
                   >通常在哪里出摊<input
                     v-model="form.address_note"
                     maxlength="200"
-                    placeholder="例如：南门夜市入口左边"
+                    placeholder="例如：学府路夜市入口左边"
                     required
                 /></label>
               </div>

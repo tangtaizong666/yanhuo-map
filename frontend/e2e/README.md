@@ -1,19 +1,18 @@
 # Browser acceptance tests
 
-Start the seeded Django demo on port 8087 and Vite on port 5183, then run from `frontend`:
+Run real browser/API acceptance tests from the repository root:
 
 ```powershell
-npx playwright install chromium
-npm run test:e2e
+.\backend\.venv\Scripts\python.exe scripts\verify_browser_integration.py
 ```
 
-`E2E_BASE_URL` can override the frontend origin; add that origin to Django's `CSRF_TRUSTED_ORIGINS` as well. Mutating scenarios require `DEMO_MODE`, the demo `vendor / demo12345` account, an approved stall, and available product inventory. The suite creates uniquely named student accounts and real test orders without resetting the shared database. Completed orders consume one demo product; cancellation verifies inventory restoration.
+The runner creates a disposable database/media directory and 5195/8097 loopback servers, seeds synthetic demo fixtures, and sets `E2E_ISOLATED=1` with an explicit `E2E_BASE_URL`. Shared `mutate`, `createStudent`, and real UI `login` helpers fail before network writes unless those settings are present; they also reject the working 5183/8087 ports. `DEMO_MODE` alone is insufficient. Never enable the isolation flag for the working demo database. Install Chromium beforehand with `npx playwright install chromium` from `frontend`.
 
-Prefer a fresh, isolated database and media directory for all real API suites. The 2026-09-30 integration run used temporary 5193/8097 servers while the working preview stayed at 5183/8087. Never seed, reset, or broadly roll back the working demo to prepare tests. Stock fixture changes must use `correctStock()` from `helpers.ts`; ordinary product PATCH now rejects `stock`, even when other fields are included.
+Use a fresh, isolated database and media directory for every real API suite. `npm run test:e2e` retains the local origin for intercepted UI fixtures, but real API scenarios fail fast without isolation; use `playwright.ci.config.ts` for the supported intercepted suite. Never seed, reset, or broadly roll back the working demo to prepare tests. Stock fixture changes must use `correctStock()` from `helpers.ts`; ordinary product PATCH now rejects `stock`, even when other fields are included.
 
 The `quick-choice`, `campus-student`, and `merchant-kitchen` suites fully intercept business APIs. They cover budget URL persistence, server-based activity age despite clock skew, paused food across cart/reorder/checkout, pickup card/contact recovery, kitchen sorting and lookup, capacity/cutoff controls, and inventory version conflict/unknown-result recovery. Keyboard checks emulate the `visualViewport` contract; real Android/iOS and WeChat browser behavior remains a separate checklist.
 
-`counter-integration.spec.ts` requires `E2E_ISOLATED=1` in addition to `E2E_BASE_URL`, because it changes capacity and opening settings in its disposable fixture. It exercises real reservation/cancellation/restock/correction APIs, then looks up the resulting pickup order in the merchant browser and separately confirms payment and redemption. Do not enable this flag for the working demo database.
+`counter-integration.spec.ts` and `checkout-isolation.spec.ts` also skip before fixture setup without `E2E_ISOLATED=1`. The counter suite exercises real reservation/cancellation/restock/correction APIs, then separately confirms payment and redemption. The checkout isolation suite is included in the disposable runner and deactivates its synthetic products through an independent API context in teardown, even if its test page has already closed.
 
 The suite covers four homepage viewport widths, direct links and search, account return paths, persisted follows, checkout and customer/merchant state changes in separate sessions, cash confirmation followed by pickup-code redemption, persisted reviews, pending cancellation, and price-only merchant edits preserving reserved inventory. API requests use the real session and CSRF cookie. The geolocation denial scenario injects only a failed third-party location provider; real map rendering and browser permission prompts still require configured AMap credentials.
 

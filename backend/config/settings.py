@@ -26,6 +26,7 @@ if PUBLIC_BASE_URL:
 AMAP_KEY = os.getenv('AMAP_KEY', '')
 AMAP_SECURITY_CODE = os.getenv('AMAP_SECURITY_CODE', '')
 AMAP_PROXY = '/api/v1/amap-proxy/_AMapService'
+AMAP_PROXY_DAILY_LIMIT = int(os.getenv('AMAP_PROXY_DAILY_LIMIT', '20000'))
 # Payment credentials stay in an operator-owned server file, never in frontend settings.
 WECHAT_PAY_ENABLED = os.getenv('WECHAT_PAY_ENABLED', 'false').lower() == 'true'
 WECHAT_PAY_CONFIG_FILE = os.getenv('WECHAT_PAY_CONFIG_FILE', '')
@@ -37,6 +38,18 @@ AUTH_TRUST_PROXY_CLIENT_IP = os.getenv('AUTH_TRUST_PROXY_CLIENT_IP', 'false').lo
 AUTH_FAILURE_WINDOW_SECONDS = int(os.getenv('AUTH_FAILURE_WINDOW_SECONDS', '900'))
 AUTH_FAILURE_ACCOUNT_LIMIT = int(os.getenv('AUTH_FAILURE_ACCOUNT_LIMIT', '10'))
 AUTH_FAILURE_IP_LIMIT = int(os.getenv('AUTH_FAILURE_IP_LIMIT', '60'))
+CHECKOUT_MAX_ACTIVE_PER_STALL = int(os.getenv('CHECKOUT_MAX_ACTIVE_PER_STALL', '1'))
+CHECKOUT_MAX_ACTIVE_TOTAL = int(os.getenv('CHECKOUT_MAX_ACTIVE_TOTAL', '3'))
+CHECKOUT_MAX_PORTIONS = int(os.getenv('CHECKOUT_MAX_PORTIONS', '10'))
+CHECKOUT_PER_MINUTE = int(os.getenv('CHECKOUT_PER_MINUTE', '6'))
+CHECKOUT_PER_HOUR = int(os.getenv('CHECKOUT_PER_HOUR', '30'))
+CHECKOUT_STALE_READY_HOURS = int(os.getenv('CHECKOUT_STALE_READY_HOURS', '6'))
+PAYMENT_QUERY_INTERVAL_SECONDS = 5
+PAYMENT_QUERY_FAILURE_DELAYS = (10, 20, 30, 60)
+PAYMENT_NOTIFICATION_MAX_ATTEMPTS = 10
+if min(CHECKOUT_MAX_ACTIVE_PER_STALL, CHECKOUT_MAX_ACTIVE_TOTAL, CHECKOUT_MAX_PORTIONS,
+       CHECKOUT_PER_MINUTE, CHECKOUT_PER_HOUR, CHECKOUT_STALE_READY_HOURS) < 1:
+    raise ImproperlyConfigured('Checkout limits must be positive.')
 if min(AUTH_FAILURE_WINDOW_SECONDS, AUTH_FAILURE_ACCOUNT_LIMIT, AUTH_FAILURE_IP_LIMIT) < 1:
     raise ImproperlyConfigured('Authentication failure limits must be positive.')
 if PRODUCTION:
@@ -56,6 +69,7 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware', 'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware', 'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware', 'django.contrib.messages.middleware.MessageMiddleware',
+    'market.session_boundary.SessionActorMiddleware',
     'market.auth_limits.AdminLoginLimitStatusMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -85,9 +99,13 @@ AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator'},
     {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
 ]
+# Throttle counters must survive restarts and be shared by every worker process.
+CACHES = {'default': {'BACKEND': 'django.core.cache.backends.db.DatabaseCache', 'LOCATION': 'yanhuo_cache'}} \
+    if PRODUCTION or os.getenv('DJANGO_CACHE', '') == 'database' else \
+    {'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}}
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': ['rest_framework.authentication.SessionAuthentication'],
-    'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.AllowAny'],
+    'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated'],
     'DEFAULT_RENDERER_CLASSES': ['rest_framework.renderers.JSONRenderer'],
     'DEFAULT_PARSER_CLASSES': ['market.request_parsers.BoundedJSONParser',
         'market.request_parsers.BoundedFormParser', 'rest_framework.parsers.MultiPartParser'],
@@ -124,6 +142,15 @@ X_FRAME_OPTIONS = 'DENY'
 if os.getenv('TRUST_PROXY', 'false').lower() == 'true':
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 LOGGING = {'version': 1, 'disable_existing_loggers': False,
+    'formatters': {'timed': {'format': '%(asctime)s %(levelname)s %(name)s %(message)s'}},
     'handlers': {'console': {'class': 'logging.StreamHandler'}},
     'loggers': {'market': {'handlers': ['console'], 'level': 'INFO'},
                 'django.request': {'handlers': ['console'], 'level': 'WARNING', 'propagate': False}}}
+# Container consoles are lost on restart; an optional rotating file keeps warnings
+# and unhandled request errors for later diagnosis of payment or order incidents.
+LOG_FILE = os.getenv('DJANGO_LOG_FILE', '').strip()
+if LOG_FILE:
+    Path(LOG_FILE).parent.mkdir(parents=True, exist_ok=True)
+    LOGGING['handlers']['file'] = {'class': 'logging.handlers.RotatingFileHandler', 'filename': LOG_FILE,
+        'maxBytes': 5 * 1024 * 1024, 'backupCount': 5, 'encoding': 'utf-8', 'level': 'WARNING', 'formatter': 'timed'}
+    for name in LOGGING['loggers']: LOGGING['loggers'][name]['handlers'].append('file')

@@ -22,6 +22,7 @@ const choices = [0, 1000, 1500, 2000];
     </div>
     <label class="meal-sort"
       >餐点排序<select
+        aria-label="餐点排序"
         :value="sort"
         @change="
           $emit('update:sort', ($event.target as HTMLSelectElement).value)

@@ -10,7 +10,7 @@
   --orange: #e86a27;
   --orange-dark: #b9440d;
   --text: #302b26;
-  --muted: #807b73;
+  --muted: #6f675d;
   --line: #eee7dc;
   --green: #477457;
   --shadow: 0 6px 28px #57360c06;
@@ -890,5 +890,30 @@ textarea.input {
     animation: none !important;
     transition: none !important;
     scroll-behavior: auto !important;
+  }
+}
+
+@media (max-width: 767px) {
+  .site-header { height: 60px; }
+  .header-inner { padding: 0 16px; }
+  .brand { font-size: 19px; }
+  .brand small { display: none; }
+  .header-location select { font-size: 13px; }
+  .demo-strip { min-height: 28px; padding: 5px 12px; font-size: 11px; line-height: 1.5; }
+  .page { padding-left: 16px; padding-right: 16px; }
+  .mobile-nav a { font-size: 12px; }
+  .site-footer { display: none; }
+  .with-nav { padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
+  .search-box input { font-size: 16px; }
+  .btn { font-size: 15px; min-height: 46px; }
+}
+
+/* iOS Safari zooms into any focused field under 16px and stays zoomed in.
+   Keep every form control at 16px on touch-sized screens (merchant.css included). */
+@media (max-width: 1023px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  select,
+  textarea {
+    font-size: max(16px, 1em) !important;
   }
 }

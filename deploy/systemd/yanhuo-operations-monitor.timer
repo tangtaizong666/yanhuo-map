@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Yanhuo business processing and backups every 60 seconds
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=60
+AccuracySec=1
+Unit=yanhuo-operations-monitor.service
+
+[Install]
+WantedBy=timers.target

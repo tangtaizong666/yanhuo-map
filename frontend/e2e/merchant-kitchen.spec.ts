@@ -191,7 +191,7 @@ async function fixture(
       const body = req.postDataJSON();
       lookups.push(body);
       if (lookupResponse !== undefined) return send(lookupResponse);
-      if (body.pickup_code !== "12345678")
+      if (body.pickup_code !== "1234")
         return fail(
           404,
           "pickup_order_not_found",
@@ -263,7 +263,7 @@ async function fixture(
       const order = orders.find((o) => endpoint.includes(`/${o.id}/`));
       if (body.action === "confirm_payment") order.payment_status = "paid";
       if (body.action === "complete") {
-        if (order.payment_status !== "paid" || body.pickup_code !== "12345678")
+        if (order.payment_status !== "paid" || body.pickup_code !== "1234")
           return fail(409, "pickup_invalid", "请先付款并核对取餐码");
         order.status = "completed";
       }
@@ -396,7 +396,7 @@ test("duplicate pickup lookup requests order number and keeps payment and redemp
   const data = await fixture(page);
   data.setCollision();
   await openTools(page);
-  await page.getByLabel("8 位取餐码", { exact: true }).fill("12345678");
+  await page.getByLabel("4 位取餐码", { exact: true }).fill("1234");
   await page.getByRole("button", { name: "查找待取餐订单" }).click();
   await expect(
     page.getByText("本摊有重复取餐码，请补充完整订单号再查找。"),
@@ -407,8 +407,8 @@ test("duplicate pickup lookup requests order number and keeps payment and redemp
   await expect(details).toBeVisible();
   expect(data.writes).toEqual([]);
   expect(data.lookups).toEqual([
-    { pickup_code: "12345678" },
-    { pickup_code: "12345678", number: "READY-ORDER" },
+    { pickup_code: "1234" },
+    { pickup_code: "1234", number: "READY-ORDER" },
   ]);
   await expect(details.getByRole("button", { name: "核销并完成" })).toHaveCount(
     0,
@@ -419,7 +419,7 @@ test("duplicate pickup lookup requests order number and keeps payment and redemp
   await expect(
     details.getByRole("button", { name: "核销并完成" }),
   ).toBeVisible();
-  await expect(details.locator("#detail-pickup-code")).toHaveValue("12345678");
+  await expect(details.locator("#detail-pickup-code")).toHaveValue("1234");
   await details.getByRole("button", { name: "核销并完成" }).click();
   await expect
     .poll(() => data.orders.find((o) => o.id === "ready-order").status)
@@ -436,7 +436,7 @@ test("pickup lookup cannot expose another stall or promote invalid data to a com
 }) => {
   const data = await fixture(page);
   await openTools(page);
-  await page.getByLabel("8 位取餐码", { exact: true }).fill("87654321");
+  await page.getByLabel("4 位取餐码", { exact: true }).fill("4321");
   await page.getByRole("button", { name: "查找待取餐订单" }).click();
   await expect(page.getByText("未找到本摊已出餐的自取订单")).toBeVisible();
   data.setLookupResponse({ ...data.orders[2], stall_id: 999 });
@@ -453,7 +453,7 @@ test("product editing never patches inventory and pausing supply preserves posit
   page,
 }) => {
   const data = await fixture(page, "/merchant/products");
-  await page.getByRole("button", { name: "编辑商品", exact: true }).click();
+  await page.getByRole("button", { name: /^编辑商品：/ }).click();
   const dialog = page.getByRole("dialog", { name: "编辑商品", exact: true });
   await expect(dialog.getByLabel("线上剩余可卖份数")).toHaveCount(0);
   await dialog.getByLabel("商品名称", { exact: false }).fill("招牌煎饼（新）");
@@ -593,7 +593,7 @@ test("switching merchant during CSRF preflight aborts the old inventory correcti
   ).toHaveCount(0);
   data.releaseCsrf();
   await expect(
-    page.getByRole("button", { name: "编辑商品", exact: true }),
+    page.getByRole("button", { name: /^编辑商品：/ }),
   ).toBeVisible();
   expect(correctionWrites(data)).toEqual([]);
   expect(data.product.stock).toBe(10);
@@ -713,12 +713,12 @@ test("account change during lookup preflight cannot send the previous customer's
   const data = await fixture(page);
   await openTools(page);
   data.holdCsrf();
-  await page.getByLabel("8 位取餐码", { exact: true }).fill("12345678");
+  await page.getByLabel("4 位取餐码", { exact: true }).fill("1234");
   await page.getByRole("button", { name: "查找待取餐订单" }).click();
   await expect.poll(data.csrfWaiting).toBe(true);
   data.switchUser();
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-  await expect(page.getByLabel("8 位取餐码", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("4 位取餐码", { exact: true })).toHaveValue("");
   data.releaseCsrf();
   if (
     await page
