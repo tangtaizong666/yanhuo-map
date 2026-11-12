@@ -88,10 +88,8 @@ test("unconfigured map has an honest, usable fallback", async ({ page }) => {
   await expect(
     page.getByText(/未配置|未开放|尚未配置|地图服务尚未/).first(),
   ).toBeVisible();
-  await page.locator(".map-location").click();
-  await expect(
-    page.locator(".toast").filter({ hasText: /地图服务暂未开放/ }),
-  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "定位我的位置" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "查看位置与路线" }).first()).toBeVisible();
   const options = await page
     .getByLabel("选择校园")
     .locator("option")

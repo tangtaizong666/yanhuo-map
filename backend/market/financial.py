@@ -99,6 +99,9 @@ def allowed_actions(order, *, merchant=False):
         if active_payment.mode == 'simulation' and eligible(order.stall) and active_payment.simulation_state not in ('SUCCESS', 'CLOSED'):
             actions.append('simulate_payment')
     payable = order.status == ('pending_payment' if delivery else 'ready') and order.payment_status == 'unpaid' and not order.cancel_requested
+    if payable and order.mode == 'live':
+        from .admission import online_payment_eligibility_reason
+        payable = not online_payment_eligibility_reason(order.stall)
     if payable and not order.payment_review_required and not refunds:
         actions.append('pay')
     if not held:

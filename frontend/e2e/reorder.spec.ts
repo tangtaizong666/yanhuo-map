@@ -391,7 +391,7 @@ test("reorder appears only after an order ends, requires a second review after m
     );
     expect(readyResponse.ok(), await readyResponse.text()).toBeTruthy();
     const readyOrder = await readyResponse.json();
-    expect(readyOrder.pickup_code).toMatch(/^\d{8}$/);
+    expect(readyOrder.pickup_code).toMatch(/^\d{4}$/);
     const finished = await mutate(
       f.merchant,
       `/merchant/orders/${completed.id}/action`,

@@ -24,6 +24,7 @@ import { useSession } from '../stores/session';
 import { listSubmissions } from '../lib/checkoutSubmission';
 import PortionEditor from "../components/PortionEditor.vue";
 import { normalizePortions, invalidPortions } from "../lib/portions";
+import { useBrowseReturn } from "../lib/browseReturn";
 import {
   productAvailable,
   productUnavailableReason,
@@ -50,6 +51,17 @@ const groups = computed(() =>
     .filter(([, rows]) => rows.length)
     .map(([id, rows]) => ({ id, rows })),
 );
+useBrowseReturn({
+  capture: () => ({}),
+  async restore(snapshot, control) {
+    const target = snapshot.anchor.match(/^\/stalls\/(\d+)(?:\/products\/(\d+))?$/);
+    if (!target) return false;
+    const id = target[1]!;
+    if (!await control.wait(() => !!states.value[id] && !states.value[id]!.loading)) return false;
+    const state = states.value[id]!;
+    return !state.error && !!state.stall && (!target[2] || state.stall.products.some(product => product.id === Number(target[2])));
+  },
+});
 const totalCount = computed(() =>
   groups.value.reduce((sum, group) => sum + cart.count(group.id), 0),
 );

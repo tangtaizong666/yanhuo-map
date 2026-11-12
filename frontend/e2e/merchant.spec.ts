@@ -166,7 +166,7 @@ async function completedReviewFixture(
     const ready = await (
       await student.request.get(`${baseURL}/api/v1/orders/${order.id}`)
     ).json();
-    expect(ready.pickup_code).toMatch(/^\d{8}$/);
+    expect(ready.pickup_code).toMatch(/^\d{4}$/);
     await checked(merchant, `/merchant/orders/${order.id}/action`, {
       action: "complete",
       pickup_code: ready.pickup_code,

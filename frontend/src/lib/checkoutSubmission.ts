@@ -10,6 +10,7 @@ export interface CheckoutRequest {
   }[];
   note: string;
   contact_phone: string;
+  expected_location_token?: string;
   fulfillment_type?: "delivery";
   delivery_point_id?: number | null;
   recipient_name?: string;
@@ -28,6 +29,7 @@ export interface CheckoutSubmission {
   fulfillment: "pickup" | "delivery";
   pointId: number | null;
   recipient: string;
+  stallAddress?: string;
   body: CheckoutRequest;
   summary: string;
   totalCents: number;

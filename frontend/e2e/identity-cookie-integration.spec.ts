@@ -67,6 +67,7 @@ test("the real session rejects an old account write even when its successful ide
     await expect(
       page.getByRole("button", { name: "提交自取订单", exact: true }),
     ).toBeEnabled();
+    await page.locator(".checkout-contact-card > summary").click();
     await page
       .getByPlaceholder("例如：餐具按需提供（每份口味请在上方分别填写）")
       .fill("保留 A 的结算草稿");

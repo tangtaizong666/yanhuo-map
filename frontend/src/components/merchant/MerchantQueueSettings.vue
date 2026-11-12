@@ -246,6 +246,27 @@ async function save(kind: "capacity" | "cutoff") {
   cursor: pointer;
   font-size: 13px;
 }
+.queue-settings summary::-webkit-details-marker {
+  display: none;
+}
+.queue-settings summary {
+  list-style: none;
+}
+.queue-settings summary::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  flex: none;
+  margin-left: auto;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg) translateY(-2px);
+  opacity: 0.55;
+  transition: transform 0.15s;
+}
+.queue-settings details[open] summary::after {
+  transform: rotate(-135deg) translateY(-2px);
+}
 .queue-settings form {
   padding: 14px 0;
   border-top: 1px solid #eee1d3;

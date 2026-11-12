@@ -225,7 +225,7 @@ test("pickup lookup keeps amount visible while cash confirmation and redemption 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/merchant/orders");
   await page.getByRole("button", { name: "取餐码查单", exact: true }).click();
-  await page.getByLabel("8 位取餐码", { exact: true }).fill("12345678");
+  await page.getByLabel("4 位取餐码", { exact: true }).fill("1234");
   await page.getByRole("button", { name: "查找待取餐订单" }).click();
   const drawer = page.getByRole("dialog", { name: "订单详情", exact: true });
   await expect(drawer.locator(".m-order-payment-check")).toContainText(
@@ -245,7 +245,7 @@ test("pickup lookup keeps amount visible while cash confirmation and redemption 
   );
   await expect(
     drawer.getByPlaceholder("输入取餐码", { exact: true }),
-  ).toHaveValue("12345678");
+  ).toHaveValue("1234");
   expect(data.order.status).toBe("ready");
   await drawer.getByRole("button", { name: "核销并完成", exact: true }).click();
   await expect.poll(() => data.order.status).toBe("completed");
@@ -254,7 +254,7 @@ test("pickup lookup keeps amount visible while cash confirmation and redemption 
     "complete",
   ]);
   expect(new Set(data.actions.map((row) => row.idempotency_key)).size).toBe(2);
-  expect(data.lookups).toEqual([{ pickup_code: "12345678" }]);
+  expect(data.lookups).toEqual([{ pickup_code: "1234" }]);
   expect(data.unexpected).toEqual([]);
 });
 
@@ -305,7 +305,7 @@ test("a lost redemption result still replays its original code and idempotency k
   const data = await fixture(page);
   data.loseComplete();
   const drawer = await openReady(page);
-  await drawer.getByPlaceholder("输入取餐码", { exact: true }).fill("12345678");
+  await drawer.getByPlaceholder("输入取餐码", { exact: true }).fill("1234");
   await drawer.getByRole("button", { name: "核销并完成", exact: true }).click();
   await expect.poll(() => data.actions.length).toBe(1);
   await page.reload();
@@ -315,7 +315,7 @@ test("a lost redemption result still replays its original code and idempotency k
     .click();
   await expect.poll(() => data.actions.length).toBe(2);
   expect(data.actions[1]).toEqual(data.actions[0]);
-  expect(data.actions[1].pickup_code).toBe("12345678");
+  expect(data.actions[1].pickup_code).toBe("1234");
   expect(data.unexpected).toEqual([]);
 });
 
@@ -364,7 +364,7 @@ test("delivery handoff keeps its destination visible and refund confirmation rea
   await confirmation
     .getByRole("button", { name: "关闭操作确认", exact: true })
     .click();
-  await drawer.getByPlaceholder("输入收餐码", { exact: true }).fill("12345678");
+  await drawer.getByPlaceholder("输入收餐码", { exact: true }).fill("1234");
   await drawer.getByRole("button", { name: "核销并完成", exact: true }).click();
   await expect.poll(() => data.order.status).toBe("completed");
   expect(data.actions.map((row) => row.action)).toEqual(["complete"]);
@@ -393,7 +393,7 @@ test("long portion requirements scroll normally without hiding the code input", 
   await page.setViewportSize({ width: 360, height: 640 });
   const drawer = await openReady(page);
   await expect(drawer.locator(".portion-order-summary li")).toHaveCount(10);
-  await drawer.getByPlaceholder("输入取餐码", { exact: true }).fill("12345678");
+  await drawer.getByPlaceholder("输入取餐码", { exact: true }).fill("1234");
   const submit = drawer.getByRole("button", {
     name: "核销并完成",
     exact: true,

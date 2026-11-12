@@ -82,7 +82,7 @@ function makeOrder(status = "pending_payment"): any {
     delivery_fee_cents: 300,
     created_at: new Date().toISOString(),
     expires_at: new Date(Date.now() + 900000).toISOString(),
-    pickup_code: "82745103",
+    pickup_code: "8274",
     pickup_address: "校园南门摊位",
     pickup_latitude: 45.73,
     pickup_longitude: 126.67,
@@ -424,7 +424,7 @@ test("arrived means waiting for handoff; customer explicitly confirms actual rec
   await expect(page.locator(".delivery-destination")).toContainText(
     point.address,
   );
-  await expect(page.locator(".receipt-code")).toContainText("82745103");
+  await expect(page.locator(".receipt-code")).toContainText("8274");
   for (const width of [360, 390, 768, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     await assertNoHorizontalOverflow(page);

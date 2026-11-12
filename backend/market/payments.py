@@ -208,6 +208,12 @@ def _drive_payment(order_id, user=None, *, operation='query', payer_client_ip=No
         payment.save(update_fields=['request_in_flight_until'])
     result, failure, entry = None, None, False
     def create(client):
+        if order.mode == 'live':
+            from .admission import online_payment_eligibility_reason
+            current_stall = Stall.objects.select_related('merchant').get(pk=order.stall_id)
+            reason = online_payment_eligibility_reason(current_stall)
+            if reason:
+                raise GatewayError('TRADE_ADMISSION_REVOKED', reason, outcome_unknown=False, retryable=False)
         return client.create_payment(out_trade_no=payment.out_trade_no, amount_cents=payment.amount_cents,
             description=f'{order.stall_name} {"配送" if order.fulfillment_type == "delivery" else "自取"}订单'.encode('utf-8')[:127].decode('utf-8', errors='ignore'),
             expires_at=payment.expires_at, channel=payment.channel, payer_client_ip=payer_client_ip)
@@ -278,6 +284,7 @@ def start_payment(order_id, user, channel, payer_client_ip):
         except (ValueError, TypeError):
             raise BusinessError('无法确认支付设备的网络地址，请稍后重试。', 'payment_client_ip_missing', status=400) from None
     created = False
+    query_only = False
     with transaction.atomic():
         order = _order(order_id, user)
         if (channel == 'simulation') != (order.mode == 'simulation'):
@@ -287,6 +294,11 @@ def start_payment(order_id, user, channel, payer_client_ip):
         if order.status != expected_status or order.payment_status != 'unpaid' or order.cancel_requested or order.payment_review_required:
             raise BusinessError('当前订单状态不能发起微信付款，请刷新订单状态。', 'payment_unavailable')
         existing = order.payments.filter(status__in=PaymentAttempt.ACTIVE_STATUSES).first()
+        if existing and order.mode == 'live':
+            from .admission import online_payment_eligibility_reason
+            # Repeated starts after revocation only reconcile the old intent.
+            # They cannot recover/create a charge or reopen its payment entry.
+            query_only = bool(online_payment_eligibility_reason(order.stall))
         if not existing:
             if delivery and order.expires_at <= timezone.now()+timedelta(seconds=75):
                 raise BusinessError('订单剩余付款时间不足，请取消后重新下单。', 'payment_unavailable')
@@ -296,6 +308,10 @@ def start_payment(order_id, user, channel, payer_client_ip):
                 raise BusinessError('模拟服务已关闭，原订单不会转为真实支付。', 'simulation_unavailable')
             if order.stall.is_demo and not simulated:
                 raise BusinessError('示例摊位不支持真实微信支付，请使用到摊付款流程。', 'payment_not_configured', status=503)
+            from .admission import online_payment_eligibility_reason
+            admission_reason = online_payment_eligibility_reason(order.stall)
+            if admission_reason:
+                raise BusinessError(admission_reason, 'payment_unavailable')
             available = payment_readiness(order.stall) if simulated else readiness(order.stall.merchant)
             if not available.get('available'):
                 raise BusinessError(available.get('reason') or '微信支付暂未开通，请使用到摊付款。', 'payment_not_configured', status=503)
@@ -317,7 +333,7 @@ def start_payment(order_id, user, channel, payer_client_ip):
             order.save(update_fields=['payment_method'])
             audit(user, 'wechat_payment_started', order.pk, mode=order.mode)
             created = True
-    return _drive_payment(order_id, user, operation='create' if created else 'recover', payer_client_ip=payer_client_ip)
+    return _drive_payment(order_id, user, operation='create' if created else 'query' if query_only else 'recover', payer_client_ip=payer_client_ip)
 
 
 def close_payment(order_id, user):

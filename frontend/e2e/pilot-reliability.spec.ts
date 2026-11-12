@@ -38,7 +38,7 @@ function order(id: string, status = "pending"): any {
     merchant_contact_phone: "13800138000",
     created_at: new Date().toISOString(),
     expires_at: new Date(Date.now() + 240000).toISOString(),
-    pickup_code: "12345678",
+    pickup_code: "1234",
     pickup_address: "校园南门",
     pickup_latitude: 30,
     pickup_longitude: 120,

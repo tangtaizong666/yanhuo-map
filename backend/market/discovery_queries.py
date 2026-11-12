@@ -19,16 +19,19 @@ def filter_status(query, status, config):
     if status in ('open', 'paused', 'orderable'):
         query = query.exclude(ended).exclude(stale).filter(current_session__status='open' if status == 'orderable' else status)
         if status == 'orderable':
-            query = query.filter(accepting_orders=True, transaction_enabled=True, merchant__is_verified=True, location__isnull=False)
+            from .admission import new_trade_eligibility_q
+            from django.db.models import F
+            query = query.filter(new_trade_eligibility_q(), accepting_orders=True, location__isnull=False)
+            query = query.filter(Q(current_session__stop_orders_at__isnull=True) | Q(current_session__stop_orders_at__gt=now))
+            query = query.filter(Q(prep_capacity__isnull=True) | Q(prep_active_count__lt=F('prep_capacity')))
         return query
     return query.none()
 
 
 def visible_stall_query(mode='detail'):
-    reviews = Review.objects.filter(stall_id=OuterRef('pk')).order_by().values('stall_id')
-    query = Stall.objects.filter(is_visible=True)
-    if not settings.DEMO_MODE:
-        query = query.filter(is_demo=False)
+    reviews = Review.objects.filter(stall_id=OuterRef('pk'), order__mode='live').order_by().values('stall_id')
+    from .admission import public_listing_q
+    query = Stall.objects.filter(public_listing_q())
     orders = Order.objects.filter(stall_id=OuterRef('pk')).order_by().values('stall_id')
     def count_orders(**filters):
         return Coalesce(Subquery(orders.filter(**filters).annotate(value=Count('pk')).values('value')[:1], output_field=IntegerField()), 0)
@@ -41,12 +44,13 @@ def visible_stall_query(mode='detail'):
         return query.prefetch_related(
             Prefetch('products', queryset=Product.objects.filter(is_active=True).order_by('id')),
             Prefetch('delivery_points', queryset=DeliveryPoint.objects.order_by('id'), to_attr='_delivery_points'),
-            Prefetch('reviews', queryset=Review.objects.select_related('user').order_by('-created_at', '-id')[:20], to_attr='_preview_reviews'),
-        ).annotate(completed_count=count_orders(status='completed'),
+            Prefetch('reviews', queryset=Review.objects.filter(order__mode='live').select_related('user', 'order').order_by('-created_at', '-id')[:20], to_attr='_preview_reviews'),
+        ).annotate(completed_count=count_orders(status='completed', mode='live'),
             delivery_active_count=count_orders(fulfillment_type='delivery',
                 status__in=('pending_payment', 'pending', 'preparing', 'ready', 'delivering', 'arrived')))
     if mode == 'summary':
+        from .catalogue import available_products
         query = query.prefetch_related(Prefetch('products',
-            queryset=Product.objects.filter(is_active=True, sale_paused=False, stock__gt=0).order_by('id')[:2],
+            queryset=Product.objects.filter(available_products()).order_by('id')[:2],
             to_attr='_preview_products'))
     return query

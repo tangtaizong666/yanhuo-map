@@ -156,6 +156,71 @@ class MerchantWorkspaceTests(TestCase):
         self.assertEqual(response.status_code, 404, response.data)
         self.assertFalse(StallLocation.objects.filter(stall=self.stall).exists())
 
+    def test_opening_closing_time_is_merchant_only_and_uses_server_time(self):
+        now = timezone.now()
+        session = self.stall.current_session
+        for status, closes_at, offered in (
+            ('closed', now + timedelta(hours=2), True),
+            ('closed', now, False),
+            ('closed', now - timedelta(hours=1), False),
+            ('closed', None, False),
+            ('open', now + timedelta(hours=2), False),
+            ('paused', now + timedelta(hours=2), False),
+        ):
+            with self.subTest(status=status, closes_at=closes_at):
+                session.status, session.closes_at = status, closes_at
+                session.save(update_fields=['status', 'closes_at'])
+                with patch('market.serializers.timezone.now', return_value=now):
+                    owned = self.client.get('/api/v1/merchant/stalls').data[0]
+                    public = self.client.get(f'/api/v1/stalls/{self.stall.pk}').data
+                self.assertEqual(owned['opening_closes_at'], owned['closes_at'] if offered else None)
+                self.assertNotIn('opening_closes_at', public)
+
+    def test_first_location_closing_time_can_be_explicitly_confirmed_on_open_without_copying_cutoff(self):
+        StallLocation.objects.filter(stall=self.stall).delete()
+        previous = self.stall.current_session
+        previous.status = 'closed'
+        previous.stop_orders_at = timezone.now() - timedelta(hours=1)
+        previous.save()
+        closing = timezone.now() + timedelta(hours=2)
+        saved = self.client.post(self.base + '/status', {
+            'status': 'closed', 'confirm_location': True, 'closes_at': closing.isoformat(),
+            'address': '校园北门交接处', 'latitude': 31.235, 'longitude': 121.478,
+        }, format='json')
+        self.assertEqual(saved.status_code, 200, saved.data)
+        self.assertEqual(saved.data['opening_closes_at'], saved.data['closes_at'])
+        opened = self.client.post(self.base + '/status', {
+            'status': 'open', 'confirm_location': True, 'closes_at': saved.data['opening_closes_at'],
+        }, format='json')
+        self.assertEqual(opened.status_code, 200, opened.data)
+        self.stall.refresh_from_db()
+        self.assertNotEqual(self.stall.current_session_id, previous.pk)
+        self.assertEqual(self.stall.current_session.closes_at, closing)
+        self.assertIsNone(self.stall.current_session.stop_orders_at)
+        self.assertIsNone(opened.data['opening_closes_at'])
+        self.assertFalse(opened.data['transaction_enabled'])
+        self.assertFalse(opened.data['can_order'])
+
+    def test_opening_time_that_expires_after_display_is_rejected_without_opening(self):
+        now = timezone.now()
+        session = self.stall.current_session
+        session.status = 'closed'
+        session.closes_at = now + timedelta(minutes=1)
+        session.save()
+        with patch('market.serializers.timezone.now', return_value=now):
+            owned = self.client.get('/api/v1/merchant/stalls').data[0]
+        self.assertIsNotNone(owned['opening_closes_at'])
+        with patch('market.views.timezone.now', return_value=now + timedelta(minutes=2)):
+            response = self.client.post(self.base + '/status', {
+                'status': 'open', 'confirm_location': True, 'closes_at': owned['opening_closes_at'],
+            }, format='json')
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertEqual(response.data['code'], 'invalid_closing_time')
+        self.stall.refresh_from_db()
+        self.assertEqual(self.stall.current_session_id, session.pk)
+        self.assertEqual(self.stall.current_session.status, 'closed')
+        self.assertEqual(self.stall.sessions.count(), 1)
+
     def test_reopening_expired_session_starts_fresh_and_preserves_order_snapshot(self):
         order = self.order()
         session = self.stall.current_session

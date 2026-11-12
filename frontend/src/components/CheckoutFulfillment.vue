@@ -1,14 +1,21 @@
 <script setup lang="ts">
 import { Bike, Store, MapPin, Clock3, Info } from "lucide-vue-next";
+import { computed } from "vue";
 import { money } from "../lib/api";
 import type { DeliverySettings } from "../lib/types";
-defineProps<{
+const props = defineProps<{
   modelValue: "pickup" | "delivery";
   delivery?: DeliverySettings;
   pointId: number | null;
   subtotal: number;
   busy: boolean;
 }>();
+const pickupOnly = computed(
+  () =>
+    props.modelValue === "pickup" &&
+    !props.delivery?.available &&
+    props.delivery?.mode !== "simulation",
+);
 defineEmits<{
   "update:modelValue": [value: "pickup" | "delivery"];
   "update:pointId": [value: number | null];
@@ -18,9 +25,16 @@ defineEmits<{
 <template>
   <section class="card fulfillment-card" aria-labelledby="fulfillment-heading">
     <header>
-      <h2 id="fulfillment-heading">这份好味道，怎么收？</h2>
+      <h2 id="fulfillment-heading">
+        {{ pickupOnly ? "到摊自取" : "这份好味道，怎么收？" }}
+      </h2>
     </header>
-    <div class="fulfillment-options" role="group" aria-label="选择取餐方式">
+    <div
+      v-if="!pickupOnly"
+      class="fulfillment-options"
+      role="group"
+      aria-label="选择取餐方式"
+    >
       <button
         type="button"
         :aria-pressed="modelValue === 'pickup'"
@@ -55,6 +69,10 @@ defineEmits<{
       </button>
     </div>
     <slot />
+    <details v-if="pickupOnly" class="pickup-delivery-explanation">
+      <summary>配送暂未开放 · 查看原因</summary>
+      <p>{{ delivery?.reason || "商家尚未开放配送，可继续选择到摊自取。" }}</p>
+    </details>
     <template v-if="modelValue === 'delivery'">
       <div
         v-if="!delivery?.available"
@@ -137,6 +155,21 @@ defineEmits<{
 <style scoped>
 .fulfillment-card {
   padding: 22px 25px;
+}
+.pickup-delivery-explanation {
+  color: #78634c;
+  font-size: 12px;
+}
+.pickup-delivery-explanation summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.pickup-delivery-explanation p {
+  margin: 0;
+  line-height: 1.8;
 }
 .eyebrow {
   font-size: 10px;

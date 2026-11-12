@@ -52,7 +52,9 @@ async function copy() {
       <Wallet :size="17" />{{
         order.payment_status === "paid"
           ? "款项已确认，可凭码取餐"
-          : `应付 ¥${money(order.total_cents)} · 请在下方支付或到摊付款`
+          : order.wechat_payment?.available
+            ? `应付 ¥${money(order.total_cents)} · 可在下方支付，或到摊扫码付给摊主`
+            : `应付 ¥${money(order.total_cents)} · 到摊扫摊主收款码付款`
       }}
     </p>
     <div class="pickup-card-address">

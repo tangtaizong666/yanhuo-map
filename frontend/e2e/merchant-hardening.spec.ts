@@ -17,7 +17,7 @@ async function fixture(page: Page) {
   const order: any = { id: '00000000-0000-4000-8000-000000000713', number: '713', stall_id: 713,
     stall_name: stall.name, status: 'preparing', mode: 'live', fulfillment_type: 'pickup',
     payment_method: 'offline', payment_status: 'unpaid', payment: null, refund: null, review: null,
-    cancel_requested: false, payment_review_required: false, total_cents: 1000, pickup_code: '12345678',
+    cancel_requested: false, payment_review_required: false, total_cents: 1000, pickup_code: '1234',
     pickup_address: '校园南门', note: '', contact_phone: '',
     created_at: new Date().toISOString(), expires_at: new Date(Date.now()+240000).toISOString(),
     items: [{ product_id: 713, name: product.name, image: '', quantity: 1, unit_price_cents: 1000, portions: [] }] }
@@ -78,7 +78,7 @@ test('merchant action retries preserve the original key after reload; payment an
   await expect(page.getByPlaceholder('输入取餐码', { exact: true })).toBeVisible()
   expect(state.order.status).toBe('ready')
   expect(state.order.payment_status).toBe('paid')
-  await page.getByPlaceholder('输入取餐码', { exact: true }).fill('12345678')
+  await page.getByPlaceholder('输入取餐码', { exact: true }).fill('1234')
   await page.getByRole('button', { name: '核销并完成', exact: true }).click()
   await expect.poll(() => state.order.status).toBe('completed')
   expect(state.actions.map(row => row.action)).toEqual(['ready', 'ready', 'confirm_payment', 'complete'])

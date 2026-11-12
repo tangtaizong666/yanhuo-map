@@ -24,6 +24,7 @@ urlpatterns = [
     path('orders/<uuid:order_id>/cancel', views.cancel), path('orders/<uuid:order_id>/review', views.review),
     path('orders/<uuid:order_id>/confirm-receipt', views.receive_delivery),
     path('merchant/stalls', merchant.stalls), path('merchant/orders', views.merchant_orders),
+    path('merchant/orders/<uuid:order_id>', views.merchant_order_detail),
     path('merchant/application', operations.application),
     path('merchant/application/submit', operations.submit_application),
     path('merchant/stalls/<int:stall_id>/restock', operations.restock),

@@ -234,6 +234,7 @@ for (const width of [360, 390])
       });
       await expect(submit).toBeEnabled();
       await capture(page, info, "s-checkout");
+      await page.locator(".checkout-contact-card > summary").click();
       await page
         .getByPlaceholder("例如：餐具按需提供（每份口味请在上方分别填写）")
         .fill("手机全流程隔离验收，少辣");
@@ -288,7 +289,7 @@ for (const width of [360, 390])
       await expect(card.locator(".merchant-order-status")).toHaveText("待取餐");
       await capture(merchant, info, "m-ready-unpaid");
       await page.getByRole("button", { name: "刷新订单状态" }).click();
-      await expect(page.locator(".pickup-code strong")).toHaveText(/^\d{8}$/);
+      await expect(page.locator(".pickup-code strong")).toHaveText(/^\d{4}$/);
       await capture(page, info, "s-ready");
       const code = await page.locator(".pickup-code strong").innerText();
       await card.getByRole("button", { name: /^收款 ¥/ }).click();

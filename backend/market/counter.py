@@ -84,12 +84,12 @@ def receiving_heartbeat(request, stall_id):
 
 
 class PickupLookupInput(StrictInput):
-    pickup_code = serializers.RegexField(r'^[0-9]{8}$', max_length=8)
+    pickup_code = serializers.RegexField(r'^(?:[0-9]{4}|[0-9]{8})$', max_length=8)
     number = serializers.CharField(max_length=40, required=False)
 
 
 class PickupLookupThrottle(SimpleRateThrottle):
-    rate = '60/minute'
+    rate = '30/minute'
     scope = 'pickup_lookup'
     def get_cache_key(self, request, view):
         return self.cache_format % {'scope': self.scope,

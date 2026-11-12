@@ -37,7 +37,7 @@ test("dish search opens the matching item, retains its query on refresh, and han
     path: testInfo.outputPath("dish-detail-desktop.png"),
     fullPage: false,
   });
-  await page.goto("/search?type=dishes&q=不存在的餐点名称987654321");
+  await page.goto("/search?type=dishes&q=不存在的餐点名称94321");
   await expect(
     page.getByRole("heading", { name: "还没有找到这道餐点" }),
   ).toBeVisible();
@@ -48,7 +48,7 @@ test("dish search opens the matching item, retains its query on refresh, and han
   await page.goBack();
   await expect(
     page.getByRole("textbox", { name: "搜索摊位或美食" }),
-  ).toHaveValue("不存在的餐点名称987654321");
+  ).toHaveValue("不存在的餐点名称94321");
   await expect(
     page.getByRole("heading", { name: "还没有找到这道餐点" }),
   ).toBeVisible();

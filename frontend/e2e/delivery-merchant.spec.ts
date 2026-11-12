@@ -343,14 +343,14 @@ test("paid delivery advances departure and arrival, then needs receipt code befo
   });
   await page.getByRole("button", { name: "关闭订单详情", exact: true }).click();
   await page
-    .getByLabel("核验顾客的 8 位收餐码", { exact: true })
-    .fill("12345678");
+    .getByLabel("核验顾客的 4 位收餐码", { exact: true })
+    .fill("1234");
   await page.getByRole("button", { name: "核销并完成", exact: true }).click();
   await expect(page.locator(".merchant-order-status")).toHaveText("已完成");
   expect(fixture.actions).toEqual([
     { action: "dispatch" },
     { action: "arrive" },
-    { action: "complete", pickup_code: "12345678" },
+    { action: "complete", pickup_code: "1234" },
   ]);
   expect(fixture.unexpected).toEqual([]);
 });
@@ -435,7 +435,7 @@ test("delivery issue blocks receipt until an explicit resolution is recorded", a
     .getByRole("button", { name: "记录解决，继续履约", exact: true })
     .click();
   await expect(
-    page.getByLabel("核验顾客的 8 位收餐码", { exact: true }),
+    page.getByLabel("核验顾客的 4 位收餐码", { exact: true }),
   ).toBeVisible();
   await expect(page.locator(".merchant-order-status")).toHaveText("已到交接点");
   expect(fixture.actions).toEqual([

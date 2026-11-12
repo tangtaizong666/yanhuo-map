@@ -2,7 +2,7 @@
 import io
 
 from django.conf import settings
-from rest_framework.exceptions import APIException
+from rest_framework.exceptions import APIException, ParseError
 from rest_framework.parsers import FormParser, JSONParser
 
 
@@ -22,7 +22,11 @@ class BoundedBodyMixin:
 
 
 class BoundedJSONParser(BoundedBodyMixin, JSONParser):
-    pass
+    def parse(self, stream, media_type=None, parser_context=None):
+        data = super().parse(stream, media_type, parser_context)
+        if not isinstance(data, dict):
+            raise ParseError({'detail': '请求内容必须是 JSON 对象。', 'code': 'invalid_json_object'})
+        return data
 
 
 class BoundedFormParser(BoundedBodyMixin, FormParser):

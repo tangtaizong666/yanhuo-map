@@ -388,13 +388,31 @@ class CounterTests(TestCase):
 
     def test_pickup_lookup_requires_exact_code_and_throttles_attempts(self):
         url = f'/api/v1/merchant/stalls/{self.stall.pk}/pickup-lookup'
-        for code in ('1234', 'abcdefgh', '１２３４５６７８'):
+        for code in ('123', '123456', 'abcd', '１２３４'):
             self.assertEqual(self.api.post(url, {'pickup_code': code}, format='json').status_code, 400)
         cache.clear()
         with patch('market.counter.PickupLookupThrottle.rate', '2/minute'):
             self.assertEqual(self.api.post(url, {'pickup_code': '12345678'}, format='json').status_code, 404)
             self.assertEqual(self.api.post(url, {'pickup_code': '12345678'}, format='json').status_code, 404)
             self.assertEqual(self.api.post(url, {'pickup_code': '12345678'}, format='json').status_code, 429)
+
+    def test_pickup_codes_are_four_digits_and_unique_among_open_orders(self):
+        from market.models import pickup_code
+        self.assertRegex(pickup_code(), r'^[0-9]{4}$')
+        taken = {f'{n:04d}' for n in range(10000)} - {'0420'}
+        self.assertEqual(pickup_code(taken), '0420')
+
+    def test_wrong_pickup_code_locks_after_five_attempts(self):
+        cache.clear()
+        order = merchant_action(self.ready_order().pk, self.vendor, 'confirm_payment')
+        wrong = '0000' if order.pickup_code != '0000' else '1111'
+        for _ in range(5):
+            with self.assertRaises(BusinessError) as raised: merchant_action(order.pk, self.vendor, 'complete', wrong)
+            self.assertEqual(raised.exception.detail['code'], 'invalid_pickup_code')
+        with self.assertRaises(BusinessError) as raised: merchant_action(order.pk, self.vendor, 'complete', order.pickup_code)
+        self.assertEqual(raised.exception.detail['code'], 'pickup_code_locked')
+        cache.clear()
+        self.assertEqual(merchant_action(order.pk, self.vendor, 'complete', order.pickup_code).status, 'completed')
 
 
 @override_settings(SERVICES_SIMULATION_ENABLED=True, DEMO_MODE=True, PRODUCTION=False)

@@ -134,7 +134,7 @@ class PaymentTests(PaymentSetup, TestCase):
 
     def test_stall_public_readiness_never_exposes_account_key(self):
         response = self.api.get(f'/api/v1/stalls/{self.stall.pk}')
-        self.assertEqual(response.data['wechat_payment'], {'mode': 'live', 'available': True, 'reason': '', 'channels': ['native', 'h5']})
+        self.assertEqual(response.data['wechat_payment'], {'mode': 'live', 'supported': True, 'available': True, 'reason': '', 'channels': ['native', 'h5']})
         self.assertNotIn('account_key', str(response.data))
 
     @override_settings(DEMO_MODE=False)

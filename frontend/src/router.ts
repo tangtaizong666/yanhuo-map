@@ -1,9 +1,11 @@
 import { createRouter, createWebHistory } from "vue-router";
 import { useSession } from "./stores/session";
 import { isMerchantPath } from "./lib/identity";
+import { hasPendingBrowseReturn, installBrowseReturn } from "./lib/browseReturn";
 const router = createRouter({
   history: createWebHistory(),
   scrollBehavior(to, from, saved) {
+    if (hasPendingBrowseReturn()) return false;
     if (saved) return saved;
     if (to.path === from.path) return;
     return { top: 0 };
@@ -102,4 +104,5 @@ router.beforeEach(async (to) => {
 router.afterEach((to) => {
   document.title = `${to.meta.title || "校园好味"} · 烟火地图`;
 });
+installBrowseReturn(router);
 export default router;

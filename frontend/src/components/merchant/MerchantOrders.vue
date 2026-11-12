@@ -34,7 +34,7 @@ import {
 } from "./delivery";
 import { api, ApiError, formatTime, money, statusText } from "../../lib/api";
 import { notify } from "../../lib/notify";
-import { orderPage, mergeOrders, type OrderCounts } from "../../lib/orderPages";
+import { orderPage, mergeOrders, matchesOrderFilter, type OrderCounts } from "../../lib/orderPages";
 import type { Order } from "../../lib/types";
 import { allows } from "../../lib/orderActions";
 import { useSession } from "../../stores/session";
@@ -114,7 +114,7 @@ function loadPrepRequests() {
             Number(value.prep_minutes) >= 1 &&
             Number(value.prep_minutes) <= 180)) &&
         (value.pickup_code === undefined ||
-          /^\d{8}$/.test(value.pickup_code)) &&
+          /^(\d{4}|\d{8})$/.test(value.pickup_code)) &&
         typeof value.idempotency_key === "string" &&
         value.idempotency_key.length >= 8 &&
         value.idempotency_key.length <= 128 &&
@@ -131,7 +131,7 @@ function prepValue(order: any) {
   return prepMinutes[order.id] ?? props.stall.prep_minutes ?? 10;
 }
 function preparationText(order: any) {
-  if (!order.estimated_ready_at) return "接单后会显示商家预计出餐时间";
+  if (!order.estimated_ready_at) return "尚未设置出餐预估";
   const past =
     Date.parse(order.estimated_ready_at) < now.value &&
     order.status === "preparing";
@@ -156,11 +156,6 @@ const historyFilter = computed(() =>
       ? filter.value
       : null,
 );
-function invalidateHistory() {
-  historyPages.clear();
-  // Re-read the visible history tab in the background; the current rows stay until it returns.
-  if (historyFilter.value) void loadHistory();
-}
 async function loadHistory(more = false) {
   if (
     !historyFilter.value ||
@@ -181,11 +176,16 @@ async function loadHistory(more = false) {
       historyController.signal,
     );
     if (generation !== historyGeneration) return;
-    history.value = more
+    const rows = more
       ? mergeOrders(history.value, page.results)
       : page.results;
+    history.value = rows
+      .filter((row) => !removedHistoryIds.has(String(row.id)))
+      .map((row) => updatedOrders[String(row.id)] || props.orders.find((current) => current.id === row.id) || row)
+      .filter((row) => matchesOrderFilter(row, selected, true));
     historyNext.value = page.next;
     historyPages.set(selected, { rows: history.value, next: page.next });
+    void syncHistory();
   } catch (e) {
     if (generation === historyGeneration)
       historyError.value = (e as Error).message;
@@ -214,7 +214,8 @@ function filterCount(value: string) {
   );
 }
 const lookupOrder = ref<any>(null);
-const toolsOpen = ref(false);
+const toolsOpen = ref(["all", "completed", "cancelled"].includes(props.initialFilter));
+const searchToolsButton = ref<HTMLButtonElement>();
 const lookupOpen = ref(false);
 function selectStage(value: string) {
   filter.value = value;
@@ -224,11 +225,86 @@ function selectStage(value: string) {
 }
 const query = ref("");
 const fulfillment = ref("all");
+const hasSearchFilters = computed(() => !!query.value.trim() || fulfillment.value !== "all");
+function clearSearchFilters() {
+  query.value = "";
+  fulfillment.value = "all";
+  nextTick(() => searchToolsButton.value?.focus({ preventScroll: true }));
+}
 const cancellationOnly = ref(props.initialFilter === "cancellation");
 const busyIds = reactive(new Set<string>());
 const isBusy = (order: any) => !!order && busyIds.has(String(order.id));
 const now = ref(Date.now());
 const updatedOrders = reactive<Record<string, any>>({});
+const historySyncIds = reactive(new Set<string>());
+const removedHistoryIds = new Set<string>();
+const historySyncBusy = ref(false);
+let historySyncGeneration = 0;
+let historySyncController: AbortController | undefined;
+function stopHistorySync() {
+  historySyncGeneration++;
+  historySyncController?.abort();
+  historySyncBusy.value = false;
+}
+function updateHistory(rows: Order[], removed: string[] = []) {
+  const replacements = new Map(rows.map((row) => [String(row.id), row]));
+  for (const id of removed) {
+    removedHistoryIds.add(id);
+    delete updatedOrders[id];
+    if (String(lookupOrder.value?.id) === id) lookupOrder.value = null;
+  }
+  for (const row of rows) {
+    const id = String(row.id);
+    removedHistoryIds.delete(id);
+    historySyncIds.delete(id);
+    if (String(lookupOrder.value?.id) === id) lookupOrder.value = row;
+  }
+  for (const id of removed) historySyncIds.delete(id);
+  for (const [key, cached] of historyPages) {
+    const updated = mergeOrders(cached.rows.map((row) => replacements.get(String(row.id)) || row), rows)
+      .filter((row) => !removedHistoryIds.has(String(row.id)) && matchesOrderFilter(row, key, true));
+    historyPages.set(key, { rows: updated, next: cached.next });
+  }
+  if (historyFilter.value) history.value = historyPages.get(historyFilter.value)?.rows || history.value;
+}
+async function syncHistory() {
+  if (!props.ordersReady) return;
+  stopHistorySync();
+  const generation = historySyncGeneration;
+  const attention = new Set(props.orders.map((row) => String(row.id)));
+  const known = mergeOrders(history.value, ...[...historyPages.values()].map((page) => page.rows),
+    Object.values(updatedOrders), lookupOrder.value ? [lookupOrder.value] : []);
+  for (const row of known) {
+    const id = String(row.id);
+    if (!attention.has(id) && matchesOrderFilter(row, "attention", true) && !removedHistoryIds.has(id)) historySyncIds.add(id);
+  }
+  for (const id of attention) historySyncIds.delete(id);
+  const pending = [...historySyncIds];
+  if (!pending.length) return;
+  const stallId = props.stall.id;
+  historySyncController = new AbortController();
+  const signal = historySyncController.signal;
+  historySyncBusy.value = true;
+  // Only records that left attention are reread; completed history is not polled.
+  // Bound concurrency even when many loaded orders finish at the same time.
+  await Promise.all(Array.from({ length: Math.min(4, pending.length) }, async () => {
+    while (pending.length && generation === historySyncGeneration) {
+      const id = pending.shift()!;
+      try {
+        const row = await api<Order>(`/merchant/orders/${encodeURIComponent(id)}?stall=${stallId}`, { signal });
+        if (generation !== historySyncGeneration) return;
+        if (!row || String(row.id) !== id || row.stall_id !== stallId || !Array.isArray(row.items)) throw new Error("未能核实订单");
+        updatedOrders[id] = row;
+        updateHistory([row]);
+      } catch (error) {
+        if (generation !== historySyncGeneration) return;
+        if (error instanceof ApiError && [403, 404].includes(error.status)) updateHistory([], [id]);
+        // Temporary failures retain both the last record and its unsynced marker.
+      }
+    }
+  }));
+  if (generation === historySyncGeneration) historySyncBusy.value = false;
+}
 const pickupCodes = reactive<Record<string, string>>({});
 const drawer = ref<HTMLDialogElement>();
 const confirmation = ref<HTMLDialogElement>();
@@ -269,6 +345,10 @@ const primaryStages = [
   { value: "ready", label: "待取餐" },
 ];
 const pendingOperationCount = computed(() => Object.keys(pendingPrep).length);
+const showQueueSummary = computed(() =>
+  !["pending", "preparing"].includes(filter.value) ||
+  hasSearchFilters.value || cancellationOnly.value,
+);
 const queueTitle = computed(() =>
   cancellationOnly.value
     ? "取消申请"
@@ -553,6 +633,7 @@ function moreActions(order: any) {
   );
 }
 function cardAction(order: any) {
+  if (historySyncIds.has(String(order.id))) return null;
   if (pendingPrep[order.id])
     return {
       value: pendingPrep[order.id]!.action,
@@ -586,6 +667,7 @@ function runCardAction(order: any) {
 }
 function canAct(order: any, value: string) {
   if (!order) return false;
+  if (historySyncIds.has(String(order.id))) return false;
   if (value === "refund_status" && !order.refund) return false;
   if (pendingPrep[order.id]) return value === pendingPrep[order.id]!.action;
   if (Array.isArray(order.allowed_actions) && value !== "refresh_status") {
@@ -927,9 +1009,9 @@ async function performAction(order: any, value: string, explanation = "") {
     body.reason = explanation;
   if (value === "complete" && !existingPrep) {
     const code = (pickupCodes[order.id] || "").trim();
-    if (!/^\d{8}$/.test(code)) {
+    if (!/^(\d{4}|\d{8})$/.test(code)) {
       notify(
-        `请输入顾客出示的 8 位${isDelivery(order) ? "收餐码" : "取餐码"}`,
+        `请输入顾客出示的 4 位${isDelivery(order) ? "收餐码" : "取餐码"}`,
         "error",
       );
       return;
@@ -1004,7 +1086,8 @@ async function performAction(order: any, value: string, explanation = "") {
       savePrepRequests();
     }
     updatedOrders[String(result.id)] = result;
-    invalidateHistory();
+    stopHistorySync();
+    updateHistory([result]);
     if (lookupOrder.value?.id === result.id) lookupOrder.value = result;
     emit("refresh", result);
     if (value === "complete") delete pickupCodes[order.id];
@@ -1078,6 +1161,7 @@ async function performAction(order: any, value: string, explanation = "") {
         "invalid_transition",
         "payment_in_progress",
         "invalid_pickup_code",
+        "pickup_code_locked",
         "payment_requires_review",
         "delivery_issue_unresolved",
         "reason_required",
@@ -1142,6 +1226,7 @@ function timeline(order: any) {
 watch(
   () => props.initialFilter,
   (value) => {
+    if (["all", "completed", "cancelled"].includes(value)) toolsOpen.value = true;
     cancellationOnly.value = value === "cancellation";
     filter.value = [...filters, ...primaryStages].some(
       (item) => item.value === value,
@@ -1157,6 +1242,8 @@ watch(
   () => {
     // Fresh parent data remains authoritative when another device advances an order.
     for (const row of props.orders) delete updatedOrders[String(row.id)];
+    updateHistory(props.orders);
+    void syncHistory();
   },
 );
 watch(selectedOrder, (order) => {
@@ -1167,6 +1254,9 @@ watch(selectedOrder, (order) => {
 watch(
   () => `${session.user?.id}:${props.stall?.id}`,
   () => {
+    stopHistorySync();
+    historySyncIds.clear();
+    removedHistoryIds.clear();
     actionGeneration++;
     abortActions();
     closeConfirmation();
@@ -1200,6 +1290,7 @@ onMounted(() => {
   }, 1000);
 });
 onUnmounted(() => {
+  stopHistorySync();
   historyGeneration++;
   historyController?.abort();
   actionGeneration++;
@@ -1280,6 +1371,7 @@ onUnmounted(() => {
       </button>
       <button
         type="button"
+        ref="searchToolsButton"
         :aria-expanded="toolsOpen"
         aria-controls="merchant-secondary-tools"
         @click="toolsOpen = !toolsOpen"
@@ -1337,8 +1429,17 @@ onUnmounted(() => {
         </button>
       </div>
     </div>
+    <div v-if="hasSearchFilters" class="m-active-search-filters" role="group" aria-label="当前订单筛选">
+      <span v-if="query.trim()">订单号含“{{ query.trim() }}”</span>
+      <span v-if="fulfillment !== 'all'">{{ fulfillment === 'delivery' ? '商家自配送' : '到摊自取' }}</span>
+      <button type="button" @click="clearSearchFilters">清除筛选</button>
+    </div>
     <p v-if="syncError" class="m-orders-warning" role="status">
       订单暂未同步，当前显示上次结果。请刷新后核对。
+    </p>
+    <p v-if="historySyncIds.size" class="m-orders-warning" role="status">
+      {{ historySyncIds.size }} 笔已加载订单暂未同步，正在核实是否已完成或取消；核实前暂停这些订单的操作。
+      <button :disabled="historySyncBusy || loading" @click="emit('refresh')">{{ historySyncBusy ? '正在核实…' : '重新同步订单' }}</button>
     </p>
     <p v-if="historyFilter && !cancellationOnly" class="m-orders-help">
       历史按页加载，搜索仅覆盖已加载记录。
@@ -1347,7 +1448,7 @@ onUnmounted(() => {
       {{ historyError }} <button @click="loadHistory()">重试历史订单</button>
     </p>
     <p v-if="historyBusy" role="status">正在加载历史订单…</p>
-    <div class="m-simple-list-label">
+    <div v-if="showQueueSummary" class="m-simple-list-label">
       <h3>{{ queueTitle }}</h3>
       <span
         >{{ ordersReady ? shownOrders.length : "—" }} 单<span
@@ -1411,7 +1512,7 @@ onUnmounted(() => {
         查看新订单
       </button>
     </div>
-    <div v-else class="m-orders-grid">
+    <div v-else class="m-orders-grid" role="region" :aria-label="queueTitle">
       <article
         v-for="order in shownOrders"
         :key="order.id"
@@ -1782,7 +1883,7 @@ onUnmounted(() => {
                 @submit.prevent="performAction(selectedOrder, 'complete')"
               >
                 <label for="detail-pickup-code"
-                  >核验顾客的 8 位{{
+                  >核验顾客的 4 位{{
                     isDelivery(selectedOrder) ? "收餐码" : "取餐码"
                   }}</label
                 >
@@ -1792,9 +1893,9 @@ onUnmounted(() => {
                     v-model="pickupCodes[selectedOrder.id]"
                     class="pickup-code-input"
                     inputmode="numeric"
-                    pattern="[0-9]{8}"
+                    pattern="[0-9]{4}([0-9]{4})?"
                     maxlength="8"
-                    minlength="8"
+                    minlength="4"
                     :placeholder="
                       isDelivery(selectedOrder) ? '输入收餐码' : '输入取餐码'
                     "
@@ -2252,13 +2353,20 @@ onUnmounted(() => {
 }
 .m-order-more summary::after,
 .prep-accept summary::after {
-  content: "+";
+  content: "";
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg) translateY(-2px);
+  opacity: 0.55;
+  transition: transform 0.15s;
   margin-left: auto;
-  font-size: 20px;
 }
 .m-order-more[open] summary::after,
 .prep-accept[open] summary::after {
-  content: "−";
+  transform: rotate(-135deg) translateY(-2px);
 }
 .m-order-more summary span,
 .prep-accept summary span {
@@ -3577,6 +3685,25 @@ onUnmounted(() => {
   border-radius: 12px;
   background: #fff8ee;
   margin: 4px 0 12px;
+}
+.m-active-search-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 4px 0;
+  color: #72533d;
+  font-size: 14px;
+}
+.m-active-search-filters span { overflow-wrap: anywhere; min-width: 0; }
+.m-active-search-filters button {
+  min-height: 44px;
+  padding: 6px 10px;
+  border: 1px solid #e7d7c3;
+  border-radius: 10px;
+  color: #85401d;
+  background: #fff8ee;
+  font-size: 14px;
 }
 .m-simple-search-panel .m-orders-search {
   min-height: 46px;

@@ -22,8 +22,9 @@ import { newRequestKey } from "../../lib/engagement";
 import { useSession } from "../../stores/session";
 const session = useSession();
 
-const props = defineProps<{ stall: any }>();
+const props = defineProps<{ stall: any; discoveryOnly?: boolean }>();
 const emit = defineEmits<{ refresh: [] }>();
+type DisplayAvailability = "available" | "sold_out" | "paused";
 type Product = {
   id: number;
   name: string;
@@ -34,6 +35,7 @@ type Product = {
   stock: number;
   is_active: boolean;
   sale_paused?: boolean;
+  display_availability?: DisplayAvailability | "";
   stock_version?: number;
   taste_options?: { name: string; choices: string[] }[];
 };
@@ -45,6 +47,7 @@ type Draft = {
   price: string;
   stock: string;
   is_active: boolean;
+  display_availability: DisplayAvailability;
   taste_options: { name: string; choices: string }[];
 };
 const search = ref("");
@@ -63,22 +66,32 @@ const products = computed<Product[]>(() => props.stall?.products || []);
 const categories = computed(() => [
   ...new Set(products.value.map((p) => p.category || "未分类")),
 ]);
+function supplyState(product: Product): DisplayAvailability {
+  if (props.discoveryOnly && product.display_availability) return product.display_availability;
+  return product.sale_paused ? "paused" : product.stock === 0 ? "sold_out" : "available";
+}
+function supplyLabel(product: Product) {
+  if (!product.is_active) return "已下架";
+  const state = supplyState(product);
+  if (props.discoveryOnly) return state === "available" ? "今天有" : state === "sold_out" ? "卖完了" : "暂时不卖";
+  return state === "available" ? "销售中" : state === "sold_out" ? "已售罄" : "暂停供应";
+}
 const counts = computed(() => ({
   all: products.value.length,
   active: products.value.filter(
-    (p) => p.is_active && !p.sale_paused && p.stock > 0,
+    (p) => p.is_active && supplyState(p) === "available",
   ).length,
   soldout: products.value.filter(
-    (p) => p.is_active && !p.sale_paused && p.stock === 0,
+    (p) => p.is_active && supplyState(p) === "sold_out",
   ).length,
-  paused: products.value.filter((p) => p.is_active && p.sale_paused).length,
+  paused: products.value.filter((p) => p.is_active && supplyState(p) === "paused").length,
   inactive: products.value.filter((p) => !p.is_active).length,
 }));
 const filters = computed(() => [
   { key: "all", label: "全部商品", count: counts.value.all },
-  { key: "active", label: "销售中", count: counts.value.active },
-  { key: "soldout", label: "已售罄", count: counts.value.soldout },
-  { key: "paused", label: "暂停供应", count: counts.value.paused },
+  { key: "active", label: props.discoveryOnly ? "今天有" : "销售中", count: counts.value.active },
+  { key: "soldout", label: props.discoveryOnly ? "卖完了" : "已售罄", count: counts.value.soldout },
+  { key: "paused", label: props.discoveryOnly ? "暂时不卖" : "暂停供应", count: counts.value.paused },
   { key: "inactive", label: "已下架", count: counts.value.inactive },
 ]);
 const shown = computed(() =>
@@ -92,18 +105,21 @@ const shown = computed(() =>
       status.value === "all" ||
       (status.value === "active" &&
         p.is_active &&
-        !p.sale_paused &&
-        p.stock > 0) ||
+        supplyState(p) === "available") ||
       (status.value === "soldout" &&
         p.is_active &&
-        !p.sale_paused &&
-        p.stock === 0) ||
-      (status.value === "paused" && p.is_active && p.sale_paused) ||
+        supplyState(p) === "sold_out") ||
+      (status.value === "paused" && p.is_active && supplyState(p) === "paused") ||
       (status.value === "inactive" && !p.is_active);
     return matchesSearch && matchesCategory && matchesStatus;
   }),
 );
 const modal = ref(false);
+const discardOpen = ref(false);
+const editSaveUncertain = ref(false);
+const discardPanel = ref<HTMLElement>();
+const continueButton = ref<HTMLButtonElement>();
+let closeRequestFocus: HTMLElement | null = null;
 const editingId = ref<number | null>(null);
 const saving = ref(false);
 const uploading = ref(false);
@@ -120,6 +136,7 @@ const blank = (): Draft => ({
   price: "",
   stock: "",
   is_active: true,
+  display_availability: "available",
   taste_options: [],
 });
 type Creation = { body: Record<string, any>; draft: Draft };
@@ -143,7 +160,9 @@ watch(
     closeEditor(true);
   },
 );
-function startEditor(product?: Product) {
+function startEditor(product?: Product, trigger?: EventTarget | null) {
+  discardOpen.value = false;
+  editSaveUncertain.value = false;
   editingId.value = product?.id ?? null;
   Object.assign(
     form,
@@ -156,6 +175,7 @@ function startEditor(product?: Product) {
           price: (product.price_cents / 100).toFixed(2),
           stock: String(product.stock),
           is_active: product.is_active,
+          display_availability: supplyState(product),
           taste_options: (product.taste_options || []).map((group) => ({
             name: group.name,
             choices: group.choices.join("、"),
@@ -165,7 +185,7 @@ function startEditor(product?: Product) {
   );
   original = JSON.parse(JSON.stringify(form));
   formError.value = "";
-  returnFocus = document.activeElement as HTMLElement;
+  returnFocus = trigger instanceof HTMLElement ? trigger : document.activeElement as HTMLElement;
   previousOverflow = document.body.style.overflow;
   document.body.style.overflow = "hidden";
   modal.value = true;
@@ -173,9 +193,30 @@ function startEditor(product?: Product) {
 }
 function closeEditor(force = false) {
   if (!modal.value || (!force && (saving.value || uploading.value))) return;
+  // A submitted creation has its own persistent recovery flow. Closing this
+  // editor must never be presented as discarding that possibly saved request.
+  if (!force && !(editingId.value == null && pendingCreation.value) &&
+      (editSaveUncertain.value || JSON.stringify(form) !== JSON.stringify(original))) {
+    if (!discardOpen.value) {
+      closeRequestFocus = modalElement.value?.contains(document.activeElement)
+        ? document.activeElement as HTMLElement : nameInput.value || null;
+      discardOpen.value = true;
+      nextTick(() => continueButton.value?.focus());
+    }
+    return;
+  }
+  discardOpen.value = false;
   modal.value = false;
   document.body.style.overflow = previousOverflow;
   nextTick(() => returnFocus?.focus());
+}
+function continueEditing() {
+  discardOpen.value = false;
+  nextTick(() => closeRequestFocus?.focus());
+}
+function discardLocalEdits() {
+  closeEditor(true);
+  if (editSaveUncertain.value) emit("refresh");
 }
 onBeforeUnmount(() => {
   if (modal.value) document.body.style.overflow = previousOverflow;
@@ -183,11 +224,12 @@ onBeforeUnmount(() => {
 function modalKeys(event: KeyboardEvent) {
   if (event.key === "Escape") {
     event.preventDefault();
-    closeEditor();
+    if (discardOpen.value) continueEditing();
+    else closeEditor();
   }
   if (event.key !== "Tab") return;
   const nodes = Array.from(
-    modalElement.value?.querySelectorAll<HTMLElement>(
+    (discardOpen.value ? discardPanel.value : modalElement.value)?.querySelectorAll<HTMLElement>(
       'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]',
     ) || [],
   ).filter((el) => el.getClientRects().length);
@@ -277,7 +319,8 @@ async function saveEditor(continueAdding = false) {
       description: form.description.trim(),
       image: form.image.trim(),
       price_cents: priceCents(form.price),
-      ...(editingId.value == null ? { stock: stockValue(form.stock) } : {}),
+      ...(editingId.value == null && !props.discoveryOnly ? { stock: stockValue(form.stock) } : {}),
+      ...(props.discoveryOnly ? { display_availability: form.display_availability } : {}),
       is_active: form.is_active,
       taste_options: tasteOptions,
     };
@@ -288,6 +331,7 @@ async function saveEditor(continueAdding = false) {
       image: original.image,
       price_cents: original.price ? priceCents(original.price) : 0,
       is_active: original.is_active,
+      display_availability: original.display_availability,
       taste_options: tasteValues(original.taste_options),
     };
     const data =
@@ -301,7 +345,7 @@ async function saveEditor(continueAdding = false) {
             ),
           );
     if (!Object.keys(data).length) {
-      closeEditor();
+      closeEditor(!editSaveUncertain.value);
       return;
     }
     if (editingId.value == null && !pendingCreation.value) {
@@ -338,7 +382,9 @@ async function saveEditor(continueAdding = false) {
       removeStorage(creationKey, "session");
     }
     notify(
-      editingId.value != null
+      props.discoveryOnly
+        ? "菜品展示已保存，线上库存未改变"
+        : editingId.value != null
         ? "商品资料已保存，线上可卖份数与供应状态未改变"
         : !values.is_active
           ? "商品已保存为下架，顾客暂不可购买"
@@ -356,17 +402,23 @@ async function saveEditor(continueAdding = false) {
     } else closeEditor(true);
   } catch (error) {
     // A definite 4xx/409 means the server answered; only network/5xx outcomes stay unconfirmed.
-    if (
+    const definitelyRejected =
       error instanceof ApiError &&
       (error.data?.submitted === false ||
-        [400, 403, 404, 409, 422].includes(error.status))
-    ) {
+        [400, 403, 404, 409, 422].includes(error.status));
+    // A later rejection or local validation error cannot resolve an earlier
+    // unknown PATCH. Keep that uncertainty until the merchant rereads the menu.
+    if (editingId.value != null && saving.value && !definitelyRejected)
+      editSaveUncertain.value = true;
+    if (definitelyRejected) {
       pendingCreation.value = null;
       removeStorage(creationKey, "session");
     }
     formError.value =
       editingId.value == null && pendingCreation.value
         ? "新增结果尚未确认。请确认原请求结果；将使用相同标识和内容重试，不会重复新增。"
+        : editSaveUncertain.value
+          ? "保存结果尚未确认，服务器可能已经保存。关闭并刷新菜单后，请核对商品资料。"
         : (error as Error).message;
   } finally {
     saving.value = false;
@@ -431,15 +483,16 @@ function tasteValues(groups: Draft["taste_options"]) {
           :to="`/stalls/${stall.id}`"
           @click="session.setConsumerPreview(true)"
           >预览菜单</RouterLink
-        ><button class="catalog-primary" @click="startEditor()">
+        ><button class="catalog-primary" @click="startEditor(undefined, $event.currentTarget)">
           <Plus :size="18" />添加商品
         </button>
       </div>
     </div>
+    <p v-if="discoveryOnly" class="display-supply-note">告诉顾客今天卖什么。供应状态只用于找摊展示，不开放线上下单，也不改动线上库存。</p>
     <p v-if="pendingCreation" class="m-info-banner" role="status">
       上一笔新增商品结果待确认。<button
         class="btn btn-secondary"
-        @click="startEditor()"
+        @click="startEditor(undefined, $event.currentTarget)"
       >
         确认上一笔新增
       </button>
@@ -448,7 +501,7 @@ function tasteValues(groups: Draft["taste_options"]) {
       </button>
     </p>
     <MerchantRestock
-      v-if="products.length"
+      v-if="products.length && !discoveryOnly"
       :key="`${session.user?.id}:${stall.id}`"
       :stall="stall"
       @refresh="emit('refresh')"
@@ -499,7 +552,7 @@ function tasteValues(groups: Draft["taste_options"]) {
             class="product-edit"
             :disabled="busy[product.id]"
             :aria-label="`编辑商品：${product.name}`"
-            @click="startEditor(product)"
+            @click="startEditor(product, $event.currentTarget)"
           >
             <div class="product-photo">
               <img
@@ -523,28 +576,20 @@ function tasteValues(groups: Draft["taste_options"]) {
                   :class="
                     !product.is_active
                       ? 'off'
-                      : product.sale_paused || product.stock === 0
+                      : supplyState(product) !== 'available'
                         ? 'sold'
                         : 'on'
                   "
-                  >{{
-                    !product.is_active
-                      ? "已下架"
-                      : product.sale_paused
-                        ? "暂停供应"
-                        : product.stock === 0
-                          ? "已售罄"
-                          : "销售中"
-                  }}</span
+                  >{{ supplyLabel(product) }}</span
                 >
               </div>
-              <span class="stock-readout"
+              <span v-if="!discoveryOnly" class="stock-readout"
                 >线上可卖 <b>{{ product.stock }}</b> 份</span
               >
             </div>
           </button>
           <button
-            v-if="product.is_active"
+            v-if="product.is_active && !discoveryOnly"
             class="supply-action"
             :class="{ 'is-paused': product.sale_paused }"
             :disabled="busy[product.id]"
@@ -561,7 +606,11 @@ function tasteValues(groups: Draft["taste_options"]) {
             {{ product.sale_paused ? "恢复供应" : "暂停供应" }}
           </button>
         </div>
+        <div v-if="discoveryOnly && product.is_active" class="display-supply-actions" role="group" :aria-label="`${product.name}今日供应`">
+          <button v-for="choice in ([{ value: 'available', label: '今天有' }, { value: 'sold_out', label: '卖完了' }, { value: 'paused', label: '暂时不卖' }] as const)" :key="choice.value" type="button" :aria-pressed="supplyState(product) === choice.value" :disabled="busy[product.id]" @click="patchProduct(product, { display_availability: choice.value }, `${product.name}已标记${choice.label}，线上库存未改变`)">{{ choice.label }}</button>
+        </div>
         <MerchantInventoryCorrection
+          v-if="!discoveryOnly"
           :key="`${session.user?.id}:${stall.id}:${product.id}`"
           :product="product"
           :stall-id="stall.id"
@@ -578,13 +627,13 @@ function tasteValues(groups: Draft["taste_options"]) {
         {{
           products.length
             ? "试试其他关键词、分类或销售状态。"
-            : "先填菜名、价格和线上剩余可卖份数；照片与介绍可以稍后完善。"
+            : discoveryOnly ? "先填菜名、价格与今天的供应状态；照片与介绍可以稍后完善。" : "先填菜名、价格和线上剩余可卖份数；照片与介绍可以稍后完善。"
         }}
       </p>
       <button
         v-if="!products.length"
         class="catalog-primary"
-        @click="startEditor()"
+        @click="startEditor(undefined, $event.currentTarget)"
       >
         <Plus :size="16" />添加第一件商品</button
       ><button
@@ -604,7 +653,7 @@ function tasteValues(groups: Draft["taste_options"]) {
     ><div
       v-if="modal"
       class="product-modal-backdrop"
-      @mousedown.self="closeEditor()"
+      @mousedown.self.prevent="closeEditor()"
     >
       <section
         ref="modalElement"
@@ -614,7 +663,7 @@ function tasteValues(groups: Draft["taste_options"]) {
         aria-labelledby="product-editor-title"
         @keydown="modalKeys"
       >
-        <header>
+        <header :inert="discardOpen">
           <div>
             <span class="eyebrow">MENU EDITOR</span>
             <h2 id="product-editor-title">
@@ -630,7 +679,7 @@ function tasteValues(groups: Draft["taste_options"]) {
             <X :size="22" />
           </button>
         </header>
-        <form class="product-editor" @submit.prevent="saveEditor(false)">
+        <form class="product-editor" :inert="discardOpen" @submit.prevent="saveEditor(false)">
           <p v-if="pendingCreation && editingId == null" class="m-info-banner">
             原请求已保留，请先确认新增结果，再修改商品资料。
             <button type="button" class="m-text-link" @click="abandonCreation">
@@ -662,7 +711,7 @@ function tasteValues(groups: Draft["taste_options"]) {
                   step="0.01"
                   inputmode="decimal"
                   placeholder="0.00" /></label
-              ><label v-if="editingId == null" class="editor-field"
+              ><label v-if="editingId == null && !discoveryOnly" class="editor-field"
                 >线上剩余可卖份数 <span>*</span
                 ><input
                   v-model="form.stock"
@@ -676,7 +725,8 @@ function tasteValues(groups: Draft["taste_options"]) {
                   placeholder="填写实际可售份数"
               /></label>
             </div>
-            <p v-if="editingId == null" class="stock-help">
+            <label v-if="discoveryOnly" class="editor-field">今日供应<select v-model="form.display_availability" aria-label="今日供应"><option value="available">今天有</option><option value="sold_out">卖完了</option><option value="paused">暂时不卖</option></select></label>
+            <p v-else-if="editingId == null" class="stock-help">
               {{
                 form.stock !== "" && Number(form.stock) === 0
                   ? "当前填了 0 份：可以保存，但顾客暂时不能购买。"
@@ -804,7 +854,7 @@ function tasteValues(groups: Draft["taste_options"]) {
               ><div>
                 <strong>显示在菜单中</strong
                 ><small
-                  >下架后隐藏；购买还需未暂停供应、有线上可卖份数并满足接单条件</small
+                  >{{ discoveryOnly ? '下架后从公开菜单中隐藏；供应状态不会开通线上交易。' : '下架后隐藏；购买还需未暂停供应、有线上可卖份数并满足接单条件' }}</small
                 >
               </div>
               <input
@@ -851,6 +901,16 @@ function tasteValues(groups: Draft["taste_options"]) {
             </button>
           </footer>
         </form>
+        <div v-if="discardOpen" class="editor-discard-backdrop">
+          <section ref="discardPanel" class="editor-discard-panel" role="alertdialog" aria-modal="true" aria-labelledby="discard-editor-title" aria-describedby="discard-editor-description">
+            <h3 id="discard-editor-title">{{ editSaveUncertain ? '保存结果尚未确认' : '放弃未保存的修改？' }}</h3>
+            <p id="discard-editor-description">{{ editSaveUncertain ? '服务器可能已经保存。关闭只放弃本地输入，将刷新菜单供你核对。' : '这次填写的内容还没有保存。' }}</p>
+            <div>
+              <button type="button" class="catalog-outline" @click="discardLocalEdits">{{ editSaveUncertain ? '关闭并刷新' : '放弃修改' }}</button>
+              <button ref="continueButton" type="button" class="catalog-primary" @click="continueEditing">继续编辑</button>
+            </div>
+          </section>
+        </div>
       </section>
     </div></Teleport
   >
@@ -1206,6 +1266,7 @@ function tasteValues(groups: Draft["taste_options"]) {
   padding: 16px;
 }
 .product-editor-panel {
+  position: relative;
   background: #fffcf7;
   border: 1px solid #fff8f0;
   border-radius: 24px;
@@ -1216,6 +1277,29 @@ function tasteValues(groups: Draft["taste_options"]) {
   flex-direction: column;
   box-shadow: -20px 0 80px #2f1c121f;
 }
+.editor-discard-backdrop {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  border-radius: inherit;
+  background: #25180f66;
+}
+.editor-discard-panel {
+  width: 100%;
+  max-width: 370px;
+  box-sizing: border-box;
+  padding: 22px;
+  border: 1px solid #e7d7c3;
+  border-radius: 18px;
+  background: #fffcf7;
+  color: #473b30;
+}
+.editor-discard-panel h3 { margin: 0; font-size: 19px; }
+.editor-discard-panel p { margin: 12px 0 20px; font-size: 14px; line-height: 1.6; }
+.editor-discard-panel > div { display: flex; gap: 10px; flex-wrap: wrap; }
+.editor-discard-panel button { flex: 1; }
 .product-editor-panel > header {
   display: flex;
   align-items: center;
@@ -1326,6 +1410,7 @@ function tasteValues(groups: Draft["taste_options"]) {
   color: #dd703a;
 }
 .editor-field input,
+.editor-field select,
 .editor-field textarea {
   width: 100%;
   display: block;
@@ -1338,6 +1423,12 @@ function tasteValues(groups: Draft["taste_options"]) {
   color: #473b30;
   line-height: 1.5;
 }
+.display-supply-note { margin: 0 0 18px; color: #725941; font-size: 14px; line-height: 1.7; }
+.display-supply-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding-top: 12px; margin-top: 12px; border-top: 1px solid #eee4d9; }
+.display-supply-actions button { min-height: 44px; padding: 8px 5px; border: 1px solid #e6dbce; border-radius: 10px; background: white; color: #65503e; font-size: 14px; }
+.display-supply-actions button[aria-pressed="true"] { background: #fff0e3; border-color: #d9a67f; color: #91431a; font-weight: 700; }
+.display-supply-actions button:disabled { opacity: .55; }
+.display-supply-actions button:focus-visible { outline: 3px solid #d38648; outline-offset: 2px; }
 .editor-field textarea {
   resize: vertical;
   min-height: 90px;
@@ -1547,6 +1638,7 @@ function tasteValues(groups: Draft["taste_options"]) {
     flex: 1;
   }
   .editor-field input,
+  .editor-field select,
   .editor-field textarea {
     font-size: 16px;
   }

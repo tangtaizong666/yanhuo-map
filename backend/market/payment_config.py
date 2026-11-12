@@ -97,10 +97,10 @@ def get_merchant_payment_readiness(merchant):
     unavailable = {'available': False, 'channels': [], 'account_key': '',
         'reason': '微信支付尚未开通，请使用到摊付款。'}
     if settings.DEMO_MODE:
-        return {**unavailable, 'reason': '示例环境不发起真实微信扣款，当前支持到摊付款。'}
+        return {**unavailable, 'reason': '示例环境不发起真实微信扣款，请到摊扫摊主收款码付款。'}
     if not settings.WECHAT_PAY_ENABLED or not merchant.is_verified:
         return unavailable
-    # Mobile vendors collect with their own QR code at the stall; the platform never handles the money.
+    # Qualification covers all online transactions, including pay-at-stall reservations.
     trade_reason = merchant.online_trade_reason()
     if trade_reason:
         return {**unavailable, 'reason': trade_reason}

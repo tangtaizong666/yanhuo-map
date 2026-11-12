@@ -61,7 +61,7 @@ async function fixture(page: Page, quantity = 0, initialPortions?: any[]) {
       estimated_ready_at: new Date(Date.now() + 600000).toISOString(),
       prep_updated_at: new Date().toISOString(),
       prep_delay_reason: "",
-      pickup_code: "12345678",
+      pickup_code: "1234",
       pickup_address: "南门外绿色棚顶",
       pickup_latitude: 45.7,
       pickup_longitude: 126.6,

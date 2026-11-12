@@ -80,6 +80,7 @@ test("student and merchant complete a real pickup order in separate browser sess
     await expect(
       page.locator('.pay-at-stall'),
     ).toBeVisible();
+    await page.locator(".checkout-contact-card > summary").click();
     await page
       .getByPlaceholder("例如：餐具按需提供（每份口味请在上方分别填写）")
       .fill(`测试订单 ${student.username}，少辣`);
@@ -217,7 +218,7 @@ test("student and merchant complete a real pickup order in separate browser sess
       "待取餐",
     );
     await page.getByRole("button", { name: "刷新订单状态" }).click();
-    await expect(page.locator(".pickup-code strong")).toHaveText(/^\d{8}$/);
+    await expect(page.locator(".pickup-code strong")).toHaveText(/^\d{4}$/);
     const pickupCode = await page.locator(".pickup-code strong").innerText();
     for (const width of [360, 390]) {
       await page.setViewportSize({ width, height: 844 });

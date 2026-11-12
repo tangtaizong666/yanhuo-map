@@ -118,9 +118,9 @@ const description = computed(() => {
   if (order.payment_status === "paid")
     return order.payment_method === "wechat"
       ? order.fulfillment_type === "delivery"
-        ? "微信系统已确认付款。到达交接点后，由顾客确认收餐，或当面核验 8 位收餐码完成交付。"
-        : "微信系统已确认付款，无需手工确认收款。交餐时仍需核验 8 位取餐码。"
-      : "已记录到摊收款，交餐时仍需核验 8 位取餐码。";
+        ? "微信系统已确认付款。到达交接点后，由顾客确认收餐，或当面核验 4 位收餐码完成交付。"
+        : "微信系统已确认付款，无需手工确认收款。交餐时仍需核验 4 位取餐码。"
+      : "已记录到摊收款，交餐时仍需核验 4 位取餐码。";
   if (["creating", "pending"].includes(order.payment?.status))
     return "顾客正在通过微信付款。由系统确认结果，请勿重复收取线下款项。";
   if (order.fulfillment_type === "delivery")

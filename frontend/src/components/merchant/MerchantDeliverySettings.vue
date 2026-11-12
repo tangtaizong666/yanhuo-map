@@ -539,12 +539,19 @@ onUnmounted(() => {
   list-style: none;
 }
 .delivery-advanced summary::after {
-  content: "+";
+  content: "";
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg) translateY(-2px);
+  opacity: 0.55;
+  transition: transform 0.15s;
   margin-left: auto;
-  font-size: 21px;
 }
 .delivery-advanced[open] summary::after {
-  content: "−";
+  transform: rotate(-135deg) translateY(-2px);
 }
 .delivery-advanced summary small {
   display: block;

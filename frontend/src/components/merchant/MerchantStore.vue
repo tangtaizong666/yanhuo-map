@@ -21,14 +21,16 @@ import { useSession } from "../../stores/session";
 import { notify } from "../../lib/notify";
 import MerchantServices from "./MerchantServices.vue";
 import MerchantOperations from "./MerchantOperations.vue";
+import { hasPickupEligibility } from "./mode";
 const props = withDefaults(
-    defineProps<{ stall: any; orders?: any[]; ordersReady?: boolean }>(),
+    defineProps<{ stall: any; orders?: any[]; ordersReady?: boolean; discoveryOnly?: boolean }>(),
     { orders: () => [], ordersReady: false },
   ),
   emit = defineEmits<{ refresh: [] }>(),
   session = useSession();
 const busy = ref(""),
-  error = ref("");
+  error = ref(""),
+  relocationNeedsReview = ref(false);
 const profile = reactive({
   name: "",
   description: "",
@@ -48,6 +50,13 @@ const location = reactive({
   longitude: "",
   closes_at: "",
 });
+const mapAvailable = computed(() => !!session.config?.amap_key);
+const hasLocationCoordinates = computed(() => {
+  const latitude = Number(location.latitude), longitude = Number(location.longitude);
+  return !!location.latitude.trim() && !!location.longitude.trim() &&
+    Number.isFinite(latitude) && Number.isFinite(longitude) &&
+    latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180;
+});
 const profileBase: Record<string, any> = {};
 const locationBase: Record<string, string> = {};
 const route = useRoute();
@@ -66,6 +75,10 @@ watch(
   (hash) => {
     if (hash === "#location") showLocation();
   },
+);
+watch(
+  () => hasPickupEligibility(props.stall),
+  (eligible) => { if (eligible) relocationNeedsReview.value = false; },
 );
 function showLocation() {
   locationOpen.value = true;
@@ -173,6 +186,7 @@ async function updateStatus(
   if (busy.value) return;
   busy.value = "status";
   error.value = "";
+  const hadTradeEligibility = hasPickupEligibility(props.stall);
   try {
     const body: any = {
       status,
@@ -195,9 +209,12 @@ async function updateStatus(
         throw new Error("请填写有效的取餐地址和经纬度。");
       const d = location.closes_at ? new Date(location.closes_at) : null;
       if (d && Number.isNaN(d.getTime())) throw new Error("收摊时间无效。");
-      if (location.address.trim() !== locationBase.address)
+      const firstLocation = !props.stall.activation?.has_location;
+      // An application address draft is not an existing confirmed location.
+      if (firstLocation || location.address.trim() !== locationBase.address)
         body.address = location.address.trim();
       if (
+        firstLocation ||
         lat !== Number(locationBase.latitude) ||
         lng !== Number(locationBase.longitude)
       )
@@ -205,11 +222,19 @@ async function updateStatus(
       if (location.closes_at !== locationBase.closes_at)
         body.closes_at = d?.toISOString() ?? null;
     }
-    await api(`/merchant/stalls/${props.stall.id}/status`, {
+    const updated = await api<any>(`/merchant/stalls/${props.stall.id}/status`, {
       method: "POST",
       body,
     });
     if (disposed) return;
+    // Relocation can switch this stall into information-only mode. Keep the
+    // confirmed action outcome visible beside the editor across that switch.
+    if (
+      saveLocation &&
+      ["address", "latitude", "longitude"].some((field) => field in body) &&
+      hadTradeEligibility &&
+      !hasPickupEligibility(updated)
+    ) relocationNeedsReview.value = true;
     if (saveLocation) Object.assign(locationBase, location);
     emit("refresh");
     notify(
@@ -331,7 +356,7 @@ async function upload(
       field === "image"
         ? "封面已上传，保存店铺信息后生效"
         : field === "payment_qr_image"
-          ? "收款码已上传，保存店铺信息后顾客下单即可看到"
+          ? "收款码已上传，保存后仅在符合现场付款条件的订单中展示"
           : "找摊照片已上传，保存店铺信息后生效，不会替换封面",
       "info",
     );
@@ -351,6 +376,7 @@ async function upload(
       :stall="stall"
       :orders="orders"
       :ready="ordersReady"
+      :discovery-only="discoveryOnly"
       @refresh="emit('refresh')"
       @location="showLocation"
     />
@@ -362,13 +388,14 @@ async function upload(
     >
       <summary>
         <MapPin :size="20" /><span
-          >位置与经营资料<small>更换取餐位置、收摊时间与资质信息</small></span
+          >位置与时间<small>确认出摊位置与预计收摊时间</small></span
         >
       </summary>
       <section class="store-inner-section">
         <div class="m-panel-head">
           <h2><MapPin :size="20" /> 取餐位置与时间</h2>
           <button
+            v-if="mapAvailable"
             class="btn btn-secondary"
             :disabled="!!busy"
             @click="position"
@@ -376,10 +403,11 @@ async function upload(
             <Navigation :size="16" /> 获取当前位置
           </button>
         </div>
-        <p v-if="!session.config?.amap_key" class="m-info-banner">
-          地图暂未配置。可以先保存地址草稿，请团队协助核实；这不会确认位置或开放接单。
+        <p v-if="!mapAvailable && !hasLocationCoordinates" class="m-info-banner">
+          暂时不能使用地图。先保存地址草稿，请团队协助确认位置；草稿不会公开为出摊位置，也不会开始营业。
         </p>
         <button
+          v-if="mapAvailable"
           class="btn btn-secondary"
           :disabled="!!busy"
           @click="pickLocation"
@@ -402,7 +430,7 @@ async function upload(
         </div>
         <form
           class="m-form"
-          @submit.prevent="updateStatus(confirmationStatus, true)"
+          @submit.prevent="hasLocationCoordinates ? updateStatus(confirmationStatus, true) : saveAddressDraft()"
         >
           <label
             >详细取餐地址<input
@@ -411,7 +439,7 @@ async function upload(
               maxlength="200"
               placeholder="例如：学府路夜市入口左侧第三个摊位"
           /></label>
-          <label
+          <label v-show="hasLocationCoordinates"
             >预计收摊时间<input
               v-model="location.closes_at"
               type="datetime-local"
@@ -430,31 +458,40 @@ async function upload(
               /></label>
             </div>
           </details>
-          <p class="m-setting-note">
+          <p v-if="hasLocationCoordinates" class="m-setting-note">
             <ShieldCheck :size="18" />
             更换取餐地址或坐标后，将暂停在线接单，待运营重新核验。历史订单仍保留原取餐地址，请主动联系顾客。
           </p>
-          <button class="btn btn-primary" :disabled="!!busy" type="submit">
+          <div v-if="relocationNeedsReview" class="m-info-banner" role="status">
+            <strong>取餐位置已变更，等待运营重新核验</strong>
+            <p>新位置已保存，线上新单暂停。已有订单保留原取餐地址，请联系顾客确认交付安排。</p>
+            <RouterLink to="/merchant/orders?filter=active" class="m-text-link">处理已有订单</RouterLink>
+          </div>
+          <button v-if="hasLocationCoordinates" class="btn btn-primary" :disabled="!!busy" type="submit">
             <Save :size="16" /> 确认并保存位置与时间
           </button>
           <button
-            class="btn btn-secondary"
+            :class="['btn', hasLocationCoordinates ? 'btn-secondary' : 'btn-primary']"
             :disabled="!!busy"
-            type="button"
-            @click="saveAddressDraft"
+            :type="hasLocationCoordinates ? 'button' : 'submit'"
+            @click="hasLocationCoordinates && saveAddressDraft()"
           >
-            仅保存地址草稿
+            {{ hasLocationCoordinates ? '仅保存地址草稿' : '保存地址草稿' }}
           </button>
+          <p v-if="!hasLocationCoordinates && mapAvailable" class="m-muted">先保存地址也可以。确认出摊位置前，请定位或在地图上选点。</p>
         </form>
       </section>
+    </details>
+    <details class="m-panel store-details">
+      <summary><ShieldCheck :size="20" /><span>经营信息<small>经营主体与资质公示</small></span></summary>
       <section class="store-inner-section">
         <div class="m-panel-head">
           <h2><ShieldCheck :size="20" /> 经营信息</h2>
           <span
             class="m-status"
-            :class="stall.transaction_enabled ? 'open' : 'paused'"
+            :class="!discoveryOnly ? 'open' : 'paused'"
             >{{
-              stall.transaction_enabled
+              !discoveryOnly
                 ? "已开放在线接单"
                 : "仅展示，未开放在线接单"
             }}</span
@@ -475,11 +512,11 @@ async function upload(
           </div>
         </div>
         <p class="m-muted">
-          流动摊位由顾客到摊扫你的收款码付款，钱直接到你账户，平台不经手。登记了实体门店且证照核验通过的商户，才能开通平台微信支付和配送。
+          {{ discoveryOnly ? '当前提供找摊信息服务，可发布位置与菜品。自取下单、线上支付和配送分别核验；使用个人收款码不等于获得线上交易资格。' : '自取下单、线上支付和配送分别按当前资格开放。资格变化只限制新交易，已有订单仍需继续处理。' }}
         </p>
       </section>
     </details>
-    <details class="m-panel store-details store-services">
+    <details v-if="!discoveryOnly" class="m-panel store-details store-services">
       <summary><Settings2 :size="20" /><span>支付与配送<small>线上支付、配送开关与交接点</small></span></summary>
       <MerchantServices :stall="stall" @refresh="emit('refresh')" />
     </details>
@@ -492,7 +529,7 @@ async function upload(
       <section class="store-inner-section">
         <div class="m-panel-head">
           <h2><Store :size="20" /> 店铺信息</h2>
-          <RouterLink v-if="stall.is_visible" :to="`/stalls/${stall.id}`" class="m-text-link"
+          <RouterLink v-if="stall.is_visible" :to="`/stalls/${stall.id}`" class="m-text-link" @click="session.setConsumerPreview(true)"
             >预览 <ExternalLink :size="15"
           /></RouterLink>
           <small v-else class="muted">公开展示核验后可预览</small>
@@ -586,7 +623,7 @@ async function upload(
               </button>
             </div>
           </div>
-          <div class="m-shop-photo">
+          <div v-if="!discoveryOnly" class="m-shop-photo">
             <img
               v-if="ownedImage(profile.payment_qr_image)"
               :src="ownedImage(profile.payment_qr_image)"
@@ -601,7 +638,7 @@ async function upload(
                   @change="upload($event, 'payment_qr_image')"
                   aria-label="上传我的收款码" /></label
               ><small
-                >上传你自己的微信或支付宝收款码。只给已下单、待付款的顾客看，钱直接进你的账户，平台不经手。</small
+                >上传你自己的微信或支付宝收款码。仅给真实自取、已出餐且待现场付款的顾客展示；取消处理中或资金待核实时不展示。钱直接进你的账户，平台不经手。</small
               ><button
                 v-if="profile.payment_qr_image"
                 type="button"
@@ -699,13 +736,19 @@ async function upload(
   line-height: 1.7;
 }
 .store-details > summary::after {
-  content: "+";
-  font-size: 24px;
-  font-weight: 400;
+  content: "";
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg) translateY(-2px);
+  opacity: 0.55;
+  transition: transform 0.15s;
   color: #9f8267;
 }
 .store-details[open] > summary::after {
-  content: "−";
+  transform: rotate(-135deg) translateY(-2px);
 }
 .store-inner-section {
   padding: 18px 0 24px;

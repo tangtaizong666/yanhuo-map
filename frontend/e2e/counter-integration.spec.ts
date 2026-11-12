@@ -149,14 +149,14 @@ test("real counter API preserves paused stock, rejects stale corrections, and lo
     await write(`/merchant/orders/${order.id}/action`, { action: "ready" });
     const ready = await orderSnapshot(order.id);
     expect(ready.payment_status).toBe("unpaid");
-    expect(ready.pickup_code).toMatch(/^\d{8}$/);
+    expect(ready.pickup_code).toMatch(/^\d{4}$/);
     await page.goto("/merchant/orders");
     await page.getByLabel("选择管理的摊位").selectOption(String(stall.id));
     await page
       .getByRole("button", { name: "取餐码查单", exact: true })
       .click();
     await page
-      .getByLabel("8 位取餐码", { exact: true })
+      .getByLabel("4 位取餐码", { exact: true })
       .fill(ready.pickup_code);
     await page
       .getByRole("button", { name: "查找待取餐订单", exact: true })
