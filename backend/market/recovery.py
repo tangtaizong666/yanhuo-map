@@ -9,8 +9,10 @@ from django.utils.crypto import constant_time_compare, salted_hmac
 from django.views.decorators.debug import sensitive_post_parameters
 from rest_framework import serializers
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework.exceptions import Throttled
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from .auth_limits import LoginRateLimited, login_attempt
 from .errors import BusinessError
 from .recovery_models import AccountRecovery
 from .services import audit
@@ -74,7 +76,21 @@ def reset_password(request):
     password = serializers.CharField(max_length=128, trim_whitespace=False).run_validation(request.data.get('new_password'))
     normalized = re.sub(r'[\s-]', '', code).upper()
     failure = BusinessError('账号或恢复码不正确，或恢复码已经失效。', 'invalid_recovery', status=400)
-    if not re.fullmatch(r'[0-9A-F]{32}', normalized):
+    valid_code_format = bool(re.fullmatch(r'[0-9A-F]{32}', normalized))
+    def _verify_recovery():
+        if not valid_code_format:
+            return None
+        candidate_user = get_user_model().objects.filter(username=username, is_active=True).first()
+        candidate_record = AccountRecovery.objects.filter(user=candidate_user).first() if candidate_user else None
+        candidate_digest = digest(candidate_user.pk if candidate_user else 0, normalized)
+        if candidate_user and available(candidate_record, candidate_user) and constant_time_compare(candidate_record.code_hash, candidate_digest):
+            return candidate_user
+        return None
+    try:
+        verified_user = login_attempt(request, username, _verify_recovery)
+    except LoginRateLimited as exc:
+        raise Throttled(wait=exc.retry_after, detail='恢复尝试次数过多，请稍后再试。')
+    if not verified_user:
         raise failure
     with transaction.atomic():
         user = get_user_model().objects.select_for_update().filter(username=username, is_active=True).first()

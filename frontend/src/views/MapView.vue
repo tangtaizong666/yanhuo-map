@@ -211,6 +211,7 @@ function selectStall(s: StallMap, event?: Event) {
   if (selectedId.value !== s.id) selected.value = null;
   selectedId.value = s.id;
   if (map) map.panTo([s.longitude, s.latitude]);
+  if (!mapError.value && window.matchMedia?.("(max-width: 767px)").matches) mapNode.value?.parentElement?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   void readSelectedStall(s.id);
 }
 function closeSelection() {
@@ -783,6 +784,10 @@ onUnmounted(() => {
   height: 80px;
   border-radius: 10px;
   object-fit: cover;
+}
+.selected-info {
+  min-width: 0;
+  padding-right: 36px;
 }
 .selected-info h3 {
   font-size: 16px;

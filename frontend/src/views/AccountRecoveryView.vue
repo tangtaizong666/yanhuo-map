@@ -4,6 +4,7 @@ import { useRoute } from "vue-router";
 import { ArrowLeft, KeyRound, ShieldCheck, Copy, Check } from "lucide-vue-next";
 import { api, ApiError } from "../lib/api";
 import { copyText } from "../lib/engagement";
+import { isMerchantPath, safeReturnTo } from "../lib/identity";
 import { useSession } from "../stores/session";
 const route = useRoute(),
   session = useSession();
@@ -21,7 +22,26 @@ const busy = ref(false),
 let controller: AbortController | undefined,
   revision = 0,
   disposed = false;
-const back = computed(() => (session.isMerchant ? "/merchant" : "/me"));
+const back = computed(() => {
+  if (typeof route.query.returnTo === "string" && route.query.returnTo) {
+    const target = safeReturnTo(route.query.returnTo);
+    if (
+      (target !== "/" || route.query.returnTo === "/") &&
+      isMerchantPath(target) === session.isMerchant
+    )
+      return target;
+  }
+  return session.isMerchant ? "/merchant" : "/me";
+});
+const loginTarget = computed(() => {
+  const query: Record<string, string> = {};
+  if (route.query.role === "merchant") query.role = "merchant";
+  if (typeof route.query.returnTo === "string" && route.query.returnTo) {
+    const target = safeReturnTo(route.query.returnTo);
+    if (target !== "/" || route.query.returnTo === "/") query.returnTo = target;
+  }
+  return Object.keys(query).length ? { path: "/login", query } : "/login";
+});
 async function loadStatus() {
   if (!managing.value || !session.user || busy.value) return;
   const current = ++revision;
@@ -132,15 +152,7 @@ async function copyCode() {
   <main class="recovery-page">
     <RouterLink
       class="back"
-      :to="
-        managing
-          ? back
-          : {
-              path: '/login',
-              query:
-                route.query.role === 'merchant' ? { role: 'merchant' } : {},
-            }
-      "
+      :to="managing ? back : loginTarget"
       ><ArrowLeft :size="18" />{{ managing ? "返回" : "返回登录" }}</RouterLink
     >
     <section class="card recovery-card">
@@ -164,7 +176,7 @@ async function copyCode() {
       >
       <template v-else-if="finished"
         ><p class="success"><Check :size="20" />{{ message }}</p>
-        <RouterLink class="btn btn-primary" to="/login"
+        <RouterLink class="btn btn-primary" :to="loginTarget"
           >使用新密码登录</RouterLink
         ></template
       >

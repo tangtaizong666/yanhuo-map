@@ -71,6 +71,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware', 'django.contrib.messages.middleware.MessageMiddleware',
     'market.session_boundary.SessionActorMiddleware',
     'market.auth_limits.AdminLoginLimitStatusMiddleware',
+    'market.auth_limits.PrivateApiCacheControlMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 ROOT_URLCONF = 'config.urls'
@@ -100,9 +101,11 @@ AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
 ]
 # Throttle counters must survive restarts and be shared by every worker process.
-CACHES = {'default': {'BACKEND': 'django.core.cache.backends.db.DatabaseCache', 'LOCATION': 'yanhuo_cache'}} \
+CACHES = {'default': {'BACKEND': 'django.core.cache.backends.db.DatabaseCache', 'LOCATION': 'yanhuo_cache',
+    'OPTIONS': {'MAX_ENTRIES': 100000, 'CULL_FREQUENCY': 10}}} \
     if PRODUCTION or os.getenv('DJANGO_CACHE', '') == 'database' else \
-    {'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}}
+    {'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'OPTIONS': {'MAX_ENTRIES': 100000, 'CULL_FREQUENCY': 10}}}
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': ['rest_framework.authentication.SessionAuthentication'],
     'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated'],
@@ -110,7 +113,12 @@ REST_FRAMEWORK = {
     'DEFAULT_PARSER_CLASSES': ['market.request_parsers.BoundedJSONParser',
         'market.request_parsers.BoundedFormParser', 'rest_framework.parsers.MultiPartParser'],
     'DEFAULT_THROTTLE_CLASSES': ['market.auth_limits.TrustedAnonRateThrottle', 'market.auth_limits.TrustedUserRateThrottle'],
-    'DEFAULT_THROTTLE_RATES': {'anon': '1200/hour', 'user': '6000/hour', 'auth': '300/hour' if DEMO_MODE and not PRODUCTION else '30/hour'},
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '1200/hour',
+        'user': '6000/hour',
+        'auth': '300/hour' if DEMO_MODE and not PRODUCTION else '30/hour',
+        'upload': '600/hour' if DEMO_MODE and not PRODUCTION else '60/hour',
+    },
     'EXCEPTION_HANDLER': 'market.errors.exception_handler',
 }
 LANGUAGE_CODE = 'zh-hans'

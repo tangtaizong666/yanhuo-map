@@ -336,8 +336,12 @@ async function upload(
 ) {
   const input = e.target as HTMLInputElement,
     file = input.files?.[0];
-  if (!file) return;
+  if (!file || busy.value) {
+    input.value = "";
+    return;
+  }
   if (file.size > 5 * 1024 * 1024) {
+    input.value = "";
     error.value = "图片不能超过 5MB";
     return;
   }
@@ -346,8 +350,9 @@ async function upload(
   try {
     const fd = new FormData();
     fd.append("file", file);
+    const query = field === "payment_qr_image" ? "?purpose=payment_qr" : "";
     const res = await api<{ url: string }>(
-      `/merchant/stalls/${props.stall.id}/image`,
+      `/merchant/stalls/${props.stall.id}/image${query}`,
       { method: "POST", body: fd },
     );
     if (disposed) return;
@@ -672,6 +677,9 @@ async function upload(
 </template>
 
 <style scoped>
+.m-store-settings {
+  max-width: 920px;
+}
 .daily-settings {
   grid-template-columns: 1fr;
 }

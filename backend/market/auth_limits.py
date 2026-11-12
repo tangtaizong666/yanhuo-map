@@ -26,14 +26,31 @@ def client_ip(request, *, trust_proxy=None):
     return request.META.get('REMOTE_ADDR', '')
 
 
+def client_ip_bucket(request, *, trust_proxy=None):
+    """Group IPv6 addresses by /64 subnet so SLAAC address rotation cannot evade rate limits."""
+    raw = client_ip(request, trust_proxy=trust_proxy)
+    try:
+        parsed = ipaddress.ip_address(raw)
+        if isinstance(parsed, ipaddress.IPv6Address):
+            return str(ipaddress.IPv6Network((parsed, 64), strict=False))
+        return str(parsed)
+    except ValueError:
+        return raw
+
+
 class TrustedAnonRateThrottle(AnonRateThrottle):
     def get_ident(self, request):
-        return client_ip(request)
+        return client_ip_bucket(request)
 
 
 class TrustedUserRateThrottle(UserRateThrottle):
     def get_ident(self, request):
-        return client_ip(request)
+        return client_ip_bucket(request)
+
+    def get_cache_key(self, request, view):
+        if not getattr(request, 'user', None) or not request.user.is_authenticated:
+            return None
+        return super().get_cache_key(request, view)
 
 
 class LoginRateLimited(Exception):
@@ -62,7 +79,7 @@ def login_attempt(request, username, authenticate_callback):
     account_key = _key('account', username.casefold())
     candidates = sorted([
         (account_key, settings.AUTH_FAILURE_ACCOUNT_LIMIT),
-        (_key('ip', client_ip(request)), settings.AUTH_FAILURE_IP_LIMIT),
+        (_key('ip', client_ip_bucket(request)), settings.AUTH_FAILURE_IP_LIMIT),
     ])
     validation_error = None
     with transaction.atomic():
@@ -129,4 +146,31 @@ class AdminLoginLimitStatusMiddleware:
             response.status_code = 429
             response['Retry-After'] = str(wait)
             response['Cache-Control'] = 'no-store, private'
+        return response
+
+
+PRIVATE_API_PREFIXES = (
+    '/api/v1/config',
+    '/api/v1/auth/',
+    '/api/v1/orders',
+    '/api/v1/merchant/',
+    '/api/v1/payments/',
+    '/api/v1/follows',
+    '/api/v1/feedback',
+)
+
+
+class PrivateApiCacheControlMiddleware:
+    """Prevent shared proxies or browser history caches from retaining private API payloads."""
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        response = self.get_response(request)
+        path = request.path_info or ''
+        if path.startswith('/api/') and 'Cache-Control' not in response:
+            user = getattr(request, 'user', None)
+            if path.startswith(PRIVATE_API_PREFIXES) or (user is not None and user.is_authenticated):
+                response['Cache-Control'] = 'private, no-store'
         return response

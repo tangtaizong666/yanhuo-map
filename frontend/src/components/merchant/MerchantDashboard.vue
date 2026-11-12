@@ -26,6 +26,7 @@ import {
 import { money, formatTime, statusText } from "../../lib/api";
 import MerchantTrend from "./MerchantTrend.vue";
 import { needsMerchantFollowUp } from "../../lib/orderFollowUp";
+import { useSession } from "../../stores/session";
 const props = defineProps<{
   stall: any;
   orders: any[];
@@ -35,6 +36,7 @@ const props = defineProps<{
   syncError?: string;
 }>();
 const emit = defineEmits<{ navigate: [section: string, filter?: string] }>();
+const session = useSession();
 const pending = computed(() => props.orders.filter(acceptReady));
 const followUp = computed(() => props.orders.filter(needsMerchantFollowUp));
 const stats = computed(() => [
@@ -65,7 +67,7 @@ const stats = computed(() => [
   },
   {
     label: "顾客评分",
-    value: props.stall.rating ?? "暂无",
+    value: props.stall.review_count ? (props.stall.rating ?? "暂无") : "暂无",
     note: `${props.stall.review_count} 条订单评价`,
     icon: Star,
     color: "gold",
@@ -119,21 +121,6 @@ const recent = computed(() => props.orders.slice(0, 4));
     <p v-if="metrics?.mode === 'simulation'" class="m-info-banner">
       模拟经营中 · 收款与送餐均为练习，可在「店铺」开启线上支付和外卖。
     </p>
-    <section class="m-welcome">
-      <div>
-        <span class="m-eyebrow">每一份认真，都有回响</span>
-        <h2>好生意，从今天这摊开始<span>。</span></h2>
-        <p>守好一方烟火，照顾每一份期待。</p>
-        <button @click="emit('navigate', 'store')">
-          管理出摊状态 <ArrowUpRight :size="17" />
-        </button>
-      </div>
-      <div class="m-welcome-art">
-        <img v-if="ownedImage(stall.image)" :src="ownedImage(stall.image)" :alt="stall.name + '美食照片'" /><span
-          ><Store :size="14" /> 小摊有烟火，好味有人情</span
-        >
-      </div>
-    </section>
     <p v-if="metricsError" class="m-alert" role="alert">
       经营数据暂时未更新：{{ metricsError }}
     </p>
@@ -221,7 +208,7 @@ const recent = computed(() => props.orders.slice(0, 4));
           ><button @click="emit('navigate', 'reviews')">
             <span><MessageSquare :size="22" /></span><b>顾客评价</b
             ><small>听听大家说</small></button
-          ><RouterLink v-if="stall.is_visible" :to="`/stalls/${stall.id}`"
+          ><RouterLink v-if="stall.is_visible" :to="`/stalls/${stall.id}`" @click="session.setConsumerPreview(true)"
             ><span><Store :size="22" /></span><b>预览摊位</b
             ><small>看看学生视角</small></RouterLink
           ><button v-else @click="emit('navigate', 'store')"><span><Store :size="22" /></span><b>完善开摊资料</b><small>公开后可预览摊位</small></button>
@@ -291,9 +278,6 @@ const recent = computed(() => props.orders.slice(0, 4));
 }
 .m-dashboard > .m-workqueue {
   order: -1;
-}
-.m-dashboard > .m-welcome {
-  display: none;
 }
 .m-followup-queue {
   display: flex;

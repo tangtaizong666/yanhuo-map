@@ -252,6 +252,17 @@ class OrderItemSerializer(serializers.ModelSerializer):
         return public_image(obj.image)
 
 
+def order_offline_payment_available(order):
+    """Single source of truth for whether an order may display/access the vendor's collection QR."""
+    from .financial import hold_reason
+    return bool(order.mode == 'live' and order.fulfillment_type == 'pickup'
+        and order.status == 'ready' and order.payment_status == 'unpaid'
+        and order.payment_method == 'offline' and not order.cancel_requested
+        and not hold_reason(order)
+        and not list(order.refunds.all())
+        and not any(payment.status != 'closed' for payment in order.payments.all()))
+
+
 class OrderSerializer(serializers.ModelSerializer):
     payment_query_after_seconds = serializers.SerializerMethodField()
     merchant_contact_phone = serializers.CharField(source='stall.merchant.contact_phone', read_only=True, default='')
@@ -286,12 +297,7 @@ class OrderSerializer(serializers.ModelSerializer):
     def get_offline_payment_available(self, obj):
         # Existing orders may still settle after new-order admission closes.
         # A rehearsal must never expose the merchant's real collection code.
-        return bool(obj.mode == 'live' and obj.fulfillment_type == 'pickup'
-            and obj.status == 'ready' and obj.payment_status == 'unpaid'
-            and obj.payment_method == 'offline' and not obj.cancel_requested
-            and not self.get_financial_hold_reason(obj)
-            and not list(obj.refunds.all())
-            and not any(payment.status != 'closed' for payment in obj.payments.all()))
+        return order_offline_payment_available(obj)
     def get_stall_payment_qr_image(self, obj):
         if not self.get_offline_payment_available(obj):
             return ''

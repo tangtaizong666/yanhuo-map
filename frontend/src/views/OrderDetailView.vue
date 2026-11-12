@@ -1357,6 +1357,7 @@ async function submitReview() {
 }
 .stars {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   margin: 18px 0;
@@ -1367,7 +1368,7 @@ async function submitReview() {
   border: 0;
   background: none;
   color: inherit;
-  min-width: 40px;
+  min-width: 44px;
   min-height: 44px;
   display: grid;
   place-items: center;
@@ -1420,6 +1421,8 @@ async function submitReview() {
   position: relative;
   width: 100%;
   max-width: 450px;
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
   padding: 32px;
 }
 .cancel-dialog h2 {
@@ -1562,8 +1565,8 @@ async function submitReview() {
   .stars > span {
     margin-left: 5px;
   }
-  .stars > button {
-    min-width: 34px;
+  .stars {
+    gap: 2px;
   }
   .pickup-code strong {
     font-size: 32px;

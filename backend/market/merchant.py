@@ -6,6 +6,8 @@ product lock order as checkout so a price edit cannot restore reserved stock.
 import io
 import hashlib
 import json
+import mimetypes
+import re
 import uuid
 import warnings
 from collections.abc import Mapping
@@ -18,16 +20,18 @@ from django.core.files.storage import default_storage
 from django.db import transaction
 from django.db.models import Count, Exists, F, IntegerField, OuterRef, Q, Sum, Subquery
 from django.db.models.functions import TruncDate
+from django.http import FileResponse, HttpResponseNotAllowed, HttpResponseNotFound
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.conf import settings
 from rest_framework import serializers
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from .auth_limits import TrustedUserRateThrottle
 from .errors import BusinessError
-from .models import DeliveryPoint, Event, Follow, MerchantProfile, Order, OrderItem, PaymentRefund, Product, Review, SiteConfiguration, Stall
+from .models import active_prep_q, DeliveryPoint, Event, Follow, MerchantProfile, Order, OrderItem, PaymentRefund, Product, Review, SiteConfiguration, Stall
 from .serializers import ProductSerializer, ReviewSerializer, StallSerializer
 from .services import audit
 from .views import merchant_stall, stall_context
@@ -197,13 +201,30 @@ def owned(query, user, prefix='stall__', permission=None):
     return owned_or_permitted(query, user, permission, prefix + 'merchant__user')
 
 
+class UploadThrottle(TrustedUserRateThrottle):
+    scope = 'upload'
+
+
+_STALL_MEDIA_RE = re.compile(r'^/media/merchants/([0-9]+)/(.+)$')
+
+
+def _validate_stall_public_media(stall, value):
+    if not value or not value.startswith('/media/'):
+        return
+    if '/qr-' in value:
+        raise BusinessError('收款码图片不能用作公开商品或摊位图片。', 'invalid_image', status=400)
+    match = _STALL_MEDIA_RE.match(value)
+    if match and int(match.group(1)) != stall.pk:
+        raise BusinessError('只能使用本摊位上传的图片或平台公共素材。', 'invalid_image', status=400)
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def stalls(request):
     # Include hidden stalls in the workspace so their owner can fix their menu.
     query = Stall.objects.select_related('area', 'merchant', 'location', 'current_session').prefetch_related('products', 'reviews__user', 'reviews__order')
     query = owned(query, request.user, prefix='')
-    query = query.annotate(prep_active_count=Count('orders', filter=Q(orders__status__in=('pending_payment', 'pending', 'preparing')), distinct=True))
+    query = query.annotate(prep_active_count=Count('orders', filter=active_prep_q(prefix='orders__'), distinct=True))
     return Response(StallSerializer(query.order_by('id'), many=True, context=merchant_context(request)).data)
 
 
@@ -217,6 +238,7 @@ def products(request, stall_id):
     digest = hashlib.sha256(json.dumps(values, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     with transaction.atomic():
         stall = merchant_stall(stall_id, request.user, locked=True, permission='market.add_product')
+        _validate_stall_public_media(stall, values.get('image', ''))
         prior = ProductCreation.objects.filter(stall=stall, idempotency_key=key).select_related('product').first() if key else None
         if prior:
             if prior.request_hash != digest:
@@ -244,8 +266,10 @@ def product(request, product_id):
         raise BusinessError('请提供需要修改的商品信息。', status=400)
     with transaction.atomic():
         original = get_object_or_404(Product, pk=product_id)
-        merchant_stall(original.stall_id, request.user, locked=True, permission='market.change_product')
+        stall = merchant_stall(original.stall_id, request.user, locked=True, permission='market.change_product')
         item = Product.objects.select_for_update().get(pk=product_id)
+        if 'image' in form.validated_data and form.validated_data['image'] != item.image:
+            _validate_stall_public_media(stall, form.validated_data['image'])
         for key, value in form.validated_data.items():
             setattr(item, key, value)
         item.save(update_fields=list(form.validated_data))
@@ -263,6 +287,9 @@ def profile(request, stall_id):
     with transaction.atomic():
         stall = merchant_stall(stall_id, request.user, locked=True, permission='market.change_stall')
         values = dict(form.validated_data)
+        for image_field in ('image', 'arrival_image'):
+            if image_field in values and values[image_field] != getattr(stall, image_field):
+                _validate_stall_public_media(stall, values[image_field])
         from .admission import pickup_eligibility_reason
         admission_reason = pickup_eligibility_reason(stall)
         if values.get('accepting_orders') is True and admission_reason:
@@ -282,8 +309,13 @@ def profile(request, stall_id):
             elif qr and not qr.startswith(f'{settings.MEDIA_URL}merchants/{stall.pk}/'):
                 raise BusinessError('收款码需在本摊位上传，不能使用其他图片。', 'invalid_payment_qr', status=400)
             else:
-                audit(request.user, 'payment_qr_changed', stall.id, before=stall.payment_qr_image, after=qr)
+                old_qr = stall.payment_qr_image
+                audit(request.user, 'payment_qr_changed', stall.id, before=old_qr, after=qr)
                 values['payment_qr_updated_at'] = timezone.now()
+                old_prefix = f'{settings.MEDIA_URL}merchants/{stall.pk}/qr-'
+                if old_qr and old_qr.startswith(old_prefix):
+                    old_rel = old_qr.removeprefix(settings.MEDIA_URL)
+                    transaction.on_commit(lambda rel=old_rel: default_storage.delete(rel))
         for key, value in values.items():
             setattr(stall, key, value)
         if values:
@@ -321,8 +353,12 @@ def reply(request, review_id):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@throttle_classes([UploadThrottle])
 def upload_image(request, stall_id):
     stall = merchant_stall(stall_id, request.user, permission='market.change_stall')
+    purpose = request.query_params.get('purpose', '')
+    if purpose not in ('', 'payment_qr'):
+        raise BusinessError('图片用途无效。', 'invalid_image_purpose', status=400)
     upload = request.FILES.get('file')
     if getattr(request._request, '_image_upload_error', None):
         raise BusinessError('图片不能超过 5 MB。', 'image_too_large', status=400)
@@ -339,15 +375,63 @@ def upload_image(request, stall_id):
                 if original.format not in ('JPEG', 'PNG', 'WEBP'):
                     raise BusinessError('请选择 JPG、PNG 或 WebP 图片。', 'invalid_image', status=400)
                 original.load()
-                image = ImageOps.exif_transpose(original).convert('RGB')
+                transposed = ImageOps.exif_transpose(original)
+                if transposed.mode in ('RGBA', 'LA') or (transposed.mode == 'P' and 'transparency' in transposed.info):
+                    rgba = transposed.convert('RGBA')
+                    canvas = Image.new('RGB', rgba.size, (255, 255, 255))
+                    canvas.paste(rgba, mask=rgba.getchannel('A'))
+                    image = canvas
+                else:
+                    image = transposed.convert('RGB')
                 image.thumbnail((2000, 2000))
                 buffer = io.BytesIO()
                 image.save(buffer, format='JPEG', quality=88, optimize=True)
     except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError, Image.DecompressionBombWarning):
         raise BusinessError('图片无法读取，请重新选择有效图片。', 'invalid_image', status=400)
-    path = default_storage.save(f'merchants/{stall.id}/{uuid.uuid4().hex}.jpg', ContentFile(buffer.getvalue()))
-    audit(request.user, 'merchant_image_uploaded', stall.id, path=path)
+    prefix = 'qr-' if purpose == 'payment_qr' else ''
+    path = default_storage.save(f'merchants/{stall.id}/{prefix}{uuid.uuid4().hex}.jpg', ContentFile(buffer.getvalue()))
+    audit(request.user, 'merchant_image_uploaded', stall.id, path=path, purpose=purpose or 'general')
     return Response({'url': default_storage.url(path)}, status=201)
+
+
+def _qr_not_found():
+    response = HttpResponseNotFound()
+    response['Cache-Control'] = 'private, no-store'
+    response['X-Content-Type-Options'] = 'nosniff'
+    return response
+
+
+def protected_payment_qr(request, stall_id, filename):
+    """Serve qr-* collection images only to the owning merchant or eligible pickup payer."""
+    if request.method not in ('GET', 'HEAD'):
+        return HttpResponseNotAllowed(['GET', 'HEAD'])
+    if not re.fullmatch(r'qr-[A-Za-z0-9._-]+\.(?:jpg|jpeg|png|webp)', filename):
+        return _qr_not_found()
+    if not request.user.is_authenticated:
+        return _qr_not_found()
+    stall = Stall.objects.select_related('merchant').filter(pk=stall_id).first()
+    if stall is None:
+        return _qr_not_found()
+    rel_path = f'merchants/{stall.pk}/{filename}'
+    expected_url = f'{settings.MEDIA_URL}{rel_path}'
+    is_manager = owned_or_permitted(Stall.objects.filter(pk=stall.pk), request.user, 'market.view_stall', 'merchant__user').exists()
+    if not is_manager:
+        if stall.payment_qr_image != expected_url:
+            return _qr_not_found()
+        from .serializers import order_offline_payment_available
+        candidates = Order.objects.filter(
+            user=request.user, stall=stall, mode='live', fulfillment_type='pickup',
+            status='ready', payment_status='unpaid', payment_method='offline', cancel_requested=False
+        ).prefetch_related('payments', 'refunds')
+        if not any(order_offline_payment_available(order) for order in candidates):
+            return _qr_not_found()
+    if not default_storage.exists(rel_path):
+        return _qr_not_found()
+    content_type, _ = mimetypes.guess_type(filename)
+    response = FileResponse(default_storage.open(rel_path, 'rb'), content_type=content_type or 'image/jpeg')
+    response['Cache-Control'] = 'private, no-store'
+    response['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 
 def total_cents(query):

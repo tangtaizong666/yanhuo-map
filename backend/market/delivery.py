@@ -1,9 +1,22 @@
 """Merchant self-delivery to operator-approved campus handoff points only."""
+from datetime import timedelta
+from django.conf import settings
+from django.db.models import Q
 from django.utils import timezone
 from .errors import BusinessError
 from .models import DeliveryPoint, Order
 
 ACTIVE_DELIVERY_STATUSES = ('pending_payment', 'pending', 'preparing', 'ready', 'delivering', 'arrived')
+
+
+def active_delivery_q(now=None):
+    """Exclude arrived orders abandoned longer than CHECKOUT_STALE_READY_HOURS from capacity."""
+    cutoff = (now or timezone.now()) - timedelta(hours=settings.CHECKOUT_STALE_READY_HOURS)
+    return Q(fulfillment_type='delivery') & (
+        Q(status__in=('pending_payment', 'pending', 'preparing', 'ready', 'delivering'))
+        | Q(status='arrived', arrived_at__isnull=True)
+        | Q(status='arrived', arrived_at__gte=cutoff)
+    )
 
 
 def point_data(point):
@@ -12,7 +25,12 @@ def point_data(point):
 
 def delivery_window_open(stall, now=None):
     """Night-market windows may cross midnight, e.g. 18:00-01:00."""
-    current = (now or timezone.localtime()).time().replace(tzinfo=None)
+    if now is None:
+        current = timezone.localtime().time().replace(tzinfo=None)
+    elif timezone.is_aware(now):
+        current = timezone.localtime(now).time().replace(tzinfo=None)
+    else:
+        current = now.time().replace(tzinfo=None)
     start, end = stall.delivery_starts_at, stall.delivery_ends_at
     if start < end: return start <= current < end
     return current >= start or current < end
@@ -68,7 +86,7 @@ def delivery_settings(stall, *, merchant=False, context=None):
     elif not delivery_window_open(stall):
         reason = f'配送接单时间为 {result["starts_at"]}—{result["ends_at"]}。'
     elif (stall.delivery_active_count if hasattr(stall, 'delivery_active_count') else
-            Order.objects.filter(stall=stall, fulfillment_type='delivery', status__in=ACTIVE_DELIVERY_STATUSES).count()) >= stall.delivery_capacity:
+            Order.objects.filter(active_delivery_q(), stall=stall).count()) >= stall.delivery_capacity:
         reason = '当前配送订单已满，请稍后再试或选择自取。'
     result.update(available=not reason, reason=reason)
     if merchant:

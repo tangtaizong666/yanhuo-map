@@ -102,7 +102,7 @@ class StallAdmin(AuditedAdmin):
     filter_horizontal = ['delivery_points']
     search_fields = ['name']
     inlines = [LocationInline, ProductInline]
-    readonly_fields = ['current_session', 'receiving_seen_at']
+    readonly_fields = ['current_session', 'receiving_seen_at', 'payment_qr_image', 'payment_qr_updated_at']
     def save_model(self, request, obj, form, change):
         if not change: return super().save_model(request, obj, form, change)
         with transaction.atomic():
@@ -150,7 +150,8 @@ class OrderAdmin(ReadOnlyAdmin):
         return super().change_view(request, object_id, form_url, extra_context)
     def financial_view(self, request, object_id):
         from .errors import BusinessError
-        from .reconciliation import require_operator, verify_and_resolve, verify_external_refund, request_operator_refund
+        from .reconciliation import (confirm_uncreated_payment, require_operator,
+            request_operator_refund, verify_and_resolve, verify_external_refund)
         from django.core.exceptions import PermissionDenied
         from django.http import Http404
         try: require_operator(request.user)
@@ -164,6 +165,8 @@ class OrderAdmin(ReadOnlyAdmin):
             try:
                 if values['operation'] == 'verify':
                     verify_and_resolve(order.pk, request.user, values['reason'])
+                elif values['operation'] == 'uncreated':
+                    confirm_uncreated_payment(order.pk, values['payment'].pk, request.user, values['reason'])
                 elif values['operation'] == 'external':
                     verify_external_refund(order.pk, values['payment'].pk, values['out_refund_no'], request.user, values['reason'])
                 else:
@@ -394,6 +397,7 @@ class RefundChoiceField(forms.ModelChoiceField):
 
 class FinancialResolutionForm(forms.Form):
     operation = forms.ChoiceField(label='操作', choices=[('verify', '查询全部流水并尝试结案'),
+        ('uncreated', '核验过期未创单尝试并关闭本地占位'),
         ('external', '核验外部全额退款'), ('retry', '核验关闭退款并申请新尝试'), ('compensation', '对异常付款申请全额补偿')])
     payment = PaymentChoiceField(label='原付款', queryset=PaymentAttempt.objects.none(), required=False)
     refund = RefundChoiceField(label='原关闭退款', queryset=PaymentRefund.objects.none(), required=False)

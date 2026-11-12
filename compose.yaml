@@ -38,8 +38,8 @@ services:
       WECHAT_PAY_ENABLED: ${WECHAT_PAY_ENABLED:-false}
       WECHAT_PAY_CONFIG_FILE: ""
       WECHAT_PAY_PUBLIC_ORIGIN: https://${PUBLIC_DOMAIN}
-      # Enable only behind the supplied direct-facing Caddy proxy; see payments guide.
-      WECHAT_PAY_TRUST_PROXY_CLIENT_IP: ${WECHAT_PAY_TRUST_PROXY_CLIENT_IP:-false}
+      # Bundled stack keeps backend unexposed behind the direct-facing Caddy service.
+      WECHAT_PAY_TRUST_PROXY_CLIENT_IP: ${WECHAT_PAY_TRUST_PROXY_CLIENT_IP:-true}
       AMAP_KEY: ${AMAP_KEY:-}
       AMAP_SECURITY_CODE: ${AMAP_SECURITY_CODE:-}
       AMAP_PROXY_DAILY_LIMIT: ${AMAP_PROXY_DAILY_LIMIT:-20000}

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { PackagePlus, RefreshCw } from "lucide-vue-next";
-import { api, ApiError } from "../../lib/api";
+import { api } from "../../lib/api";
+import { isDefinitiveIdempotentRejection } from "../../lib/merchantIdempotency";
 import { useSession } from "../../stores/session";
 const props = defineProps<{ stall: any }>(),
   emit = defineEmits<{ refresh: [] }>(),
@@ -128,10 +129,7 @@ async function submit() {
   } catch (e) {
     // A later CSRF/auth/network failure says nothing about an earlier unknown write.
     // Only release a fresh batch that is conclusively rejected before mutation.
-    const definitive =
-      !uncertain &&
-      e instanceof ApiError &&
-      (e.data?.submitted === false || [400, 403, 404, 422].includes(e.status));
+    const definitive = isDefinitiveIdempotentRejection(e, uncertain);
     if (definitive) {
       try {
         sessionStorage.removeItem(key);

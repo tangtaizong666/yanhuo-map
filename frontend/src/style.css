@@ -79,6 +79,7 @@ textarea {
 }
 button:focus-visible,
 a:focus-visible,
+summary:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible {
@@ -233,6 +234,7 @@ textarea::placeholder {
 .header-user {
   display: flex;
   align-items: center;
+  min-height: 44px;
   gap: 8px;
   font-size: 13px;
   max-width: 180px;
@@ -602,13 +604,16 @@ textarea.input {
   color: #b94527;
 }
 .toast > button {
-  margin-left: 4px;
+  min-width: 44px;
+  min-height: 44px;
+  margin: -8px -8px -8px 4px;
   display: grid;
   place-items: center;
 }
 .back-link {
   display: inline-flex;
   align-items: center;
+  min-height: 44px;
   gap: 7px;
   font-size: 13px;
   color: #8d7d6a;
@@ -629,9 +634,9 @@ textarea.input {
 }
 .filter-chips button {
   flex-shrink: 0;
-  min-height: 36px;
+  min-height: 44px;
   border: 1px solid var(--line);
-  border-radius: 20px;
+  border-radius: 22px;
   font-size: 12px;
   padding: 7px 15px;
   background: #fff;
@@ -661,8 +666,8 @@ textarea.input {
   font-size: 14px;
 }
 .search-box button {
-  min-width: 38px;
-  min-height: 38px;
+  min-width: 44px;
+  min-height: 44px;
   display: grid;
   place-items: center;
 }
@@ -708,13 +713,16 @@ textarea.input {
 }
 @media (max-width: 1023px) {
   .header-inner {
-    gap: 20px;
+    gap: 16px;
   }
   .header-location {
-    display: none;
+    padding-left: 14px;
+  }
+  .header-location select {
+    max-width: 112px;
   }
   .desktop-nav {
-    gap: 24px;
+    gap: 18px;
   }
   .food-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

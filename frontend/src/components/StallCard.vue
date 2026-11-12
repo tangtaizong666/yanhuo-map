@@ -459,8 +459,5 @@ defineEmits<{ follow: [stall: Stall] }>();
   .stall-rating > span:nth-child(3) {
     display: none;
   }
-  .stall-bottom .fulfillment {
-    display: none;
-  }
 }
 </style>

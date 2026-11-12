@@ -1,4 +1,5 @@
 import re
+from threading import BoundedSemaphore
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -9,8 +10,11 @@ from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.throttling import SimpleRateThrottle
-from .auth_limits import client_ip
+from .auth_limits import client_ip_bucket
 from .errors import BusinessError
+
+_proxy_slots = BoundedSemaphore(4)
+FORBIDDEN_QUERY_KEYS = frozenset({'url', 'target', 'host', 'redirect', 'jscode[]', 'key[]'})
 
 
 class AmapProxyThrottle(SimpleRateThrottle):
@@ -18,17 +22,22 @@ class AmapProxyThrottle(SimpleRateThrottle):
     scope = 'amap_proxy'
     rate = '60/minute'
     def get_cache_key(self, request, view):
-        return self.cache_format % {'scope': self.scope, 'ident': client_ip(request)}
+        return self.cache_format % {'scope': self.scope, 'ident': client_ip_bucket(request)}
 
 
 def daily_quota_exhausted():
     # A site-wide ceiling below the AMap console quota keeps scripted abuse from spending all of it.
     limit = settings.AMAP_PROXY_DAILY_LIMIT
+    ttl = 2 * 86400
     key = f'amap_proxy_day:{timezone.localdate().isoformat()}'
-    if cache.add(key, 1, 2 * 86400):
-        return False
-    try: count = cache.incr(key)
-    except ValueError: count = 1
+    if cache.add(key, 1, ttl):
+        return 1 > limit
+    try:
+        count = cache.incr(key)
+        cache.touch(key, ttl)
+    except ValueError:
+        cache.set(key, 1, ttl)
+        count = 1
     return count > limit
 
 
@@ -52,26 +61,43 @@ def amap_proxy(request, upstream_path=''):
     allowed_hosts = {request.get_host(), *[urllib.parse.urlparse(o).netloc for o in settings.CSRF_TRUSTED_ORIGINS]}
     if not source or urllib.parse.urlparse(source).netloc not in allowed_hosts:
         raise BusinessError('地图请求来源无效。', 'invalid_origin', status=403)
+    # Reject duplicate query parameters and case-folded forwarding fields before touching quota.
+    for raw_key, values in request.GET.lists():
+        if len(values) > 1 or raw_key.lower() in FORBIDDEN_QUERY_KEYS:
+            raise BusinessError('地图请求参数无效。', status=400)
+    if 'callback' in request.GET and not re.fullmatch(r'[A-Za-z_$][A-Za-z0-9_$.]{0,100}', request.GET['callback']):
+        raise BusinessError('地图回调格式无效。', status=400)
     if daily_quota_exhausted():
         return JsonResponse({'detail': '今日地图服务额度已用完，请先用列表找摊。', 'code': 'map_quota_exhausted'}, status=429)
+    if not _proxy_slots.acquire(blocking=False):
+        return JsonResponse({'detail': '地图服务繁忙，请稍后再试或使用列表找摊。', 'code': 'map_busy'}, status=503)
     query = request.GET.copy()
+    for existing_key in [k for k in query if k.lower() in ('key', 'jscode')]:
+        query.pop(existing_key, None)
     query['key'], query['jscode'] = settings.AMAP_KEY, settings.AMAP_SECURITY_CODE
-    # Disallow query forwarding fields that can ask the upstream to fetch arbitrary URLs.
-    for field in ('url', 'target', 'host', 'redirect', 'jscode[]', 'key[]'):
-        if field in query: raise BusinessError('地图请求参数无效。', status=400)
-    if 'callback' in query and not re.fullmatch(r'[A-Za-z_$][A-Za-z0-9_$.]{0,100}', query['callback']):
-        raise BusinessError('地图回调格式无效。', status=400)
     host = 'webapi.amap.com' if upstream_path == 'v4/map/styles' else 'restapi.amap.com'
     url = f'https://{host}/{upstream_path}?{query.urlencode()}'
     try:
-        opener = urllib.request.build_opener(NoRedirect())
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
         with opener.open(urllib.request.Request(url, headers={'User-Agent': 'YanhuoMap/1.0'}), timeout=5) as upstream:
             body = upstream.read(2*1024*1024+1)
             if len(body) > 2*1024*1024: raise ValueError('response too large')
-            # Do not expose upstream responses containing our security secret.
-            if settings.AMAP_SECURITY_CODE.encode() in body: raise ValueError('secret in upstream response')
-            response = HttpResponse(body, content_type=upstream.headers.get('Content-Type', 'application/json'))
+            # Do not expose upstream responses containing our security secret (case-insensitive).
+            if settings.AMAP_SECURITY_CODE.lower().encode() in body.lower():
+                raise ValueError('secret in upstream response')
+            upstream_ct = (upstream.headers.get('Content-Type') or '').split(';', 1)[0].strip().lower()
+            if 'callback' in query:
+                content_type = 'application/javascript; charset=utf-8'
+            elif upstream_path == 'v4/map/styles' and upstream_ct == 'application/octet-stream':
+                content_type = 'application/octet-stream'
+            else:
+                content_type = 'application/json; charset=utf-8'
+            response = HttpResponse(body, content_type=content_type)
             response['Cache-Control'] = 'private, no-store'
+            response['X-Content-Type-Options'] = 'nosniff'
+            response['Content-Security-Policy'] = "default-src 'none'; sandbox"
             return response
     except (urllib.error.URLError, TimeoutError, ValueError):
         return JsonResponse({'detail': '地图服务暂不可用，请使用列表选择摊位。', 'code': 'map_upstream_error'}, status=502)
+    finally:
+        _proxy_slots.release()

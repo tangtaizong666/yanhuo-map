@@ -493,14 +493,16 @@ onUnmounted(() => {
               ><ShoppingBag :size="24" :stroke-width="1.5"
             /></span>
             <p class="eyebrow">PICK UP SOMETHING GOOD</p>
-            <h2>提前点好，到摊就取</h2>
+            <h2>{{ stall.delivery?.available ? "提前点好，自取或送达" : "提前点好，到摊就取" }}</h2>
             <p class="pickup-description">
               少一点排队，多一点热乎。<br />{{
-                stall.wechat_payment?.available
-                  ? stall.wechat_payment.mode === "simulation"
-                    ? "出餐后可在订单页模拟付款，不会真实扣款。"
-                    : "出餐后可在订单页微信付款。"
-                  : "取餐时直接向商家付款。"
+                stall.delivery?.available
+                  ? "结算时可选到摊自取或送至校园交接点。"
+                  : stall.wechat_payment?.available
+                    ? stall.wechat_payment.mode === "simulation"
+                      ? "出餐后可在订单页模拟付款，不会真实扣款。"
+                      : "出餐后可在订单页微信付款。"
+                    : "取餐时直接向商家付款。"
               }}
             </p>
             <div class="pickup-details">
@@ -641,7 +643,7 @@ onUnmounted(() => {
   display: flex;
   gap: 7px;
   align-items: center;
-  min-height: 42px;
+  min-height: 44px;
   border-radius: 10px;
   border: 1px solid #fff6;
   background: #fff9;
@@ -1098,6 +1100,7 @@ onUnmounted(() => {
     left: 20px;
     bottom: 18px;
     right: 20px;
+    padding-right: 104px;
   }
   .stall-hero-caption > span {
     font-size: 9px;

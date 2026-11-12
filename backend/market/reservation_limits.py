@@ -27,12 +27,15 @@ def enforce_reservation_limits(user, stall, items):
     # not settle unknown payments/refunds. Ordinary paid terminal orders are free.
     ).filter(Q(status__in=ACTIVE) | Q(payment_review_required=True) |
         Q(payment_status='refunding') | Q(uncertain=True) | Q(unresolved=True))
-    # A pickup left uncollected long after it was made must not lock the customer out of the
-    # stall forever. Money questions above (refund/payment review) still hold the account.
-    stale_ready = Q(fulfillment_type='pickup', status='ready',
-        ready_at__lt=timezone.now() - timedelta(hours=settings.CHECKOUT_STALE_READY_HOURS))
+    # A pickup or arrived delivery left uncollected long after handoff must not lock the customer
+    # out of the stall forever. Money questions above (refund/payment review) still hold the account.
+    stale_cutoff = timezone.now() - timedelta(hours=settings.CHECKOUT_STALE_READY_HOURS)
+    stale_handoff = (
+        Q(fulfillment_type='pickup', status='ready', ready_at__lt=stale_cutoff)
+        | Q(fulfillment_type='delivery', status='arrived', arrived_at__lt=stale_cutoff)
+    )
     money_hold = Q(payment_review_required=True) | Q(payment_status='refunding') | Q(uncertain=True) | Q(unresolved=True)
-    held = held.exclude(stale_ready & ~money_hold)
+    held = held.exclude(stale_handoff & ~money_hold)
     same = held.filter(stall=stall)
     if same.count() >= settings.CHECKOUT_MAX_ACTIVE_PER_STALL:
         logger.info('checkout_rejected reason=stall_reservation_limit')

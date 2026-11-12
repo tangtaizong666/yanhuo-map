@@ -136,7 +136,7 @@ def _apply_payment(order, payment, data):
             # reserved order. All existing operational/qualification checks remain.
             if (paid_at > payment.expires_at or not order.stall.can_order(existing_order=True)
                     or not service_enabled(order.stall) or not service_approved(order.stall)
-                    or not delivery_window_open(order.stall)
+                    or not (delivery_window_open(order.stall, now=paid_at) or (paid_at >= order.created_at and paid_at - order.created_at <= timedelta(minutes=16) and delivery_window_open(order.stall, now=order.created_at)))
                     or not point_open or not order.stall.delivery_points.filter(pk=order.delivery_point_id).exists()):
                 from .services import release_inventory
                 order.status, order.cancel_reason = 'cancelled', '付款时配送服务已暂停，正在全额退款'
@@ -144,10 +144,13 @@ def _apply_payment(order, payment, data):
                 release_inventory(order)
             else:
                 order.status = 'pending'
-                order.expires_at = timezone.now() + timedelta(minutes=SiteConfiguration.current().pending_minutes)
+                accepted_clock_start = timezone.now()
+                order.expires_at = accepted_clock_start + timedelta(minutes=SiteConfiguration.current().pending_minutes)
+                order.delivery_eta_min_at = accepted_clock_start + timedelta(minutes=order.stall.delivery_eta_min_minutes)
+                order.delivery_eta_max_at = accepted_clock_start + timedelta(minutes=order.stall.delivery_eta_max_minutes)
         order.save()
         audit(None, 'wechat_payment_confirmed', order.pk, mode=order.mode, payment_id=str(payment.pk))
-    elif state == 'CLOSED':
+    elif state in ('CLOSED', 'REVOKED'):
         if payment.status == 'paid': raise _invalid()
         payment.status, payment.error_code, payment.error_message = 'closed', '', ''
         payment.code_url = payment.h5_url = ''
@@ -156,7 +159,7 @@ def _apply_payment(order, payment, data):
                 and not order.payments.exclude(pk=payment.pk).filter(status__in=PaymentAttempt.ACTIVE_STATUSES + ('paid',)).exists()):
             order.payment_method = 'wechat' if order.fulfillment_type == 'delivery' else 'offline'
             order.save(update_fields=['payment_method'])
-    elif state in ('NOTPAY', 'USERPAYING', 'ACCEPT'):
+    elif state in ('NOTPAY', 'USERPAYING', 'ACCEPT', 'PAYERROR'):
         if payment.status in ('paid', 'closed'): raise _invalid()
         payment.status, payment.error_code, payment.error_message = 'pending', '', ''
         payment.save()
@@ -225,14 +228,14 @@ def _drive_payment(order_id, user=None, *, operation='query', payer_client_ip=No
             try:
                 result = client.query_payment(payment.out_trade_no)
             except GatewayError as error:
-                if operation == 'recover' and error.code == 'ORDER_NOT_EXIST' and payment.expires_at > timezone.now()+timedelta(seconds=75):
+                if operation == 'recover' and error.code in ('ORDERNOTEXIST', 'ORDER_NOT_EXIST') and payment.expires_at > timezone.now()+timedelta(seconds=75):
                     result, entry = create(client), True
                 else: raise
             if not entry:
                 _payment_identity(payment, result)
                 auto_close = (order.fulfillment_type == 'delivery' and order.status == 'pending_payment'
                     and payment.expires_at <= timezone.now())
-                if (operation == 'close' or auto_close) and result.get('trade_state') in ('NOTPAY', 'USERPAYING', 'ACCEPT'):
+                if (operation == 'close' or auto_close) and result.get('trade_state') in ('NOTPAY', 'USERPAYING', 'ACCEPT', 'PAYERROR'):
                     client.close_payment(payment.out_trade_no)
                     # A verified successful close response establishes closure, never local time.
                     result = {**result, 'trade_state': 'CLOSED'}

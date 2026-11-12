@@ -23,7 +23,7 @@ from .errors import BusinessError
 from .models import Area, BusinessSession, Event, Feedback, Follow, Order, Review, SiteConfiguration, Stall, StallLocation
 from .serializers import AreaSerializer, OrderInput, OrderSerializer, RegistrationInput, StallCutoffInput, StallSerializer, StallStatusInput, user_data
 from .services import audit, cancel_order, confirm_receipt, create_order, expire_pending_orders, merchant_action
-from .auth_limits import client_ip, login_attempt, LoginRateLimited
+from .auth_limits import client_ip, client_ip_bucket, login_attempt, LoginRateLimited
 from .permissions import get_merchant_stall, owned_or_permitted
 from .discovery_queries import filter_status, visible_stall_query
 from .list_api import order_list_response
@@ -32,7 +32,7 @@ from .list_api import order_list_response
 class AuthThrottle(AnonRateThrottle):
     scope = 'auth'
     def get_ident(self, request):
-        return client_ip(request)
+        return client_ip_bucket(request)
     def get_cache_key(self, request, view):
         return self.cache_format % {'scope': self.scope, 'ident': self.get_ident(request)}
 
@@ -172,20 +172,35 @@ def password(request):
 
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated])
+@throttle_classes([AuthThrottle])
 def account(request):
     from .models import PaymentAttempt, PaymentRefund
     expire_pending_orders(user_id=request.user.pk)
+    def _has_active_obligations(target_user):
+        return (target_user.orders.filter(Q(status__in=['pending_payment', 'pending', 'preparing', 'ready', 'delivering', 'arrived'])
+                | Q(payment_status='refunding') | Q(payment_review_required=True)).exists()
+                or PaymentAttempt.objects.filter(order__user=target_user, status__in=PaymentAttempt.ACTIVE_STATUSES).exists()
+                or PaymentRefund.objects.filter(order__user=target_user, resolved_at__isnull=True).exclude(status='success').exists())
+    if request.user.is_staff or hasattr(request.user, 'merchant_profile'):
+        raise BusinessError('商家与运营账号请联系平台处理注销。', 'managed_account')
+    if _has_active_obligations(request.user):
+        raise BusinessError('还有进行中的订单，请处理完成后再注销。', 'active_orders')
+    supplied = serializers.CharField(max_length=128, trim_whitespace=False).run_validation(request.data.get('password'))
+    try:
+        verified = login_attempt(request, request.user.username,
+            lambda: request.user if request.user.is_active and request.user.check_password(supplied) else None)
+    except LoginRateLimited as exc:
+        raise Throttled(wait=exc.retry_after, detail='密码验证失败次数过多，请稍后再试。')
+    if not verified:
+        raise BusinessError('请输入正确密码确认注销。', 'invalid_password', status=400)
     with transaction.atomic():
         user = User.objects.select_for_update().get(pk=request.user.pk)
         if user.is_staff or hasattr(user, 'merchant_profile'):
             raise BusinessError('商家与运营账号请联系平台处理注销。', 'managed_account')
-        if (user.orders.filter(Q(status__in=['pending_payment', 'pending', 'preparing', 'ready', 'delivering', 'arrived'])
-                | Q(payment_status='refunding') | Q(payment_review_required=True)).exists()
-                or PaymentAttempt.objects.filter(order__user=user, status__in=PaymentAttempt.ACTIVE_STATUSES).exists()
-                or PaymentRefund.objects.filter(order__user=user, resolved_at__isnull=True).exclude(status='success').exists()):
+        if _has_active_obligations(user):
             raise BusinessError('还有进行中的订单，请处理完成后再注销。', 'active_orders')
-        supplied = serializers.CharField(max_length=128, trim_whitespace=False).run_validation(request.data.get('password'))
-        if not user.check_password(supplied): raise BusinessError('请输入正确密码确认注销。', 'invalid_password', status=400)
+        if not user.is_active or not user.check_password(supplied):
+            raise BusinessError('请输入正确密码确认注销。', 'invalid_password', status=400)
         audit(user, 'account_deactivated', user.id)
         Follow.objects.filter(user=user).delete()
         user.orders.update(contact_phone='', recipient_name='', note='')

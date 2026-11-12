@@ -6,9 +6,20 @@ self.addEventListener('notificationclick', event => {
   event.waitUntil((async () => {
     const url = new URL(event.notification.data?.url || '/', self.location.origin);
     if (url.origin !== self.location.origin) return;
-    const windows = await self.clients.matchAll({ type: 'window' });
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     const matching = windows.find(client => client.url === url.href);
     if (matching) return matching.focus();
+    const sameOrigin = windows.find(client => {
+      try {
+        return new URL(client.url).origin === self.location.origin;
+      } catch {
+        return false;
+      }
+    });
+    if (sameOrigin) {
+      if ('navigate' in sameOrigin) await sameOrigin.navigate(url.href);
+      return sameOrigin.focus();
+    }
     return self.clients.openWindow(url.href);
   })());
 });

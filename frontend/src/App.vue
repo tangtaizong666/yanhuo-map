@@ -142,7 +142,7 @@ onUnmounted(() => {
           <option v-for="a in session.config?.areas" :key="a.id" :value="a.id">
             {{ a.name }}
           </option></select
-        ><ChevronDown :size="13" />
+        ><ChevronDown :size="13" class="header-location-chevron" />
       </div>
       <nav class="desktop-nav" aria-label="主导航">
         <RouterLink
@@ -303,5 +303,8 @@ onUnmounted(() => {
   min-height: 28px;
   color: #fff;
   font-weight: 700;
+}
+.header-location-chevron {
+  pointer-events: none;
 }
 </style>

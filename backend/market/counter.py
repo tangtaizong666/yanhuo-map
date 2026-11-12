@@ -1,7 +1,9 @@
 """Small counter operations: counted stock, contact readiness and pickup lookup."""
 import hashlib
 import json
+import secrets
 
+from django.core.cache import cache
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -14,11 +16,11 @@ from rest_framework.throttling import SimpleRateThrottle
 
 from .errors import BusinessError
 from .merchant import StrictInput
-from .models import Product, StockCorrection
+from .models import Order, Product, StockCorrection
 from .serializers import OrderSerializer, ProductSerializer
 from .services import audit
 from .views import merchant_stall, order_query
-from .auth_limits import client_ip
+from .auth_limits import client_ip_bucket
 
 
 class StockCorrectionInput(StrictInput):
@@ -93,7 +95,7 @@ class PickupLookupThrottle(SimpleRateThrottle):
     scope = 'pickup_lookup'
     def get_cache_key(self, request, view):
         return self.cache_format % {'scope': self.scope,
-            'ident': f'user:{request.user.pk}' if request.user.is_authenticated else f'ip:{client_ip(request)}'}
+            'ident': f'user:{request.user.pk}' if request.user.is_authenticated else f'ip:{client_ip_bucket(request)}'}
 
 
 @sensitive_post_parameters('pickup_code')
@@ -105,14 +107,39 @@ def pickup_lookup(request, stall_id):
     form = PickupLookupInput(data=request.data)
     form.is_valid(raise_exception=True)
     data = form.validated_data
-    query = order_query().filter(stall=stall, fulfillment_type='pickup', status='ready', pickup_code=data['pickup_code'])
-    if data.get('number'): query = query.filter(number=data['number'])
-    matches = list(query[:2])
-    if not matches:
-        raise BusinessError('未找到本摊位待取餐的自取订单，请核对完整取餐码与订单状态。', 'pickup_order_not_found', status=404)
-    if len(matches) > 1:
-        raise BusinessError('该取餐码对应多笔待取订单，请补充完整订单号后查询。', 'pickup_code_ambiguous')
+    locked_error = BusinessError('取餐码错误次数过多，请10分钟后再试或让顾客刷新订单页核对。', 'pickup_code_locked', status=409)
+    not_found_error = BusinessError('未找到本摊位待取餐的自取订单，请核对完整取餐码与订单状态。', 'pickup_order_not_found', status=404)
+    if data.get('number'):
+        outcome = None
+        with transaction.atomic():
+            target = Order.objects.select_for_update(of=('self',)).filter(
+                stall=stall, fulfillment_type='pickup', status='ready', number=data['number']
+            ).first()
+            if target is None:
+                outcome = not_found_error
+            else:
+                fails_key = f'pickup_code_fails:{target.pk}'
+                failures = cache.get(fails_key, 0)
+                if failures >= 5:
+                    outcome = locked_error
+                elif not secrets.compare_digest(str(data['pickup_code']), target.pickup_code):
+                    cache.set(fails_key, failures + 1, 600)
+                    outcome = not_found_error
+        if outcome is not None:
+            raise outcome
+        match = order_query().filter(pk=target.pk, stall=stall, fulfillment_type='pickup', status='ready').first()
+        if match is None:
+            raise not_found_error
+    else:
+        matches = list(order_query().filter(stall=stall, fulfillment_type='pickup', status='ready', pickup_code=data['pickup_code'])[:2])
+        if not matches:
+            raise not_found_error
+        if len(matches) > 1:
+            raise BusinessError('该取餐码对应多笔待取订单，请补充完整订单号后查询。', 'pickup_code_ambiguous')
+        match = matches[0]
+        if cache.get(f'pickup_code_fails:{match.pk}', 0) >= 5:
+            raise locked_error
     # Deliberately omit entered codes from all audit details and merchant responses.
-    audit(request.user, 'pickup_order_looked_up', matches[0].pk, stall_id=stall.pk)
-    return Response(OrderSerializer(matches[0], context={'merchant': True, 'request': request}).data,
+    audit(request.user, 'pickup_order_looked_up', match.pk, stall_id=stall.pk)
+    return Response(OrderSerializer(match, context={'merchant': True, 'request': request}).data,
         headers={'Cache-Control': 'no-store, private'})

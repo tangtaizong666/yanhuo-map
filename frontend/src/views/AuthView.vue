@@ -278,7 +278,13 @@ async function submit() {
           class="recovery-link"
           :to="{
             path: '/recover',
-            query: merchantLogin ? { role: 'merchant' } : {},
+            query: {
+              ...(merchantLogin ? { role: 'merchant' } : {}),
+              ...(typeof route.query.returnTo === 'string' &&
+              safeReturnTo(route.query.returnTo) !== '/'
+                ? { returnTo: safeReturnTo(route.query.returnTo) }
+                : {}),
+            },
           }"
           >忘记密码？使用恢复码找回</RouterLink
         >
@@ -514,9 +520,6 @@ async function submit() {
     font-size: 26px;
   }
 }
-</style>
-
-<style scoped>
 .demo-accounts {
   margin-top: 22px;
   border-top: 1px dashed #ddd2be;
@@ -532,8 +535,8 @@ async function submit() {
 .demo-accounts button {
   border: 1px solid #e7d7bd;
   border-radius: 7px;
-  padding: 8px 10px;
-  min-height: 40px;
+  padding: 8px 12px;
+  min-height: 44px;
   color: #a37f50;
   background: #fcf6eb;
   font-size: 11px;

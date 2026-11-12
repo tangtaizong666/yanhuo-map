@@ -153,7 +153,7 @@ class Stall(models.Model):
         return not self.order_unavailable_reason(config, existing_order=existing_order)
     def prep_active_orders(self):
         count = getattr(self, 'prep_active_count', None)
-        return count if count is not None else self.orders.filter(status__in=('pending_payment', 'pending', 'preparing')).count()
+        return count if count is not None else self.orders.filter(active_prep_q()).count()
     def new_order_gate_code(self):
         session = self.current_session
         if session and session.stop_orders_at and timezone.now() >= session.stop_orders_at:
@@ -232,6 +232,14 @@ def order_number():
 PICKUP_CODE_DIGITS = 4
 
 
+def active_prep_q(now=None, prefix=''):
+    """Exclude abandoned preparing orders (>12h old) from permanently saturating prep_capacity."""
+    cutoff = (now or timezone.now()) - timedelta(hours=12)
+    return Q(**{f'{prefix}status__in': ('pending_payment', 'pending')}) | Q(
+        **{f'{prefix}status': 'preparing', f'{prefix}created_at__gte': cutoff}
+    )
+
+
 def pickup_code(taken=()):
     # 4-digit codes are easy to read aloud at a busy stall; uniqueness among a stall's open orders is enforced on create.
     taken = set(taken)
@@ -239,7 +247,13 @@ def pickup_code(taken=()):
         code = ''.join(secrets.choice('0123456789') for _ in range(PICKUP_CODE_DIGITS))
         if code not in taken: return code
     free = [f'{n:04d}' for n in range(10 ** PICKUP_CODE_DIGITS) if f'{n:04d}' not in taken]
-    return secrets.choice(free) if free else code
+    if free:
+        return secrets.choice(free)
+    for _ in range(200):
+        code8 = ''.join(secrets.choice('0123456789') for _ in range(8))
+        if code8 not in taken:
+            return code8
+    raise RuntimeError('Unable to allocate unique pickup code')
 
 
 class Order(models.Model):

@@ -16,9 +16,18 @@ const props = defineProps<{
   days: number;
   error: string;
   loading: boolean;
+  mode?: "live" | "simulation";
+  canSwitchMode?: boolean;
 }>();
-const emit = defineEmits<{ period: [days: number]; openOrder: [] }>();
-const simulated = computed(() => props.metrics?.mode === "simulation");
+const emit = defineEmits<{
+  period: [days: number];
+  mode: [value: "live" | "simulation"];
+  openOrder: [];
+}>();
+const activeMode = computed(
+  () => props.mode || (props.metrics?.mode === "simulation" ? "simulation" : "live"),
+);
+const simulated = computed(() => (props.metrics?.mode || activeMode.value) === "simulation");
 const sourceLabels: Record<string, string> = {
   stall_qr: "摊位二维码",
   share_link: "分享链接",
@@ -112,15 +121,42 @@ function exportCsv() {
       本页金额和导出日报用于流程体验，不代表真实收款、退款或收入。
     </p>
     <div class="m-section-toolbar">
-      <div class="m-segmented" aria-label="数据时间范围">
+      <div class="m-segmented" role="group" aria-label="数据时间范围">
         <button
           v-for="period in [1, 7, 30]"
           :key="period"
+          type="button"
           :class="{ active: days === period }"
+          :aria-pressed="days === period"
           :disabled="loading"
           @click="emit('period', period)"
         >
           {{ period === 1 ? "今天" : `近 ${period} 天` }}
+        </button>
+      </div>
+      <div
+        v-if="canSwitchMode"
+        class="m-segmented"
+        role="group"
+        aria-label="经营记录模式"
+      >
+        <button
+          type="button"
+          :class="{ active: activeMode === 'live' }"
+          :aria-pressed="activeMode === 'live'"
+          :disabled="loading"
+          @click="emit('mode', 'live')"
+        >
+          正式记录
+        </button>
+        <button
+          type="button"
+          :class="{ active: activeMode === 'simulation' }"
+          :aria-pressed="activeMode === 'simulation'"
+          :disabled="loading"
+          @click="emit('mode', 'simulation')"
+        >
+          模拟演练
         </button>
       </div>
       <button
@@ -137,8 +173,8 @@ function exportCsv() {
         <div><strong>{{ metrics.pilot_evidence.active_merchant_days }}</strong><span>商户开摊天数</span></div>
         <div><strong>{{ metrics.pilot_evidence.completed_orders }}</strong><span>实际完成订单</span></div>
         <div><strong>{{ metrics.pilot_evidence.paying_customers }}</strong><span>已确认收款人数</span></div>
-        <div><strong>{{ metrics.pilot_evidence.accept_p50_seconds ?? '—' }}</strong><span>接单耗时 p50（秒）</span></div>
-        <div><strong>{{ metrics.pilot_evidence.accept_p95_seconds ?? '—' }}</strong><span>接单耗时 p95（秒）</span></div>
+        <div><strong>{{ metrics.pilot_evidence.accept_p50_seconds ?? '—' }}</strong><span>常见接单用时（中位数，秒）</span></div>
+        <div><strong>{{ metrics.pilot_evidence.accept_p95_seconds ?? '—' }}</strong><span>忙时接单用时（95% 订单内，秒）</span></div>
         <div><strong>{{ metrics.pilot_evidence.location_reports_confirmed }} / {{ metrics.pilot_evidence.location_reports_received }}</strong><span>核实属实 / 收到的位置反馈</span></div>
       </div>
       <p class="m-muted">{{ metrics.pilot_evidence.definitions }} 接单样本 {{ metrics.pilot_evidence.accept_sample_count }} 笔。</p>

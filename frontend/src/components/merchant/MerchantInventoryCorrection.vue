@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { api, ApiError } from "../../lib/api";
 import { newRequestKey } from "../../lib/engagement";
+import { isDefinitiveIdempotentRejection } from "../../lib/merchantIdempotency";
 import { useSession } from "../../stores/session";
 const props = defineProps<{ product: any; stallId: number }>();
 const emit = defineEmits<{ refresh: [] }>();
@@ -24,6 +25,7 @@ const quantity = ref(""),
   notice = ref("");
 const baselineVersion = ref(props.product.stock_version ?? 0);
 let disposed = false,
+  uncertain = false,
   controller: AbortController | undefined;
 const validOwner = () => !disposed && session.user?.id === owner;
 watch(
@@ -59,6 +61,7 @@ try {
     saved.idempotency_key.length <= 128
   ) {
     pending.value = saved;
+    uncertain = true;
     expanded.value = true;
     quantity.value = String(saved.stock);
     reason.value = saved.reason;
@@ -126,6 +129,7 @@ async function submit() {
       });
     sessionStorage.removeItem(storageKey);
     pending.value = null;
+    uncertain = false;
     quantity.value = "";
     reason.value = "";
     baselineVersion.value = result.product.stock_version;
@@ -145,13 +149,29 @@ async function submit() {
     ) {
       sessionStorage.removeItem(storageKey);
       pending.value = null;
+      uncertain = false;
       conflict.value = cause.data.product;
       error.value =
         "期间发生了下单、取消或补货，原数量已过时；本次未更正，请按最新数量重新核对。";
       emit("refresh");
-    } else
-      error.value =
-        "本次更正结果尚未确认。保留原份数和原因重试，重复请求不会再次更正。";
+    } else {
+      const definitive = isDefinitiveIdempotentRejection(cause, uncertain, [
+        "stock_version_conflict",
+      ]);
+      if (definitive) {
+        try {
+          sessionStorage.removeItem(storageKey);
+        } catch {
+          /* Optional cleanup. */
+        }
+        pending.value = null;
+        error.value = (cause as Error).message;
+      } else {
+        uncertain = true;
+        error.value =
+          "本次更正结果尚未确认。保留原份数和原因重试，重复请求不会再次更正。";
+      }
+    }
   } finally {
     if (validOwner()) busy.value = false;
   }

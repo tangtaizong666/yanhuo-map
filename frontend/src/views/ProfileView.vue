@@ -17,7 +17,7 @@ import {
   Trash2,
   UserRound,
 } from "lucide-vue-next";
-import { api, statusText } from "../lib/api";
+import { api, ApiError, statusText } from "../lib/api";
 import { useSession } from "../stores/session";
 import { notify } from "../lib/notify";
 import { useFollowState } from "../lib/discovery";
@@ -204,6 +204,7 @@ async function unfollow(stall: Stall) {
   await followState.follow(stall, false);
 }
 async function saveProfile() {
+  if (busy.value) return;
   busy.value = true;
   try {
     await api("/auth/profile", {
@@ -219,6 +220,7 @@ async function saveProfile() {
   }
 }
 async function changePassword() {
+  if (busy.value) return;
   if (newPassword.value !== passwordConfirm.value) {
     notify("两次输入的新密码不一致", "error");
     return;
@@ -237,12 +239,18 @@ async function changePassword() {
     passwordConfirm.value = "";
     notify("密码已更新", "success");
   } catch (e) {
-    notify((e as Error).message, "error");
+    notify(
+      e instanceof ApiError && (e.status === 0 || e.status >= 500)
+        ? "密码更新结果尚未确认，请稍后刷新或尝试用新密码重新登录确认"
+        : (e as Error).message,
+      "error",
+    );
   } finally {
     busy.value = false;
   }
 }
 async function sendFeedback() {
+  if (busy.value) return;
   busy.value = true;
   try {
     await api("/feedback", {
@@ -271,7 +279,7 @@ async function logout() {
   }
 }
 async function deleteAccount() {
-  if (deletionConfirmation.value !== session.user?.username) return;
+  if (busy.value || deletionConfirmation.value !== session.user?.username) return;
   busy.value = true;
   try {
     await api("/auth/account", {
@@ -1042,6 +1050,11 @@ async function deleteAccount() {
   }
   .count-label {
     font-size: 10px;
+  }
+}
+@media (max-width: 520px) {
+  .follow-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

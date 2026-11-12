@@ -273,7 +273,7 @@ def verify_and_resolve(order_id, actor, reason):
         elif any(r.status != 'success' and r.resolved_at is None for r in refunds):
             unresolved = '仍有退款未结案；关闭的退款须先完成补偿。'
         elif any((p.status == 'paid' and observed[p.pk].get('trade_state') not in ('SUCCESS', 'REFUND'))
-                 or (p.status == 'closed' and observed[p.pk].get('trade_state') != 'CLOSED') for p in payments):
+                 or (p.status == 'closed' and observed[p.pk].get('trade_state') not in ('CLOSED', 'REVOKED')) for p in payments):
             unresolved = '核验后收到新的资金状态，请重新查询。'
         refunded = {}
         for refund in refunds:
@@ -315,4 +315,83 @@ def verify_and_resolve(order_id, actor, reason):
         invalidate_financial_cache(order)
     if unresolved:
         raise BusinessError(unresolved, 'financial_resolution_incomplete')
+    return order
+
+
+def confirm_uncreated_payment(order_id, payment_id, actor, reason):
+    """Operator-verified closure for expired intents that never existed at the provider."""
+    require_operator(actor)
+    reason = _reason(reason)
+    with transaction.atomic():
+        order = _order(order_id)
+        try: payment = order.payments.get(pk=payment_id)
+        except PaymentAttempt.DoesNotExist: raise BusinessError('付款记录不存在。', 'not_found', status=404) from None
+        _live(order, payment)
+        if payment.status not in PaymentAttempt.ACTIVE_STATUSES or order.payment_status != 'unpaid':
+            raise BusinessError('只能处理尚未确认收款的待定支付尝试。', 'payment_not_uncreated_candidate')
+        if payment.expires_at > timezone.now() - timedelta(minutes=5):
+            raise BusinessError('仅允许在支付有效期届满满5分钟后核验关闭未创单记录。', 'payment_not_expired_long_enough')
+        if payment.request_in_flight_until and payment.request_in_flight_until > timezone.now():
+            raise BusinessError('该记录正在查询，请稍后核验。', 'financial_operation_busy')
+        from .payment_schedule import admit_query, finish_query
+        if not admit_query(payment):
+            raise BusinessError('刚刚查询过该记录，请稍后核验。', 'payment_query_cooldown',
+                next_query_at=payment.next_query_at.isoformat())
+        lease = timezone.now() + timedelta(seconds=90)
+        payment.request_in_flight_until = lease
+        payment.save(update_fields=['request_in_flight_until'])
+    data, failure, not_found_code = None, None, ''
+    try:
+        client = _compatible_client(payment)
+        try:
+            data = client.query_payment(payment.out_trade_no)
+            if data.get('trade_state') in ('NOTPAY', 'USERPAYING', 'ACCEPT', 'PAYERROR'):
+                client.close_payment(payment.out_trade_no)
+                data = {**data, 'trade_state': 'CLOSED'}
+        except GatewayError as exc:
+            if exc.code in ('ORDERNOTEXIST', 'ORDER_NOT_EXIST'):
+                not_found_code = exc.code
+            else:
+                failure = exc
+    except GatewayError as exc:
+        failure = exc
+    with transaction.atomic():
+        order = _order(order_id)
+        payment = order.payments.get(pk=payment_id)
+        if payment.request_in_flight_until != lease:
+            raise BusinessError('另一查询已接管此记录，请重新核验。', 'financial_operation_busy')
+        payment.request_in_flight_until = None
+        payment.save(update_fields=['request_in_flight_until'])
+        if not_found_code:
+            if payment.status == 'paid' or payment.transaction_id:
+                failure = GatewayError('PAYMENT_ALREADY_CAPTURED', '本地已记录付款身份，不能按未创单关闭。')
+            else:
+                payment.status, payment.error_code, payment.error_message = 'closed', '', ''
+                payment.code_url = payment.h5_url = ''
+                payment.last_checked_at = timezone.now()
+                payment.save()
+                if (order.payment_status == 'unpaid' and not order.payment_review_required
+                        and not order.payments.exclude(pk=payment.pk).filter(status__in=PaymentAttempt.ACTIVE_STATUSES + ('paid',)).exists()):
+                    order.payment_method = 'wechat' if order.fulfillment_type == 'delivery' else 'offline'
+                    order.save(update_fields=['payment_method'])
+                evidence(order, 'uncreated_payment_closed', 'resolved', reason, actor=actor, payment=payment,
+                    facts={'provider_code': not_found_code, 'out_trade_no': payment.out_trade_no})
+                audit(actor, 'uncreated_payment_closed', order.pk, payment_id=str(payment.pk), provider_code=not_found_code)
+        elif failure is None:
+            try:
+                _apply_payment(order, payment, data)
+                evidence(order, 'payment_checked', 'verified', reason, actor=actor, payment=payment,
+                    facts=payment_facts(payment, data))
+            except GatewayError as exc:
+                failure = exc
+        if failure:
+            _error(payment, failure)
+            evidence(order, 'uncreated_payment_closed', 'unverified', reason, actor=actor, payment=payment,
+                facts={'error_code': failure.code})
+        finish_query(payment, failed=failure is not None)
+        invalidate_financial_cache(order)
+    if failure:
+        raise BusinessError(failure.safe_message, 'financial_verification_failed', status=409)
+    if not not_found_code and data and data.get('trade_state') not in ('CLOSED', 'REVOKED'):
+        raise BusinessError('支付服务方返回已有真实订单状态，已同步最新状态，请继续核验。', 'payment_exists_at_provider', status=409)
     return order

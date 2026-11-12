@@ -31,23 +31,25 @@ def filter_status(query, status, config):
 def visible_stall_query(mode='detail'):
     reviews = Review.objects.filter(stall_id=OuterRef('pk'), order__mode='live').order_by().values('stall_id')
     from .admission import public_listing_q
+    from .models import active_prep_q
+    now = timezone.now()
     query = Stall.objects.filter(public_listing_q())
     orders = Order.objects.filter(stall_id=OuterRef('pk')).order_by().values('stall_id')
-    def count_orders(**filters):
-        return Coalesce(Subquery(orders.filter(**filters).annotate(value=Count('pk')).values('value')[:1], output_field=IntegerField()), 0)
+    def count_orders(*q_args, **filters):
+        return Coalesce(Subquery(orders.filter(*q_args, **filters).annotate(value=Count('pk')).values('value')[:1], output_field=IntegerField()), 0)
     query = query.select_related('area', 'merchant', 'location', 'current_session').annotate(
-        prep_active_count=count_orders(status__in=('pending_payment', 'pending', 'preparing')),
+        prep_active_count=count_orders(active_prep_q(now=now)),
         rating_average=Subquery(reviews.annotate(value=Avg('rating')).values('value')[:1]),
         rating_count=Coalesce(Subquery(reviews.annotate(value=Count('pk')).values('value')[:1], output_field=IntegerField()), 0),
     )
     if mode == 'detail':
+        from .delivery import active_delivery_q
         return query.prefetch_related(
             Prefetch('products', queryset=Product.objects.filter(is_active=True).order_by('id')),
             Prefetch('delivery_points', queryset=DeliveryPoint.objects.order_by('id'), to_attr='_delivery_points'),
             Prefetch('reviews', queryset=Review.objects.filter(order__mode='live').select_related('user', 'order').order_by('-created_at', '-id')[:20], to_attr='_preview_reviews'),
         ).annotate(completed_count=count_orders(status='completed', mode='live'),
-            delivery_active_count=count_orders(fulfillment_type='delivery',
-                status__in=('pending_payment', 'pending', 'preparing', 'ready', 'delivering', 'arrived')))
+            delivery_active_count=count_orders(active_delivery_q(now=now)))
     if mode == 'summary':
         from .catalogue import available_products
         query = query.prefetch_related(Prefetch('products',

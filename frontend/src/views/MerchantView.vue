@@ -49,9 +49,14 @@ const loading = ref(true),
   metricsError = ref(""),
   ordersReady = ref(false),
   metricsLoading = ref(false),
-  days = ref(7);
+  days = ref(7),
+  analyticsMode = ref<"live" | "simulation" | null>(null);
 const stall = computed(() =>
   stalls.value.find((s) => s.id === selectedId.value),
+);
+const effectiveAnalyticsMode = computed<"live" | "simulation">(() =>
+  analyticsMode.value ||
+  (stall.value?.services?.mode === "simulation" ? "simulation" : "live"),
 );
 const discoveryOnly = computed(() => !!stall.value && !hasPickupEligibility(stall.value));
 const hasOrderHistory = computed(() => orders.value.length > 0 || (orderCounts.value.all || 0) > 0);
@@ -164,7 +169,7 @@ async function loadMetrics() {
   metricsLoading.value = true;
   try {
     const result = await api(
-      `/merchant/metrics?stall=${id}&days=${section.value === "analytics" ? days.value : 7}&mode=${stall.value?.services?.mode || "live"}`,
+      `/merchant/metrics?stall=${id}&days=${section.value === "analytics" ? days.value : 7}&mode=${effectiveAnalyticsMode.value}`,
     );
     if (
       currentContext(context) &&
@@ -343,8 +348,19 @@ watch([section, allowed], () => {
   }
   if (allowed.value) void loadMetrics();
 }, { immediate: true });
+watch(
+  () => `${selectedId.value ?? ""}:${stall.value?.services?.mode || ""}`,
+  () => {
+    analyticsMode.value = null;
+  },
+  { flush: "sync" },
+);
 function changePeriod(value: number) {
   days.value = value;
+  void loadMetrics();
+}
+function changeAnalyticsMode(value: "live" | "simulation") {
+  analyticsMode.value = value;
   void loadMetrics();
 }
 async function logout() {
@@ -441,7 +457,7 @@ onUnmounted(() => {
             <MerchantOrders v-if="orderWorkspace" :key="`${session.user!.id}:${stall.id}:${route.query.filter || 'active'}`" :stall="stall" :orders="orders" :orders-ready="ordersReady" :sync-error="error" :loading="refreshing" :initial-filter="String(route.query.filter || 'active')" :counts="orderCounts" @refresh="orderChanged" />
             <MerchantProducts v-else-if="section === 'products'" :key="stall.id" :stall="stall" :discovery-only="discoveryOnly" @refresh="mutationRefresh" />
             <MerchantMore v-else-if="section === 'more'" :stall="stall" :sellable="!!sellable" :discovery-only="discoveryOnly" />
-            <MerchantAnalytics v-else-if="section === 'analytics'" :metrics="metrics" :days="days" :error="metricsError" :loading="metricsLoading" @period="changePeriod" />
+            <MerchantAnalytics v-else-if="section === 'analytics'" :metrics="metrics" :days="days" :mode="effectiveAnalyticsMode" :can-switch-mode="!!session.config?.services_simulation_enabled || stall.services?.mode === 'simulation'" :error="metricsError" :loading="metricsLoading" @period="changePeriod" @mode="changeAnalyticsMode" />
             <MerchantReviews v-else-if="section === 'reviews'" :key="stall.id" :stall="stall" @refresh="mutationRefresh" />
             <MerchantStore v-else-if="section === 'store'" :key="`${session.user!.id}:${stall.id}`" :stall="stall" :orders="orders" :orders-ready="ordersReady" :discovery-only="discoveryOnly" @refresh="mutationRefresh" />
             <div id="notifications" :class="{ 'm-reminder-settings': section === 'more' }">

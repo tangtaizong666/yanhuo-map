@@ -1688,54 +1688,10 @@ function tasteValues(groups: Draft["taste_options"]) {
     font-size: 13px;
   }
 }
-</style>
 
-<style scoped>
 fieldset.editor-body {
   border: 0;
   margin: 0;
   min-width: 0;
-}
-
-.catalog-heading h2 small {
-  margin-left: 5px;
-  color: #927d68;
-  font-size: 13px;
-  font-weight: 400;
-}
-@media (max-width: 600px) {
-  .catalog-heading {
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 14px;
-  }
-  .catalog-heading h2 {
-    font-size: 19px;
-    margin: 0;
-    line-height: 1.4;
-  }
-  .catalog-top-actions {
-    flex: none;
-    gap: 6px;
-  }
-  .catalog-top-actions .catalog-outline {
-    display: none;
-  }
-  .catalog-top-actions .catalog-primary {
-    padding: 10px 12px;
-    font-size: 14px;
-  }
-  .catalog-tools {
-    margin-top: 14px;
-  }
-  .catalog-filters {
-    margin-bottom: 14px;
-  }
-  .product-info h3 {
-    font-size: 17px;
-  }
-  .product-info p {
-    font-size: 13px;
-  }
 }
 </style>

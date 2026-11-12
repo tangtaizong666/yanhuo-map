@@ -70,7 +70,7 @@ watch(
           ><span class="dish-preparation-duration">{{
             preparationLabel(stall.prep_minutes)
           }}</span
-          ><small>接单后更新</small></span
+          ><small>商家预估 · 接单后更新</small></span
         >
       </p>
     </div>

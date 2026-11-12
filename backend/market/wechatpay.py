@@ -18,11 +18,12 @@ import ssl
 import time
 from collections.abc import Mapping
 from datetime import datetime
+from functools import lru_cache
 from http.client import HTTPException
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
-from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
 
 from cryptography.exceptions import InvalidSignature, InvalidTag, UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes, serialization
@@ -105,6 +106,27 @@ def _identifier(value, maximum, minimum=1):
     return value
 
 
+@lru_cache(maxsize=64)
+def _load_rsa_private_key(raw: bytes) -> rsa.RSAPrivateKey:
+    key = serialization.load_pem_private_key(raw, password=None)
+    if not isinstance(key, rsa.RSAPrivateKey) or key.key_size < 2048:
+        raise ValueError('RSA key required')
+    return key
+
+
+@lru_cache(maxsize=64)
+def _load_rsa_public_key(raw: bytes) -> rsa.RSAPublicKey:
+    key = serialization.load_pem_public_key(raw)
+    if not isinstance(key, rsa.RSAPublicKey) or key.key_size < 2048:
+        raise ValueError('RSA key required')
+    return key
+
+
+@lru_cache(maxsize=1)
+def _ssl_context() -> ssl.SSLContext:
+    return ssl.create_default_context()
+
+
 class WechatPayClient:
     """Direct-merchant Native/H5; JSAPI and service-provider mode are not enabled.
 
@@ -142,18 +164,12 @@ class WechatPayClient:
         if not isinstance(keys, Mapping) or not keys or len(keys) > 10:
             raise ConfigurationError()
         try:
-            self._private_key = serialization.load_pem_private_key(
-                Path(config['private_key_path']).read_bytes(), password=None)
-            if not isinstance(self._private_key, rsa.RSAPrivateKey) or self._private_key.key_size < 2048:
-                raise ValueError('RSA key required')
+            self._private_key = _load_rsa_private_key(Path(config['private_key_path']).read_bytes())
             self._public_keys = {}
             for key_id, path in keys.items():
                 if not isinstance(key_id, str) or not re.fullmatch(r'PUB_KEY_ID_\d+', key_id):
                     raise ValueError('public key ID required')
-                key = serialization.load_pem_public_key(Path(path).read_bytes())
-                if not isinstance(key, rsa.RSAPublicKey) or key.key_size < 2048:
-                    raise ValueError('RSA key required')
-                self._public_keys[key_id] = key
+                self._public_keys[key_id] = _load_rsa_public_key(Path(path).read_bytes())
             self.timeout = float(config.get('timeout', 8))
             if not 1 <= self.timeout <= 15:
                 raise ValueError('invalid timeout')
@@ -161,7 +177,7 @@ class WechatPayClient:
             raise ConfigurationError() from None
         # Pinned WeChat key IDs allow overlapping keys during an operator-led rotation.
         self._preferred_public_key_id = next(iter(self._public_keys))
-        self._opener = build_opener(_NoRedirect(), HTTPSHandler(context=ssl.create_default_context()))
+        self._opener = build_opener(ProxyHandler({}), _NoRedirect(), HTTPSHandler(context=_ssl_context()))
 
     def _authorization(self, method, target, body):
         timestamp = str(int(time.time()))

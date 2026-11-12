@@ -128,6 +128,8 @@ def create_order(user, data):
             # Serialize admission with operator qualification changes. Replays are
             # returned above so revocation never creates a second reservation.
             stall.merchant = MerchantProfile.objects.select_for_update(no_key=True).get(pk=stall.merchant_id)
+            if not stall.is_demo and stall.merchant.user_id == user.pk:
+                raise BusinessError('商家账号不能在自己的正式摊位下单。', 'self_order_forbidden')
             from .reservation_limits import enforce_reservation_limits
             enforce_reservation_limits(user, stall, data['items'])
             config = SiteConfiguration.current()
