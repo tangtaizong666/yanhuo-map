@@ -338,7 +338,7 @@ test("unknown and stale receiving activity only explain risk and never disable o
   state.stalls[0].receiving_status = "unknown";
   await page.goto("/stalls/1/products/11");
   await expect(
-    page.getByText("暂无法确认接单页面状态", { exact: false }),
+    page.getByText("商家可能没在看接单页，回复或许较慢", { exact: false }),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: /加入餐袋/ })).toBeEnabled();
   state.stalls[0].receiving_seen_at = new Date(

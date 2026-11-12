@@ -43,7 +43,7 @@ const state = computed(() => {
   <p
     v-if="stall.can_order && state !== 'recent'"
     class="receiving-notice"
-    :class="{ compact }"
+    :class="{ 'is-compact': compact }"
     role="status"
   >
     <Clock3 :size="14" />
@@ -51,7 +51,7 @@ const state = computed(() => {
       >{{
         state === "stale"
           ? "商家接单页面近期未更新，可能回复较慢"
-          : "暂无法确认接单页面状态"
+          : "商家可能没在看接单页，回复或许较慢"
       }}<small v-if="!compact"
         >仍可下单；以商家接单结果为准，超时未接单会自动取消。</small
       ></span
@@ -82,9 +82,20 @@ const state = computed(() => {
   color: #735d47;
   font-size: 12px;
 }
-.receiving-notice.compact {
-  font-size: 11px;
-  padding: 7px 9px;
-  margin: 10px 0 0;
+.receiving-notice.is-compact {
+  align-items: center;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 6px 9px;
+  margin: 0;
+  border-radius: 9px;
+  text-align: left;
+}
+.receiving-notice.is-compact svg {
+  margin-top: 0;
+}
+.receiving-notice.is-compact span {
+  flex: 1;
+  min-width: 0;
 }
 </style>

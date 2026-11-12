@@ -64,6 +64,14 @@ function choose(mode: "open" | "all" | "follow") {
 .filter-chips {
   min-width: 0;
   gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.filter-chips::-webkit-scrollbar {
+  display: none;
+}
+.filter-chips button {
+  flex-shrink: 0;
 }
 .filter-chips button {
   display: flex;
@@ -110,9 +118,11 @@ function choose(mode: "open" | "all" | "follow") {
   .sort-control svg {
     display: none;
   }
+  .sort-control {
+    flex-shrink: 0;
+  }
   .sort-control select {
     font-size: 12px;
-    max-width: 73px;
   }
 }
 </style>

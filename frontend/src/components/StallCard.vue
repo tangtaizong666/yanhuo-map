@@ -354,7 +354,7 @@ defineEmits<{ follow: [stall: Stall] }>();
     display: grid;
     grid-template-columns: 112px 1fr;
     padding: 12px;
-    gap: 13px;
+    gap: 9px 13px;
     border-radius: 15px;
     overflow: visible;
   }
@@ -370,7 +370,8 @@ defineEmits<{ follow: [stall: Stall] }>();
     padding: 4px 5px;
   }
   .stall-body { display: contents; }
-  .stall-head-info { min-width: 0; }
+  .stall-head-info { min-width: 0; padding-right: 34px; }
+  .compact .stall-head-info { padding-right: 0; }
   .stall-menu-peek, .stall-bottom, .stall-receiving { grid-column: 1 / -1; }
   .stall-menu-peek { margin-top: 0; }
   .stall-desc { display: none; }
@@ -386,11 +387,14 @@ defineEmits<{ follow: [stall: Stall] }>();
   .follow-button {
     width: 44px;
     height: 44px;
-    top: auto;
-    bottom: 11px;
-    right: 10px;
+    top: 4px;
+    bottom: auto;
+    right: 4px;
     background: none;
     color: #b9aa98;
+  }
+  .compact .follow-button {
+    top: auto;
   }
   .stall-rating {
     margin-top: 7px;
@@ -410,10 +414,9 @@ defineEmits<{ follow: [stall: Stall] }>();
   }
   .stall-bottom {
     flex-wrap: wrap;
-    padding-top: 8px;
-    margin-top: 8px;
+    padding-top: 0;
+    margin-top: 0;
     justify-content: flex-start;
-    padding-right: 38px;
     gap: 7px;
     border-top: 0;
   }
@@ -436,7 +439,7 @@ defineEmits<{ follow: [stall: Stall] }>();
   }
   .stall-menu-peek {
     gap: 5px;
-    margin-top: 6px;
+    margin-top: 0;
   }
   .stall-menu-peek a {
     padding: 5px;

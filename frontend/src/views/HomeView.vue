@@ -1430,17 +1430,19 @@ onMounted(() =>
     padding-bottom: 4px;
   }
   .hero-photo {
-    left: 24%;
+    left: 40%;
   }
   .hero-photo img {
     object-position: 60% 50%;
   }
   .hero-photo:after {
+    /* Keep the headline on solid cream: it runs past the photo's left edge. */
     background: linear-gradient(
       90deg,
       #f8ead3,
-      #f8ead3b0 16%,
-      #f8ead320 64%,
+      #f8ead3f2 30%,
+      #f8ead399 50%,
+      #f8ead300 78%,
       #30180811
     );
   }

@@ -876,6 +876,12 @@ onUnmounted(() => {
   .map-list-controls {
     padding: 0 0 12px;
   }
+  .map-list-controls :deep(.discovery-filters) {
+    margin-bottom: 0;
+  }
+  .map-list-controls .filter-chips {
+    margin-top: 0;
+  }
   .map-results {
     padding: 0;
     overflow: visible;
