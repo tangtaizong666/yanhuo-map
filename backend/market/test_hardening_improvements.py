@@ -699,6 +699,46 @@ class HistoricalMigrationUpgradeTests(TransactionTestCase):
             self.assertTrue(default_storage.exists(expected_protected_rel))
             self.assertFalse(default_storage.exists(legacy_rel))
 
+    def test_0025_rollback_preserves_legacy_file_and_collision_writes_distinct_qr(self):
+        import importlib
+        from django.apps import apps as django_apps
+        from django.core.files.base import ContentFile
+        from django.core.files.storage import default_storage
+
+        mig0025 = importlib.import_module('market.migrations.0025_migrate_legacy_public_payment_qr')
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(MEDIA_ROOT=tmpdir):
+            _, _, _, stall, _ = fixtures()
+            legacy_rel = f'merchants/{stall.pk}/rollback-qr.jpg'
+            preexisting_qr_rel = f'merchants/{stall.pk}/qr-rollback-qr.jpg'
+            default_storage.save(legacy_rel, ContentFile(b'real-legacy-qr'))
+            default_storage.save(preexisting_qr_rel, ContentFile(b'other-preexisting-qr'))
+            Stall.objects.filter(pk=stall.pk).update(payment_qr_image=f'/media/{legacy_rel}')
+
+            # 1) Simulated mid-migration failure: DB rolls back and old public file is NOT deleted prematurely
+            from types import SimpleNamespace
+            fake_editor = SimpleNamespace(connection=connection)
+            with self.assertRaises(RuntimeError), transaction.atomic():
+                mig0025.migrate_legacy_public_payment_qr(django_apps, fake_editor)
+                raise RuntimeError('simulated_migration_abort')
+
+            stall.refresh_from_db()
+            self.assertEqual(stall.payment_qr_image, f'/media/{legacy_rel}')
+            self.assertTrue(default_storage.exists(legacy_rel))
+
+            # 2) Successful commit when qr-rollback-qr.jpg already exists writes a distinct qr-* file with exact bytes
+            with transaction.atomic():
+                mig0025.migrate_legacy_public_payment_qr(django_apps, fake_editor)
+
+            stall.refresh_from_db()
+            self.assertNotEqual(stall.payment_qr_image, f'/media/{preexisting_qr_rel}')
+            self.assertTrue(stall.payment_qr_image.startswith(f'/media/merchants/{stall.pk}/qr-'))
+            saved_rel = stall.payment_qr_image.removeprefix('/media/')
+            with default_storage.open(saved_rel, 'rb') as saved_fp:
+                self.assertEqual(saved_fp.read(), b'real-legacy-qr')
+            with default_storage.open(preexisting_qr_rel, 'rb') as pre_fp:
+                self.assertEqual(pre_fp.read(), b'other-preexisting-qr')
+            self.assertFalse(default_storage.exists(legacy_rel))
+
 
 @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL race test')
 class DailyQuotaPostgreSQLRaceTests(TransactionTestCase):
@@ -724,3 +764,59 @@ class DailyQuotaPostgreSQLRaceTests(TransactionTestCase):
             scope='amap_proxy', day=timezone.localdate()
         )
         self.assertEqual(counter.count, 3)
+
+    def test_concurrent_qr_cleanup_and_profile_revert_never_leaves_dangling_file(self):
+        from django.core.files.base import ContentFile
+        from django.core.files.storage import default_storage
+        from .merchant import _cleanup_unreferenced_stall_media
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(MEDIA_ROOT=tmpdir):
+            _, _, vendor, stall, _ = fixtures()
+            qr_a_rel = f'merchants/{stall.pk}/qr-race-a.jpg'
+            qr_b_rel = f'merchants/{stall.pk}/qr-race-b.jpg'
+            qr_a_url = f'{settings.MEDIA_URL}{qr_a_rel}'
+            qr_b_url = f'{settings.MEDIA_URL}{qr_b_rel}'
+            default_storage.save(qr_b_rel, ContentFile(b'beta'))
+
+            for _ in range(8):
+                if not default_storage.exists(qr_a_rel):
+                    default_storage.save(qr_a_rel, ContentFile(b'alpha'))
+                Stall.objects.filter(pk=stall.pk).update(payment_qr_image=qr_b_url)
+                gate = Barrier(2)
+
+                def run_cleanup():
+                    close_old_connections()
+                    try:
+                        gate.wait(timeout=10)
+                        _cleanup_unreferenced_stall_media(stall.pk, qr_a_url, qr_a_rel)
+                    finally:
+                        connections.close_all()
+
+                def run_revert():
+                    close_old_connections()
+                    try:
+                        api = APIClient()
+                        api.force_authenticate(vendor)
+                        gate.wait(timeout=10)
+                        return api.patch(
+                            f'/api/v1/merchant/stalls/{stall.pk}/profile',
+                            {'payment_qr_image': qr_a_url},
+                            format='json',
+                        ).status_code
+                    finally:
+                        connections.close_all()
+
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    f_clean = pool.submit(run_cleanup)
+                    f_revert = pool.submit(run_revert)
+                    f_clean.result(timeout=30)
+                    status_code = f_revert.result(timeout=30)
+
+                stall.refresh_from_db()
+                if status_code == 200:
+                    self.assertEqual(stall.payment_qr_image, qr_a_url)
+                    self.assertTrue(default_storage.exists(qr_a_rel))
+                else:
+                    self.assertEqual(status_code, 400)
+                    self.assertEqual(stall.payment_qr_image, qr_b_url)
+                    self.assertFalse(default_storage.exists(qr_a_rel))

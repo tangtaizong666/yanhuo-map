@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 from PIL import Image, ImageOps, UnidentifiedImageError
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
-from django.db import transaction
+from django.db import DatabaseError, transaction
 from django.db.models import Count, Exists, F, IntegerField, OuterRef, Q, Sum, Subquery
 from django.db.models.functions import TruncDate
 from django.http import FileResponse, HttpResponseNotAllowed, HttpResponseNotFound
@@ -38,18 +38,20 @@ from .serializers import ProductSerializer, ReviewSerializer, StallSerializer
 logger = logging.getLogger(__name__)
 
 
-def _cleanup_unreferenced_stall_media(media_url_value, rel_path):
-    """Delete replaced stall QR/media only if no stall or product still references it."""
-    if (
-        Stall.objects.filter(
-            Q(payment_qr_image=media_url_value) | Q(image=media_url_value) | Q(arrival_image=media_url_value)
-        ).exists()
-        or Product.objects.filter(image=media_url_value).exists()
-    ):
-        return
+def _cleanup_unreferenced_stall_media(stall_id, media_url_value, rel_path):
+    """Delete replaced stall QR/media under the stall row lock so concurrent reverts stay atomic."""
     try:
-        default_storage.delete(rel_path)
-    except OSError:
+        with transaction.atomic():
+            list(Stall.objects.select_for_update().filter(pk=stall_id).values_list('pk', flat=True))
+            if (
+                Stall.objects.filter(
+                    Q(payment_qr_image=media_url_value) | Q(image=media_url_value) | Q(arrival_image=media_url_value)
+                ).exists()
+                or Product.objects.filter(image=media_url_value).exists()
+            ):
+                return
+            default_storage.delete(rel_path)
+    except (DatabaseError, OSError):
         logger.warning('Failed to delete unreferenced media %s', rel_path, exc_info=True)
 from .services import audit
 from .views import merchant_stall, stall_context
@@ -340,7 +342,10 @@ def profile(request, stall_id):
                 stall_media_prefix = f'{settings.MEDIA_URL}merchants/{stall.pk}/'
                 if old_owned and old_owned.startswith(stall_media_prefix):
                     old_rel = old_owned.removeprefix(settings.MEDIA_URL)
-                    transaction.on_commit(lambda url=old_owned, rel=old_rel: _cleanup_unreferenced_stall_media(url, rel))
+                    sid = stall.pk
+                    transaction.on_commit(
+                        lambda stall_pk=sid, url=old_owned, rel=old_rel: _cleanup_unreferenced_stall_media(stall_pk, url, rel)
+                    )
         for key, value in values.items():
             setattr(stall, key, value)
         if values:
