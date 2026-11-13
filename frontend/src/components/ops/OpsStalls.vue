@@ -5,6 +5,10 @@ import { api } from "../../lib/api";
 import { notify } from "../../lib/notify";
 import { useSession } from "../../stores/session";
 
+const props = defineProps<{
+  refreshTick?: number;
+}>();
+
 const emit = defineEmits<{
   (e: "changed"): void;
 }>();
@@ -93,9 +97,12 @@ async function load() {
   }
 }
 
-watch([filterArea, filterTier, filterVisibility, filterEligibility], () => {
-  void load();
-});
+watch(
+  [filterArea, filterTier, filterVisibility, filterEligibility, () => props.refreshTick],
+  () => {
+    void load();
+  },
+);
 
 function syncDrafts(stall: any) {
   const m = stall.merchant;
@@ -154,26 +161,37 @@ function useDraftAddress(stall: any) {
   stallDraft.address = stall.location_draft_address;
 }
 
+function parseCoord(val: unknown) {
+  if (val === "" || val === null || val === undefined || typeof val === "boolean") {
+    return Number.NaN;
+  }
+  return Number(val);
+}
+
 async function saveMerchant(stall: any) {
   if (savingMerchant.value) return;
   savingMerchant.value = true;
   drawerError.value = "";
   try {
+    const canEditWechatAccount =
+      !!session.user?.is_superuser || session.hasOpsPerm("resolve_payments");
+    const body: Record<string, any> = {
+      business_name: merchantDraft.business_name.trim(),
+      contact_phone: merchantDraft.contact_phone.trim(),
+      qualification_tier: merchantDraft.qualification_tier,
+      is_verified: merchantDraft.is_verified,
+      license_number: merchantDraft.license_number.trim(),
+      licensed_business_address: merchantDraft.licensed_business_address.trim(),
+      food_preparation_address: merchantDraft.food_preparation_address.trim(),
+      license_valid_until: merchantDraft.license_valid_until || null,
+      qualification_note: merchantDraft.qualification_note.trim(),
+    };
+    if (canEditWechatAccount) {
+      body.wechat_pay_account = merchantDraft.wechat_pay_account.trim() || null;
+    }
     await api(`/ops/merchants/${stall.merchant_id}`, {
       method: "PATCH",
-      body: {
-        business_name: merchantDraft.business_name.trim(),
-        contact_phone: merchantDraft.contact_phone.trim(),
-        qualification_tier: merchantDraft.qualification_tier,
-        is_verified: merchantDraft.is_verified,
-        license_number: merchantDraft.license_number.trim(),
-        licensed_business_address:
-          merchantDraft.licensed_business_address.trim(),
-        food_preparation_address: merchantDraft.food_preparation_address.trim(),
-        license_valid_until: merchantDraft.license_valid_until || null,
-        wechat_pay_account: merchantDraft.wechat_pay_account.trim() || null,
-        qualification_note: merchantDraft.qualification_note.trim(),
-      },
+      body,
     });
     notify("经营主体与证照核验信息已更新", "success");
     await load();
@@ -198,14 +216,19 @@ async function saveStall(stall: any) {
       public_phone_enabled: stallDraft.public_phone_enabled,
       transaction_enabled: stallDraft.transaction_enabled,
       delivery_approved: stallDraft.delivery_approved,
-      delivery_enabled: stallDraft.delivery_enabled,
       delivery_point_ids: stallDraft.delivery_point_ids,
     };
     if (stallDraft.update_location) {
+      const lat = parseCoord(stallDraft.latitude);
+      const lng = parseCoord(stallDraft.longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        drawerError.value = "请填写有效的取餐位置经纬度数值。";
+        return;
+      }
       body.location = {
         address: stallDraft.address.trim(),
-        latitude: Number(stallDraft.latitude),
-        longitude: Number(stallDraft.longitude),
+        latitude: lat,
+        longitude: lng,
       };
     }
     await api(`/ops/stalls/${stall.id}`, {
@@ -323,7 +346,9 @@ onMounted(() => {
             >
               {{
                 stall.transaction_eligible
-                  ? "可预约自取"
+                  ? stall.capabilities?.mode === "simulation"
+                    ? "演练可自取"
+                    : "可预约自取"
                   : "仅地图展示"
               }}
             </span>
@@ -391,6 +416,12 @@ onMounted(() => {
                       stall.merchant.trade_reason ||
                       "主体已满足持证固定门店交易准入要求。"
                     }}
+                    <span
+                      v-if="stall.is_demo && session.config?.demo_mode"
+                      style="display: block; margin-top: 2px; color: #24372f"
+                    >
+                      （当前摊位为校园示例摊位，仅在演示环境开放模拟下单演练，不发起真实扣款）
+                    </span>
                   </p>
                 </div>
               </div>
@@ -608,6 +639,8 @@ onMounted(() => {
                       <input
                         v-model.number="stallDraft.latitude"
                         type="number"
+                        min="-90"
+                        max="90"
                         step="any"
                         class="o-input"
                         required
@@ -618,6 +651,8 @@ onMounted(() => {
                       <input
                         v-model.number="stallDraft.longitude"
                         type="number"
+                        min="-180"
+                        max="180"
                         step="any"
                         class="o-input"
                         required

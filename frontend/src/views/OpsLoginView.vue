@@ -43,20 +43,13 @@ async function submit() {
   busy.value = true;
   session.beginIdentityChange();
   try {
-    const loggedIn = await api<User>("/auth/login", {
+    await api<User>("/ops/auth/login", {
       method: "POST",
       body: {
         username: trimmed,
         password: password.value,
       },
     });
-    if (!loggedIn?.is_staff) {
-      await api("/auth/logout", { method: "POST" }).catch(() => {});
-      await session.refreshUser();
-      error.value =
-        "该账号不是平台管理员账号。学生与商家请前往普通登录入口。";
-      return;
-    }
     await session.refreshUser();
     session.setConsumerPreview(false);
     notify("欢迎进入烟火地图平台管理台", "success");

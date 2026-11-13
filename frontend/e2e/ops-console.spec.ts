@@ -98,6 +98,20 @@ async function mountOpsFixture(page: Page) {
       });
     }
     if (path === "/auth/me") return send(currentUser);
+    if (path === "/ops/auth/login" && req.method() === "POST") {
+      const body = req.postDataJSON();
+      if (body.username === "admin") {
+        currentUser = adminAccount;
+        return send(currentUser);
+      }
+      return send(
+        {
+          detail: "该账号不是平台管理员账号。学生与商家请前往普通登录入口。",
+          code: "forbidden",
+        },
+        403,
+      );
+    }
     if (path === "/auth/login" && req.method() === "POST") {
       const body = req.postDataJSON();
       if (body.username === "admin") {

@@ -12,6 +12,15 @@ import { api, statusText } from "../../lib/api";
 import { notify } from "../../lib/notify";
 import { useSession } from "../../stores/session";
 
+const props = defineProps<{
+  refreshTick?: number;
+  reconciliationMerchants?: Array<{
+    id: number;
+    business_name: string;
+    username: string;
+  }>;
+}>();
+
 const emit = defineEmits<{
   (e: "changed"): void;
 }>();
@@ -54,10 +63,15 @@ const finForm = reactive({
   operation_key: "",
 });
 
-const todayIso = new Date().toISOString().slice(0, 10);
-const weekAgoIso = new Date(Date.now() - 6 * 86400_000)
-  .toISOString()
-  .slice(0, 10);
+function localDateIso(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+const todayIso = localDateIso();
+const weekAgoIso = localDateIso(new Date(Date.now() - 6 * 86400_000));
 const exportBusy = ref(false);
 const exportForm = reactive({
   merchant_id: "",
@@ -73,15 +87,31 @@ function money(cents: number | null | undefined) {
   return `¥${((cents || 0) / 100).toFixed(2)}`;
 }
 
+function syncMerchants(rows: any[]) {
+  if (!rows?.length) return;
+  merchants.value = rows;
+  if (!exportForm.merchant_id && merchants.value.length) {
+    exportForm.merchant_id = String(merchants.value[0].id);
+  }
+}
+
+watch(
+  () => props.reconciliationMerchants,
+  (rows) => {
+    if (rows?.length) syncMerchants(rows);
+  },
+  { immediate: true },
+);
+
 async function loadMeta() {
+  if (props.reconciliationMerchants?.length) {
+    syncMerchants(props.reconciliationMerchants);
+  }
   if (!session.hasOpsPerm("view_merchants")) return;
   try {
     const res = await api<{ merchants: any[]; stalls: any[] }>("/ops/stalls");
-    merchants.value = res.merchants || [];
-    stalls.value = res.stalls || [];
-    if (!exportForm.merchant_id && merchants.value.length) {
-      exportForm.merchant_id = String(merchants.value[0].id);
-    }
+    if (res.merchants?.length) syncMerchants(res.merchants);
+    if (res.stalls?.length) stalls.value = res.stalls;
   } catch {
     /* Optional filter options */
   }
@@ -113,10 +143,14 @@ async function loadOrders(append = false) {
       results: any[];
       next: string | null;
       counts: Record<string, number>;
+      filter_stalls?: Array<{ id: number; name: string }>;
     }>(`/ops/orders?${params.toString()}`);
 
     counts.value = res.counts || {};
     nextCursor.value = res.next || null;
+    if (res.filter_stalls?.length && !stalls.value.length) {
+      stalls.value = res.filter_stalls;
+    }
     orders.value = append
       ? [...orders.value, ...(res.results || [])]
       : res.results || [];
@@ -128,7 +162,7 @@ async function loadOrders(append = false) {
   }
 }
 
-watch([filterTab, modeFilter, stallFilter], () => {
+watch([filterTab, modeFilter, stallFilter, () => props.refreshTick], () => {
   void loadOrders(false);
 });
 
@@ -203,6 +237,10 @@ async function exportCsv() {
   if (exportBusy.value) return;
   if (!exportForm.merchant_id) {
     notify("请先选择要导出对账单的经营主体。", "error");
+    return;
+  }
+  if (!exportForm.starts_on || !exportForm.ends_on || exportForm.starts_on > exportForm.ends_on) {
+    notify("开始日期不能晚于结束日期，请重新选择对账区间。", "error");
     return;
   }
   exportBusy.value = true;
@@ -308,6 +346,14 @@ onMounted(() => {
       </form>
     </section>
 
+    <div
+      v-if="!session.hasOpsPerm('view_orders')"
+      class="o-card o-empty"
+    >
+      当前账号仅授权对账单导出，未授予订单详情巡检权限。
+    </div>
+
+    <template v-else>
     <section class="o-card">
       <div class="o-card-header">
         <div>
@@ -653,5 +699,6 @@ onMounted(() => {
         </button>
       </div>
     </div>
+    </template>
   </div>
 </template>

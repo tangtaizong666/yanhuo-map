@@ -152,6 +152,7 @@ class AdminLoginLimitStatusMiddleware:
 PRIVATE_API_PREFIXES = (
     '/api/v1/config',
     '/api/v1/auth/',
+    '/api/v1/ops/',
     '/api/v1/orders',
     '/api/v1/merchant/',
     '/api/v1/payments/',

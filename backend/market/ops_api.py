@@ -12,7 +12,7 @@ import uuid
 from datetime import timedelta
 
 from django.conf import settings
-from django.contrib.auth import get_user_model
+from django.contrib.auth import authenticate, get_user_model, login
 from django.core import signing
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
@@ -20,9 +20,11 @@ from django.db.models import Count, Exists, OuterRef, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
+from django.views.decorators.debug import sensitive_post_parameters
 from rest_framework import serializers
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import Throttled
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from .admission import (
@@ -32,7 +34,7 @@ from .admission import (
     new_trade_eligible,
     pickup_eligibility_reason,
 )
-from .auth_limits import TrustedUserRateThrottle
+from .auth_limits import LoginRateLimited, TrustedUserRateThrottle, login_attempt
 from .errors import BusinessError
 from .financial_export import reconciliation_export
 from .list_api import CURSOR_SALT, scope_orders
@@ -63,9 +65,9 @@ from .reconciliation import (
     verify_external_refund,
 )
 from .runtime_health import operations_status
-from .serializers import OrderSerializer
+from .serializers import OrderSerializer, user_data
 from .services import audit
-from .views import order_query
+from .views import csrf, order_query
 
 OPS_CURSOR_SALT = CURSOR_SALT + '.ops'
 
@@ -371,6 +373,42 @@ def _serialize_application(app: MerchantApplication):
     }
 
 
+@sensitive_post_parameters('password')
+@api_view(['POST'])
+@permission_classes([AllowAny])
+@throttle_classes([])
+def ops_login_view(request):
+    csrf(request)
+    username = request.data.get('username', '')
+    password = request.data.get('password', '')
+    if not isinstance(username, str) or not isinstance(password, str) or len(username) > 150 or len(password) > 128:
+        raise BusinessError('账号或密码格式不正确。', status=400)
+
+    def _authenticate_staff():
+        candidate = authenticate(request, username=username, password=password)
+        if candidate is None:
+            return None
+        if not (candidate.is_active and candidate.is_staff):
+            raise DjangoValidationError(
+                '该账号不是平台管理员账号。学生与商家请前往普通登录入口。',
+                code='non_staff',
+            )
+        return candidate
+
+    try:
+        user = login_attempt(request, username, _authenticate_staff)
+    except LoginRateLimited as exc:
+        raise Throttled(wait=exc.retry_after, detail='登录失败次数过多，请稍后再试。') from None
+    except DjangoValidationError as exc:
+        raise BusinessError(exc.messages[0], 'forbidden', status=403) from None
+
+    if not user:
+        raise BusinessError('账号或密码不正确。', 'invalid_credentials', status=400)
+    login(request, user)
+    audit(user, 'ops_login', f'auth.User:{user.pk}')
+    return Response(user_data(user))
+
+
 @api_view(['GET', 'PATCH'])
 @permission_classes([IsAuthenticated])
 @throttle_classes([TrustedUserRateThrottle])
@@ -450,9 +488,23 @@ def overview(request):
         mode,
     )
 
+    reconciliation_merchants = (
+        [
+            {
+                'id': m.pk,
+                'business_name': m.business_name,
+                'username': m.user.username,
+            }
+            for m in MerchantProfile.objects.select_related('user').order_by('id')
+        ]
+        if perms.get('export_reconciliation')
+        else []
+    )
+
     return Response(
         {
             'permissions': perms,
+            'reconciliation_merchants': reconciliation_merchants,
             'config': {
                 'stale_minutes': cfg.stale_minutes,
                 'pending_minutes': cfg.pending_minutes,
@@ -925,6 +977,12 @@ def area_detail_view(request, area_id):
     data = form.validated_data
     with transaction.atomic():
         area = get_object_or_404(Area.objects.select_for_update(), pk=area_id)
+        if (
+            'is_demo' in data
+            and data['is_demo'] != area.is_demo
+            and (area.stalls.exists() or area.delivery_points.exists())
+        ):
+            raise BusinessError('已有摊位或交接点的校园区域不能切换示例属性。', 'area_in_use', status=409)
         changed = []
         for field in ('name', 'subtitle', 'latitude', 'longitude', 'is_demo'):
             if field in data:
@@ -1000,6 +1058,12 @@ def delivery_point_detail_view(request, point_id):
     data = form.validated_data
     with transaction.atomic():
         point = get_object_or_404(DeliveryPoint.objects.select_for_update(), pk=point_id)
+        if point.is_simulation:
+            raise BusinessError(
+                '系统演练交接点由模拟环境自动维护，不支持手动修改或启停。',
+                'simulation_point_managed',
+                status=400,
+            )
         changed = []
         if 'area_id' in data and data['area_id'] != point.area_id:
             area = get_object_or_404(Area, pk=data['area_id'])
@@ -1170,11 +1234,16 @@ def orders_view(request):
             salt=OPS_CURSOR_SALT,
             compress=True,
         )
+    filter_stalls = [
+        {'id': s.pk, 'name': s.name}
+        for s in Stall.objects.order_by('id')
+    ]
     return Response(
         {
             'results': [_serialize_ops_order_summary(row, request) for row in rows[:size]],
             'next': next_cursor,
             'counts': counts,
+            'filter_stalls': filter_stalls,
         },
         headers={'Cache-Control': 'private, no-store'},
     )
@@ -1242,7 +1311,10 @@ def financial_resolution_view(request, order_id):
 def reconciliation_export_view(request):
     require_staff(request.user)
     require_operator(request.user, 'market.export_financial_reconciliation')
-    merchant_id = serializers.IntegerField(min_value=1).run_validation(request.query_params.get('merchant_id'))
+    raw_merchant_id = request.query_params.get('merchant_id')
+    if raw_merchant_id in (None, ''):
+        raise BusinessError('请选择要导出对账单的经营主体。', 'invalid_merchant', status=400)
+    merchant_id = serializers.IntegerField(min_value=1).run_validation(raw_merchant_id)
     get_object_or_404(MerchantProfile, pk=merchant_id)
     starts_on = parse_date(request.query_params.get('starts_on') or '')
     ends_on = parse_date(request.query_params.get('ends_on') or '')
@@ -1440,8 +1512,8 @@ def user_detail_view(request, user_id):
     User = get_user_model()
     with transaction.atomic():
         target = get_object_or_404(User.objects.select_for_update(), pk=user_id)
-        if target.is_superuser and not request.user.is_superuser:
-            raise BusinessError('普通运营人员不能修改超级管理员账号。', 'forbidden', status=403)
+        if (target.is_superuser or target.is_staff) and not request.user.is_superuser:
+            raise BusinessError('仅超级管理员可修改或停用平台管理员账号。', 'forbidden', status=403)
         if 'is_active' in data and not data['is_active']:
             if target.pk == request.user.pk:
                 raise BusinessError('不能停用当前正在使用的管理员账号。', 'self_deactivation_forbidden', status=400)

@@ -1,9 +1,13 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from "vue";
+import { onMounted, reactive, ref, watch } from "vue";
 import { MapPin, Plus, RefreshCw } from "lucide-vue-next";
 import { api } from "../../lib/api";
 import { notify } from "../../lib/notify";
 import { useSession } from "../../stores/session";
+
+const props = defineProps<{
+  refreshTick?: number;
+}>();
 
 const session = useSession();
 const loading = ref(true);
@@ -53,18 +57,38 @@ async function load() {
   }
 }
 
+function parseCoord(val: unknown) {
+  if (val === "" || val === null || val === undefined || typeof val === "boolean") {
+    return Number.NaN;
+  }
+  return Number(val);
+}
+
+watch(
+  () => props.refreshTick,
+  () => {
+    void load();
+  },
+);
+
 async function createArea() {
   if (areaBusy.value) return;
   areaBusy.value = true;
   areaError.value = "";
   try {
+    const lat = parseCoord(newArea.latitude);
+    const lng = parseCoord(newArea.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      areaError.value = "请填写有效的中心经纬度数值。";
+      return;
+    }
     await api("/ops/areas", {
       method: "POST",
       body: {
         name: newArea.name.trim(),
         subtitle: newArea.subtitle.trim(),
-        latitude: Number(newArea.latitude),
-        longitude: Number(newArea.longitude),
+        latitude: lat,
+        longitude: lng,
         ...(session.config?.demo_mode ? { is_demo: newArea.is_demo } : {}),
       },
     });
@@ -90,6 +114,12 @@ function startEditArea(area: any) {
 
 async function saveArea(areaId: number) {
   if (areaBusy.value) return;
+  const lat = parseCoord(areaDraft.latitude);
+  const lng = parseCoord(areaDraft.longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    notify("请填写有效的经纬度数值。", "error");
+    return;
+  }
   areaBusy.value = true;
   try {
     await api(`/ops/areas/${areaId}`, {
@@ -97,8 +127,8 @@ async function saveArea(areaId: number) {
       body: {
         name: areaDraft.name.trim(),
         subtitle: areaDraft.subtitle.trim(),
-        latitude: Number(areaDraft.latitude),
-        longitude: Number(areaDraft.longitude),
+        latitude: lat,
+        longitude: lng,
       },
     });
     notify("区域信息已更新", "success");
@@ -126,14 +156,20 @@ async function createPoint(areaId: number) {
   pointBusy.value = true;
   pointError.value = "";
   try {
+    const lat = parseCoord(newPoint.latitude);
+    const lng = parseCoord(newPoint.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      pointError.value = "请填写有效的经纬度数值。";
+      return;
+    }
     await api("/ops/delivery-points", {
       method: "POST",
       body: {
         area_id: areaId,
         name: newPoint.name.trim(),
         address: newPoint.address.trim(),
-        latitude: Number(newPoint.latitude),
-        longitude: Number(newPoint.longitude),
+        latitude: lat,
+        longitude: lng,
         is_active: newPoint.is_active,
       },
     });
@@ -221,6 +257,8 @@ onMounted(() => {
           <input
             v-model.number="newArea.latitude"
             type="number"
+            min="-90"
+            max="90"
             step="any"
             class="o-input"
             required
@@ -231,6 +269,8 @@ onMounted(() => {
           <input
             v-model.number="newArea.longitude"
             type="number"
+            min="-180"
+            max="180"
             step="any"
             class="o-input"
             required
@@ -317,6 +357,8 @@ onMounted(() => {
             <input
               v-model.number="areaDraft.latitude"
               type="number"
+              min="-90"
+              max="90"
               step="any"
               class="o-input"
               required
@@ -327,6 +369,8 @@ onMounted(() => {
             <input
               v-model.number="areaDraft.longitude"
               type="number"
+              min="-180"
+              max="180"
               step="any"
               class="o-input"
               required
@@ -371,6 +415,8 @@ onMounted(() => {
             <input
               v-model.number="newPoint.latitude"
               type="number"
+              min="-90"
+              max="90"
               step="any"
               class="o-input"
               required
@@ -381,6 +427,8 @@ onMounted(() => {
             <input
               v-model.number="newPoint.longitude"
               type="number"
+              min="-180"
+              max="180"
               step="any"
               class="o-input"
               required
@@ -426,15 +474,15 @@ onMounted(() => {
               <div class="o-item-top">
                 <div class="o-item-title">
                   <strong>{{ pt.name }}</strong>
-                  <span class="o-badge" :class="pt.is_active ? 'ok' : ''">
+                  <span v-if="pt.is_simulation" class="o-badge warn">
+                    演练交接点（随模拟开关生效）
+                  </span>
+                  <span v-else class="o-badge" :class="pt.is_active ? 'ok' : ''">
                     {{ pt.is_active ? "已启用" : "已停用" }}
                   </span>
-                  <span v-if="pt.is_simulation" class="o-badge warn"
-                    >演练交接点</span
-                  >
                 </div>
                 <button
-                  v-if="session.hasOpsPerm('manage_delivery_points')"
+                  v-if="!pt.is_simulation && session.hasOpsPerm('manage_delivery_points')"
                   type="button"
                   class="o-btn"
                   @click="togglePoint(pt)"

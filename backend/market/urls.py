@@ -43,6 +43,7 @@ urlpatterns = [
     path('merchant/orders/<uuid:order_id>/action', views.merchant_order_action), path('merchant/metrics', merchant.metrics),
     path('merchant/orders/<uuid:order_id>/refund', payment_views.refund),
     path('merchant/orders/<uuid:order_id>/refunds/simulate', payment_views.simulate_refund),
+    path('ops/auth/login', ops_api.ops_login_view),
     path('ops/overview', ops_api.overview),
     path('ops/applications', ops_api.applications),
     path('ops/applications/<int:application_id>/review', ops_api.review_application_view),

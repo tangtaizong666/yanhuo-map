@@ -5,6 +5,10 @@ import { api } from "../../lib/api";
 import { notify } from "../../lib/notify";
 import { useSession } from "../../stores/session";
 
+const props = defineProps<{
+  refreshTick?: number;
+}>();
+
 const emit = defineEmits<{
   (e: "changed"): void;
 }>();
@@ -64,7 +68,7 @@ async function load() {
   }
 }
 
-watch(statusFilter, () => {
+watch([statusFilter, () => props.refreshTick], () => {
   void load();
 });
 

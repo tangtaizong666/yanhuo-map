@@ -5,6 +5,10 @@ import { api } from "../../lib/api";
 import { notify } from "../../lib/notify";
 import { useSession } from "../../stores/session";
 
+const props = defineProps<{
+  refreshTick?: number;
+}>();
+
 const session = useSession();
 const subTab = ref<"users" | "audit">("users");
 
@@ -77,8 +81,17 @@ watch(auditAction, () => {
 });
 
 watch(subTab, (next) => {
-  if (next === "audit" && !logs.value.length) void loadAudit();
+  if (next === "audit") void loadAudit();
+  else void loadUsers();
 });
+
+watch(
+  () => props.refreshTick,
+  () => {
+    if (subTab.value === "audit") void loadAudit();
+    else void loadUsers();
+  },
+);
 
 async function toggleUserActive(u: any) {
   if (busyUserId.value !== null) return;
@@ -115,9 +128,9 @@ onMounted(() => {
     <section class="o-card">
       <div class="o-card-header">
         <div>
-          <h2>平台账号治理与不可篡改审计日志</h2>
+          <h2>平台账号治理与管理操作审计日志</h2>
           <p>
-            含进行中订单或未结清资金记录的账号受安全保护不可停用；所有管理端写操作均自动记入审计轨迹。
+            含进行中订单或未结清资金记录的账号受安全保护不可停用；关键治理与交易操作均自动记入审计日志以供追溯。
           </p>
         </div>
         <div class="o-actions-row">
@@ -189,6 +202,7 @@ onMounted(() => {
             <button
               type="button"
               class="o-btn"
+              aria-label="刷新账号列表"
               :disabled="usersLoading"
               @click="loadUsers"
             >
@@ -225,6 +239,7 @@ onMounted(() => {
               v-if="
                 session.hasOpsPerm('manage_users') &&
                 !u.is_superuser &&
+                (!u.is_staff || session.user?.is_superuser) &&
                 u.id !== session.user?.id
               "
               type="button"
@@ -278,6 +293,15 @@ onMounted(() => {
             />
             <button type="button" class="o-btn" @click="loadAudit">
               <Search :size="15" /> 筛选
+            </button>
+            <button
+              type="button"
+              class="o-btn"
+              aria-label="刷新审计日志"
+              :disabled="auditLoading"
+              @click="loadAudit"
+            >
+              <RefreshCw :size="15" /> 刷新
             </button>
           </div>
         </div>

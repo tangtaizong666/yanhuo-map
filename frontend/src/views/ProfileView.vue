@@ -315,7 +315,14 @@ async function deleteAccount() {
           <h2>{{ session.user.display_name || session.user.username }}</h2>
           <p>@{{ session.user.username }}</p>
           <span class="identity-caption"
-            >校园寻味家 <Star :size="11" fill="currentColor"
+            >{{
+              session.user.is_staff
+                ? "平台管理员"
+                : session.user.is_merchant
+                  ? "认证摊主"
+                  : "校园寻味家"
+            }}
+            <Star :size="11" fill="currentColor"
           /></span>
           <div class="profile-stats">
             <button @click="section = 'follows'" :aria-busy="followsLoading">
@@ -618,8 +625,14 @@ async function deleteAccount() {
             <p class="muted section-description">
               注销后账号将停用，个人识别信息将匿名化，必要的交易记录会保留。请先完成或取消进行中的订单；商家与运营账号不支持在此注销。
             </p>
+            <p
+              v-if="session.user.is_staff || session.user.is_merchant"
+              class="muted"
+            >
+              当前账号具有平台管理或经营主体档案，如需变更账号状态请通过平台治理流程办理。
+            </p>
             <button
-              v-if="!deletionOpen"
+              v-else-if="!deletionOpen"
               class="delete-toggle"
               @click="deletionOpen = true"
             >

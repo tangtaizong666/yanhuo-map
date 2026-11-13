@@ -525,3 +525,141 @@ class OpsGovernanceApiTests(TestCase):
         )
         self.assertEqual(allowed_pay.status_code, 200, allowed_pay.data)
         self.assertEqual(allowed_pay.data['merchant']['wechat_pay_account'], 'wx_acct_verified')
+
+    def test_ops_login_rejects_non_staff_without_clobbering_existing_session(self):
+        csrf_client = APIClient(enforce_csrf_checks=True)
+        csrf_res = csrf_client.get('/api/v1/auth/csrf')
+        self.assertEqual(csrf_res.status_code, 200)
+        token = csrf_res.data['csrfToken']
+
+        # Log in as student on the normal endpoint first (simulating an open student tab)
+        stu_login = csrf_client.post(
+            '/api/v1/auth/login',
+            {'username': self.student.username, 'password': 'DemoStrong123'},
+            format='json',
+            HTTP_X_CSRFTOKEN=token,
+        )
+        self.assertEqual(stu_login.status_code, 200)
+        token = csrf_client.get('/api/v1/auth/csrf').data['csrfToken']
+
+        # Attempting merchant login on /ops/auth/login must fail with 403 BEFORE login(),
+        # leaving the existing student session untouched!
+        vendor_ops_attempt = csrf_client.post(
+            '/api/v1/ops/auth/login',
+            {'username': self.vendor.username, 'password': 'DemoStrong123'},
+            format='json',
+            HTTP_X_CSRFTOKEN=token,
+        )
+        self.assertEqual(vendor_ops_attempt.status_code, 403)
+        self.assertEqual(vendor_ops_attempt.data['code'], 'forbidden')
+        self.assertEqual(vendor_ops_attempt['Cache-Control'], 'private, no-store')
+
+        me_after = csrf_client.get('/api/v1/auth/me')
+        self.assertEqual(me_after.json()['username'], self.student.username)
+
+        # Valid admin credentials succeed and audit ops_login
+        admin_login = csrf_client.post(
+            '/api/v1/ops/auth/login',
+            {'username': self.admin_user.username, 'password': 'password123'},
+            format='json',
+            HTTP_X_CSRFTOKEN=token,
+        )
+        self.assertEqual(admin_login.status_code, 200)
+        self.assertTrue(admin_login.data['is_staff'])
+        self.assertTrue(
+            AuditLog.objects.filter(
+                actor=self.admin_user,
+                action='ops_login',
+                target=f'auth.User:{self.admin_user.pk}',
+            ).exists()
+        )
+
+    def test_peer_staff_protection_simulation_point_guard_and_scoped_reconciliation_meta(self):
+        user_mod = User.objects.create_user('ops_user_mod', password='password123', is_staff=True)
+        user_mod.user_permissions.add(
+            Permission.objects.get(content_type__app_label='auth', codename='view_user'),
+            Permission.objects.get(content_type__app_label='auth', codename='change_user'),
+        )
+        self.auth(user_mod)
+
+        # Peer staff cannot be deactivated or renamed by non-superuser user_mod
+        peer_block = self.api.patch(
+            f'/api/v1/ops/users/{self.readonly_staff.pk}',
+            {'is_active': False},
+            format='json',
+        )
+        self.assertEqual(peer_block.status_code, 403)
+        self.assertEqual(peer_block.data['code'], 'forbidden')
+
+        peer_rename = self.api.patch(
+            f'/api/v1/ops/users/{self.readonly_staff.pk}',
+            {'display_name': '被篡改管理员'},
+            format='json',
+        )
+        self.assertEqual(peer_rename.status_code, 403)
+
+        # Superuser can deactivate and reactivate peer staff
+        self.auth(self.admin_user)
+        su_deactivate = self.api.patch(
+            f'/api/v1/ops/users/{self.readonly_staff.pk}',
+            {'is_active': False},
+            format='json',
+        )
+        self.assertEqual(su_deactivate.status_code, 200)
+        self.assertFalse(su_deactivate.data['user']['is_active'])
+        self.api.patch(
+            f'/api/v1/ops/users/{self.readonly_staff.pk}',
+            {'is_active': True},
+            format='json',
+        )
+
+        # System simulation delivery points cannot be manually toggled or moved across areas
+        area_b = Area.objects.create(name='北门片区', subtitle='', latitude=31.25, longitude=121.49, is_demo=True)
+        sim_pt_a = DeliveryPoint.objects.create(
+            area=self.stall.area,
+            name='模拟校园交接点',
+            address='仅供演练',
+            latitude=31.23,
+            longitude=121.47,
+            is_active=False,
+            is_simulation=True,
+        )
+        DeliveryPoint.objects.create(
+            area=area_b,
+            name='模拟校园交接点',
+            address='仅供演练',
+            latitude=31.25,
+            longitude=121.49,
+            is_active=False,
+            is_simulation=True,
+        )
+        sim_patch = self.api.patch(
+            f'/api/v1/ops/delivery-points/{sim_pt_a.pk}',
+            {'area_id': area_b.pk, 'is_active': True},
+            format='json',
+        )
+        self.assertEqual(sim_patch.status_code, 400)
+        self.assertEqual(sim_patch.data['code'], 'simulation_point_managed')
+
+        # Area with linked stalls/points cannot flip is_demo
+        area_flip = self.api.patch(
+            f'/api/v1/ops/areas/{self.stall.area_id}',
+            {'is_demo': not self.stall.area.is_demo},
+            format='json',
+        )
+        self.assertEqual(area_flip.status_code, 409)
+        self.assertEqual(area_flip.data['code'], 'area_in_use')
+
+        # Scoped reconciliation exporter gets reconciliation_merchants in overview without view_merchants
+        exporter = User.objects.create_user('ops_exporter_only', password='password123', is_staff=True)
+        exporter.user_permissions.add(
+            Permission.objects.get(content_type__app_label='market', codename='export_financial_reconciliation'),
+        )
+        self.auth(exporter)
+        ov = self.api.get('/api/v1/ops/overview')
+        self.assertEqual(ov.status_code, 200)
+        self.assertTrue(len(ov.data['reconciliation_merchants']) >= 1)
+
+        missing_mid = self.api.get('/api/v1/ops/reconciliation/export?starts_on=2026-10-01&ends_on=2026-10-07')
+        self.assertEqual(missing_mid.status_code, 400)
+        self.assertEqual(missing_mid.data['code'], 'invalid_merchant')

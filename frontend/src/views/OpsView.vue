@@ -127,6 +127,7 @@ const currentNav = computed(
 const effectiveMode = computed<"live" | "simulation">(
   () => mode.value || overviewData.value?.pilot?.mode || "live",
 );
+const refreshTick = ref(0);
 
 async function refreshOverview() {
   if (!session.isAdmin) {
@@ -170,6 +171,11 @@ watch(
     if (session.isAdmin) void refreshOverview();
   },
 );
+
+function handleTopRefresh() {
+  refreshTick.value += 1;
+  void refreshOverview();
+}
 
 function changePeriod(nextDays: number) {
   days.value = nextDays;
@@ -301,8 +307,8 @@ onMounted(async () => {
             type="button"
             class="o-btn"
             :disabled="refreshing"
-            aria-label="刷新治理概览"
-            @click="refreshOverview"
+            aria-label="刷新当前治理模块"
+            @click="handleTopRefresh"
           >
             <RefreshCw :size="15" /> 刷新
           </button>
@@ -348,22 +354,35 @@ onMounted(async () => {
           />
           <OpsApplications
             v-else-if="section === 'applications'"
+            :refresh-tick="refreshTick"
             @changed="refreshOverview"
           />
           <OpsStalls
             v-else-if="section === 'stalls'"
+            :refresh-tick="refreshTick"
             @changed="refreshOverview"
           />
-          <OpsAreas v-else-if="section === 'areas'" />
+          <OpsAreas
+            v-else-if="section === 'areas'"
+            :refresh-tick="refreshTick"
+          />
           <OpsOrders
             v-else-if="section === 'orders'"
+            :refresh-tick="refreshTick"
+            :reconciliation-merchants="
+              overviewData?.reconciliation_merchants || []
+            "
             @changed="refreshOverview"
           />
           <OpsFeedback
             v-else-if="section === 'feedback'"
+            :refresh-tick="refreshTick"
             @changed="refreshOverview"
           />
-          <OpsAuditUsers v-else-if="section === 'users'" />
+          <OpsAuditUsers
+            v-else-if="section === 'users'"
+            :refresh-tick="refreshTick"
+          />
         </template>
       </div>
 
