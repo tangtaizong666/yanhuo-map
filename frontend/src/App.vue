@@ -12,15 +12,22 @@ import {
   Flame,
   Check,
   AlertCircle,
+  ShieldCheck,
   X,
 } from "lucide-vue-next";
 import { useSession } from "./stores/session";
 import { useDiscovery } from "./stores/discovery";
 import { notices } from "./lib/notify";
-import { isMerchantPath, safeReturnTo } from "./lib/identity";
+import {
+  isMerchantPath,
+  isOpsLoginPath,
+  isOpsPath,
+  safeReturnTo,
+} from "./lib/identity";
 import CartShortcut from "./components/CartShortcut.vue";
 import StudentOrderStatus from "./components/StudentOrderStatus.vue";
 import { sessionEpoch } from "./lib/sessionEpoch";
+
 const session = useSession(),
   discovery = useDiscovery(),
   route = useRoute(),
@@ -36,10 +43,12 @@ const merchantArea = computed(
       (route.query.role === "merchant" ||
         isMerchantPath(safeReturnTo(route.query.returnTo)))),
 );
+const opsArea = computed(() => isOpsPath(route.path));
 const consumerPreview = computed(
   () =>
-    session.isMerchant &&
+    (session.isMerchant || session.isAdmin) &&
     !merchantArea.value &&
+    !opsArea.value &&
     !["/login", "/recover", "/account-security"].includes(route.path),
 );
 const consumerShell = computed(
@@ -48,13 +57,22 @@ const consumerShell = computed(
     route.matched.length > 0 &&
     !["/recover", "/account-security"].includes(route.path) &&
     !merchantArea.value &&
-    !(session.isMerchant && route.path === "/" && !session.consumerPreview),
+    !opsArea.value &&
+    !(
+      (session.isMerchant || session.isAdmin) &&
+      route.path === "/" &&
+      !session.consumerPreview
+    ),
 );
-const areaName = computed(
-  () =>
-    session.config?.areas.find((a) => a.id === discovery.area)?.name ||
-    "选择校园",
-);
+const viewKey = computed(() => {
+  if (isOpsLoginPath(route.path)) return "ops-login";
+  const scope = isOpsPath(route.path)
+    ? "ops"
+    : isMerchantPath(route.path)
+      ? "merchant"
+      : route.path;
+  return `${scope}:${session.user?.id || "guest"}`;
+});
 async function load() {
   error.value = "";
   try {
@@ -86,6 +104,7 @@ function identityChanged(event: Event) {
 watch(
   () => [
     session.loaded,
+    session.isAdmin,
     session.isMerchant,
     session.consumerPreview,
     route.path,
@@ -96,11 +115,12 @@ watch(
       // Let the router finish that navigation before reacting to later identity changes.
       route.matched.length > 0 &&
       session.loaded &&
-      session.isMerchant &&
       !session.consumerPreview &&
       route.path === "/"
-    )
-      void router.replace("/merchant");
+    ) {
+      if (session.isAdmin) void router.replace("/ops");
+      else if (session.isMerchant) void router.replace("/merchant");
+    }
   },
 );
 onMounted(() => {
@@ -117,8 +137,17 @@ onUnmounted(() => {
 </script>
 <template>
   <div v-if="consumerPreview" class="consumer-preview-bar">
-    <span><Store :size="16" /> 正在预览学生端</span>
-    <RouterLink to="/merchant"
+    <span
+      ><ShieldCheck v-if="session.isAdmin" :size="16" /><Store
+        v-else
+        :size="16"
+      />
+      正在预览学生端</span
+    >
+    <RouterLink v-if="session.isAdmin" to="/ops"
+      >返回平台管理台 <ArrowUpRight :size="16"
+    /></RouterLink>
+    <RouterLink v-if="session.isMerchant" to="/merchant"
       >返回商家工作台 <ArrowUpRight :size="16"
     /></RouterLink>
   </div>
@@ -171,9 +200,10 @@ onUnmounted(() => {
         ? "模拟体验 · 不扣款，不送餐"
         : "校园示例环境 · 订单仅用于测试"
     }}
-    <RouterLink
-      v-if="session.user?.is_merchant || session.user?.is_staff"
-      to="/merchant"
+    <RouterLink v-if="session.isAdmin" to="/ops"
+      >平台管理台 <ArrowUpRight :size="12"
+    /></RouterLink>
+    <RouterLink v-else-if="session.isMerchant" to="/merchant"
       >商家工作台 <ArrowUpRight :size="12"
     /></RouterLink>
   </div>
@@ -183,6 +213,7 @@ onUnmounted(() => {
         consumerShell &&
         session.user &&
         !session.isMerchant &&
+        !session.isAdmin &&
         ['/', '/map', '/search', '/me', '/cart'].includes(route.path)
       "
       :key="session.user.id"
@@ -194,10 +225,7 @@ onUnmounted(() => {
       <button class="btn btn-primary" @click="load">重新连接</button>
     </div>
     <RouterView v-else v-slot="{ Component }"
-      ><component
-        :is="Component"
-        :key="`${isMerchantPath(route.path) ? 'merchant' : route.path}:${session.user?.id || 'guest'}`"
-        v-if="session.loaded" />
+      ><component :is="Component" :key="viewKey" v-if="session.loaded" />
       <div v-else class="page loading-shell">
         <div class="skeleton skeleton-banner"></div>
         <div class="skeleton skeleton-line"></div>
@@ -213,11 +241,19 @@ onUnmounted(() => {
         · 校园示例环境</span
       >
     </p>
-    <RouterLink to="/me">帮助与反馈 <ArrowUpRight :size="13" /></RouterLink>
-    <RouterLink :to="session.isMerchant ? '/merchant' : '/merchant/apply'"
-      >{{ session.isMerchant ? "商家工作台" : "我是商家，申请入驻" }}
-      <ArrowUpRight :size="13"
-    /></RouterLink>
+    <div class="site-footer-links">
+      <RouterLink to="/me">帮助与反馈 <ArrowUpRight :size="13" /></RouterLink>
+      <RouterLink
+        v-if="!session.isAdmin || session.isMerchant"
+        :to="session.isMerchant ? '/merchant' : '/merchant/apply'"
+        >{{ session.isMerchant ? "商家工作台" : "我是商家，申请入驻" }}
+        <ArrowUpRight :size="13"
+      /></RouterLink>
+      <RouterLink :to="session.isAdmin ? '/ops' : '/ops/login'"
+        >{{ session.isAdmin ? "平台管理台" : "平台管理入口" }}
+        <ArrowUpRight :size="13"
+      /></RouterLink>
+    </div>
   </footer>
   <nav v-if="mainNav && consumerShell" class="mobile-nav" aria-label="底部导航">
     <RouterLink
@@ -269,6 +305,12 @@ onUnmounted(() => {
   align-items: center;
   gap: 7px;
 }
+.site-footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 18px;
+}
 .header-inner {
   gap: 24px;
 }
@@ -297,6 +339,13 @@ onUnmounted(() => {
     min-width: 18px;
     height: 18px;
     font-size: 10px;
+  }
+  .site-footer-links {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .site-footer-links a {
+    margin-left: 0;
   }
 }
 .consumer-preview-bar a {

@@ -36,7 +36,7 @@ const sectionLabels: Record<string, string> = {
 const current = computed(() => ({ label: sectionLabels[section.value] || nav.value.find(n => n.id === section.value)?.label || "商家工作台" }));
 const activeNav = computed(() => section.value === "" || (orderWorkspace.value && !discoveryOnly.value) ? "" : section.value === "products" ? "products" : "more");
 const allowed = computed(
-  () => !!session.user && (session.user.is_merchant || session.user.is_staff),
+  () => !!session.user && session.user.is_merchant,
 );
 const stalls = ref<any[]>([]),
   selectedId = ref<number | null>(null),

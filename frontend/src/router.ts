@@ -1,7 +1,13 @@
 import { createRouter, createWebHistory } from "vue-router";
 import { useSession } from "./stores/session";
-import { isMerchantPath } from "./lib/identity";
+import {
+  isMerchantPath,
+  isOpsLoginPath,
+  isOpsPath,
+  loginDestination,
+} from "./lib/identity";
 import { hasPendingBrowseReturn, installBrowseReturn } from "./lib/browseReturn";
+
 const router = createRouter({
   history: createWebHistory(),
   scrollBehavior(to, from, saved) {
@@ -82,12 +88,23 @@ const router = createRouter({
       meta: { title: "商家工作台" },
     },
     {
+      path: "/ops/login",
+      component: () => import("./views/OpsLoginView.vue"),
+      meta: { title: "管理员登录" },
+    },
+    {
+      path: "/ops/:section?",
+      component: () => import("./views/OpsView.vue"),
+      meta: { title: "平台管理台" },
+    },
+    {
       path: "/:pathMatch(.*)*",
       component: () => import("./views/NotFoundView.vue"),
       meta: { title: "页面未找到" },
     },
   ],
 });
+
 router.beforeEach(async (to) => {
   const session = useSession();
   try {
@@ -96,13 +113,28 @@ router.beforeEach(async (to) => {
     // The app renders a retryable connection error when configuration is unavailable.
     return true;
   }
-  if (isMerchantPath(to.path)) session.setConsumerPreview(false);
-  if (to.path === "/" && session.isMerchant && !session.consumerPreview)
-    return "/merchant";
+  if (isMerchantPath(to.path) || isOpsPath(to.path))
+    session.setConsumerPreview(false);
+  if (isOpsLoginPath(to.path) && session.isAdmin)
+    return loginDestination(session.user, to.query.returnTo);
+  if (isOpsPath(to.path) && !isOpsLoginPath(to.path) && !session.user) {
+    return {
+      path: "/ops/login",
+      query: to.fullPath !== "/ops" ? { returnTo: to.fullPath } : {},
+    };
+  }
+  if (isMerchantPath(to.path) && session.isAdmin && !session.isMerchant)
+    return "/ops";
+  if (to.path === "/" && !session.consumerPreview) {
+    if (session.isAdmin) return "/ops";
+    if (session.isMerchant) return "/merchant";
+  }
   return true;
 });
+
 router.afterEach((to) => {
   document.title = `${to.meta.title || "校园好味"} · 烟火地图`;
 });
+
 installBrowseReturn(router);
 export default router;

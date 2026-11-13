@@ -28,9 +28,14 @@ def public_payment_readiness(stall, context):
 
 def user_data(user):
     if not user or not user.is_authenticated: return None
-    return {'id': user.id, 'username': user.username, 'display_name': user.first_name or user.username,
+    data = {'id': user.id, 'username': user.username, 'display_name': user.first_name or user.username,
         'is_merchant': hasattr(user, 'merchant_profile'), 'is_staff': user.is_staff,
         'merchant_application_status': getattr(getattr(user, 'merchant_application', None), 'status', None)}
+    if user.is_staff:
+        from .ops_api import ops_permissions_map
+        data['is_superuser'] = user.is_superuser
+        data['ops_permissions'] = ops_permissions_map(user)
+    return data
 
 
 class AreaSerializer(serializers.ModelSerializer):

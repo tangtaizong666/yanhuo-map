@@ -93,15 +93,17 @@ async function submit() {
         ? merchantLogin.value
           ? "账号已创建，继续填写入驻资料"
           : "欢迎加入，去发现校园里的好味道吧"
-        : session.isMerchant
-          ? "欢迎回来，开始今天的好生意"
-          : merchantLogin.value
-            ? "已登录，可以继续填写入驻申请"
-            : "欢迎回来",
+        : session.isAdmin
+          ? "已进入平台管理台"
+          : session.isMerchant
+            ? "欢迎回来，开始今天的好生意"
+            : merchantLogin.value
+              ? "已登录，可以继续填写入驻申请"
+              : "欢迎回来",
       "success",
     );
     await router.replace(
-      merchantLogin.value && !session.isMerchant
+      merchantLogin.value && !session.isMerchant && !session.isAdmin
         ? "/merchant/apply"
         : loginDestination(session.user, route.query.returnTo),
     );
@@ -309,6 +311,10 @@ async function submit() {
           </div>
           <small>两个演示账号的密码均为 demo12345</small>
         </div>
+        <RouterLink to="/ops/login" class="ops-entry-link">
+          <ShieldCheck :size="15" /> 平台运营人员？前往管理员登录
+          <ArrowUpRight :size="14" />
+        </RouterLink>
       </section>
     </div>
   </div>
@@ -544,5 +550,18 @@ async function submit() {
 .demo-accounts small {
   font-size: 10px;
   color: #b2a58e;
+}
+.ops-entry-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  margin-top: 14px;
+  color: #5b6961;
+  font-size: 12px;
+  font-weight: 600;
+}
+.ops-entry-link:hover {
+  color: #24372f;
 }
 </style>

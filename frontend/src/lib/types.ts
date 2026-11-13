@@ -1,9 +1,33 @@
+export interface OpsPermissions {
+  manage_config: boolean;
+  view_applications: boolean;
+  review_applications: boolean;
+  create_assisted_application: boolean;
+  view_merchants: boolean;
+  manage_merchants: boolean;
+  manage_stalls: boolean;
+  view_areas: boolean;
+  add_areas: boolean;
+  manage_areas: boolean;
+  add_delivery_points: boolean;
+  manage_delivery_points: boolean;
+  view_orders: boolean;
+  resolve_payments: boolean;
+  export_reconciliation: boolean;
+  view_feedback: boolean;
+  manage_feedback: boolean;
+  view_users: boolean;
+  manage_users: boolean;
+  view_audit: boolean;
+}
 export interface User {
   id: number;
   username: string;
   display_name: string;
   is_merchant: boolean;
   is_staff: boolean;
+  is_superuser?: boolean;
+  ops_permissions?: Partial<OpsPermissions>;
   merchant_application_status?:
     "draft" | "submitted" | "needs_changes" | "approved" | "rejected" | null;
 }

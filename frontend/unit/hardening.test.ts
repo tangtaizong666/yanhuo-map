@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { ApiError } from "../src/lib/api";
 import {
   isMerchantPath,
+  isOpsLoginPath,
+  isOpsPath,
   loginDestination,
   safeReturnTo,
 } from "../src/lib/identity";
@@ -28,6 +30,14 @@ const merchantUser: User = {
   display_name: "李摊主",
   is_merchant: true,
   is_staff: false,
+};
+
+const staffUser: User = {
+  id: 30,
+  username: "admin1",
+  display_name: "运营管理员",
+  is_merchant: false,
+  is_staff: true,
 };
 
 describe("merchant idempotent write error classification", () => {
@@ -94,21 +104,35 @@ describe("identity returnTo sanitization and role isolation", () => {
     expect(safeReturnTo("/\\evil.example")).toBe("/");
     expect(safeReturnTo("/login")).toBe("/");
     expect(safeReturnTo("/login?returnTo=/me")).toBe("/");
+    expect(safeReturnTo("/ops/login")).toBe("/");
+    expect(safeReturnTo("/ops/login?returnTo=/ops/orders")).toBe("/");
     expect(safeReturnTo("/stalls/5?tab=reviews")).toBe("/stalls/5?tab=reviews");
   });
 
-  it("routes merchants to merchant workspace and prevents student returnTo into /merchant", () => {
+  it("routes admins to /ops, merchants to /merchant, and isolates cross-role returnTo", () => {
     expect(isMerchantPath("/merchant")).toBe(true);
     expect(isMerchantPath("/merchant/orders?status=ready")).toBe(true);
     expect(isMerchantPath("/merchant-info")).toBe(false);
+    expect(isOpsPath("/ops")).toBe(true);
+    expect(isOpsPath("/ops/applications?status=submitted")).toBe(true);
+    expect(isOpsPath("/ops-guide")).toBe(false);
+    expect(isOpsLoginPath("/ops/login")).toBe(true);
+    expect(isOpsLoginPath("/ops/orders")).toBe(false);
+
+    expect(loginDestination(staffUser, "/")).toBe("/ops");
+    expect(loginDestination(staffUser, "/merchant")).toBe("/ops");
+    expect(loginDestination(staffUser, "/ops/feedback")).toBe("/ops/feedback");
+    expect(loginDestination(staffUser, "/ops/login")).toBe("/ops");
 
     expect(loginDestination(merchantUser, "/stalls/3")).toBe("/merchant");
+    expect(loginDestination(merchantUser, "/ops/orders")).toBe("/merchant");
     expect(loginDestination(merchantUser, "/merchant/apply")).toBe("/merchant");
     expect(loginDestination(merchantUser, "/merchant?section=store")).toBe(
       "/merchant?section=store",
     );
 
     expect(loginDestination(studentUser, "/merchant")).toBe("/");
+    expect(loginDestination(studentUser, "/ops")).toBe("/");
     expect(loginDestination(studentUser, "/merchant/apply")).toBe(
       "/merchant/apply",
     );

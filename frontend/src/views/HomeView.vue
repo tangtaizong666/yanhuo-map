@@ -214,7 +214,7 @@ async function loadRecent() {
   recentController?.abort();
   const sequence = ++recentSequence,
     userId = session.user?.id;
-  if (!userId || session.isMerchant) {
+  if (!userId || session.isMerchant || session.isAdmin) {
     recentOrders.value = [];
     recentLoading.value = false;
     return;

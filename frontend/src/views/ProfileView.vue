@@ -361,11 +361,16 @@ async function deleteAccount() {
             <component :is="item.icon" :size="18" /> {{ item.title }}
             <ChevronRight :size="15" /></button
           ><RouterLink
-            v-if="session.user.is_merchant || session.user.is_staff"
+            v-if="session.user.is_staff"
+            to="/ops"
+            ><ShieldCheck :size="18" /> 平台管理台
+            <ChevronRight :size="15" /></RouterLink
+          ><RouterLink
+            v-if="session.user.is_merchant"
             to="/merchant"
             ><Store :size="18" /> 商家工作台
             <ChevronRight :size="15" /></RouterLink
-          ><RouterLink v-else to="/merchant/apply"
+          ><RouterLink v-else-if="!session.user.is_staff" to="/merchant/apply"
             ><Store :size="18" />{{
               session.user.merchant_application_status
                 ? "我的入驻申请"

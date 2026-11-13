@@ -1,5 +1,5 @@
 from django.urls import path
-from . import merchant, operations, payment_views, views, recovery, counter
+from . import merchant, operations, ops_api, payment_views, views, recovery, counter
 from .proxy import amap_proxy
 from . import discovery_api
 
@@ -43,5 +43,24 @@ urlpatterns = [
     path('merchant/orders/<uuid:order_id>/action', views.merchant_order_action), path('merchant/metrics', merchant.metrics),
     path('merchant/orders/<uuid:order_id>/refund', payment_views.refund),
     path('merchant/orders/<uuid:order_id>/refunds/simulate', payment_views.simulate_refund),
+    path('ops/overview', ops_api.overview),
+    path('ops/applications', ops_api.applications),
+    path('ops/applications/<int:application_id>/review', ops_api.review_application_view),
+    path('ops/stalls', ops_api.stalls_governance),
+    path('ops/stalls/<int:stall_id>', ops_api.update_stall),
+    path('ops/merchants/<int:merchant_id>', ops_api.update_merchant),
+    path('ops/areas', ops_api.areas_view),
+    path('ops/areas/<int:area_id>', ops_api.area_detail_view),
+    path('ops/delivery-points', ops_api.delivery_points_view),
+    path('ops/delivery-points/<int:point_id>', ops_api.delivery_point_detail_view),
+    path('ops/orders', ops_api.orders_view),
+    path('ops/orders/<uuid:order_id>', ops_api.order_detail_view),
+    path('ops/orders/<uuid:order_id>/financial-resolution', ops_api.financial_resolution_view),
+    path('ops/reconciliation/export', ops_api.reconciliation_export_view),
+    path('ops/feedback', ops_api.feedback_list),
+    path('ops/feedback/<int:feedback_id>', ops_api.feedback_detail_view),
+    path('ops/users', ops_api.users_list),
+    path('ops/users/<int:user_id>', ops_api.user_detail_view),
+    path('ops/audit-logs', ops_api.audit_logs),
     path('amap-proxy/_AMapService/<path:upstream_path>', amap_proxy),
 ]

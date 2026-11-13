@@ -51,7 +51,7 @@ const pageSession = Math.random().toString(36).slice(2);
 
 function scope() {
   const session = useSession();
-  return `${session.user?.id ?? "guest"}:${session.isMerchant ? session.consumerPreview : "student"}:${useDiscovery().area}`;
+  return `${session.user?.id ?? "guest"}:${session.isMerchant || session.isAdmin ? session.consumerPreview : "student"}:${useDiscovery().area}`;
 }
 function filterFingerprint() {
   const f = useDiscovery();

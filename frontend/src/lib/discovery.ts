@@ -64,12 +64,12 @@ export async function completePendingFollow(
     return "expired";
   }
   const session = useSession();
-  if (session.user?.id !== userId || session.isMerchant) return "none";
+  if (session.user?.id !== userId || session.isMerchant || session.isAdmin) return "none";
   const controller = new AbortController();
   const stopIdentityWatch = watch(
-    () => [session.user?.id, session.isMerchant],
+    () => [session.user?.id, session.isMerchant, session.isAdmin],
     () => {
-      if (session.user?.id !== userId || session.isMerchant) controller.abort();
+      if (session.user?.id !== userId || session.isMerchant || session.isAdmin) controller.abort();
     },
     { flush: "sync" },
   );
@@ -80,7 +80,7 @@ export async function completePendingFollow(
     });
     if (
       session.user?.id !== userId ||
-      session.isMerchant ||
+      session.isMerchant || session.isAdmin ||
       controller.signal.aborted
     )
       return "none";
@@ -89,7 +89,7 @@ export async function completePendingFollow(
   } catch (error) {
     if (
       session.user?.id === userId &&
-      !session.isMerchant &&
+      !session.isMerchant && !session.isAdmin &&
       !controller.signal.aborted
     )
       notify(

@@ -15,7 +15,7 @@ const fixtures = [
   'merchant-modes.spec.ts',
   'merchant-products-simple.spec.ts', 'reference-product-flow.spec.ts',
   'merchant-opening-flow.spec.ts', 'merchant-handoff-panel.spec.ts', 'order-detail-sync.spec.ts',
-  'payment-student.spec.ts', 'simulation-student.spec.ts', 'payment-visibility.spec.ts',
+  'payment-student.spec.ts', 'simulation-student.spec.ts', 'payment-visibility.spec.ts', 'ops-console.spec.ts',
 ]
 export default defineConfig({
   testDir: './e2e', fullyParallel: false, workers: 1,

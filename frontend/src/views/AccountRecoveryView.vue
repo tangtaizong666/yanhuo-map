@@ -4,7 +4,7 @@ import { useRoute } from "vue-router";
 import { ArrowLeft, KeyRound, ShieldCheck, Copy, Check } from "lucide-vue-next";
 import { api, ApiError } from "../lib/api";
 import { copyText } from "../lib/engagement";
-import { isMerchantPath, safeReturnTo } from "../lib/identity";
+import { isMerchantPath, isOpsPath, safeReturnTo } from "../lib/identity";
 import { useSession } from "../stores/session";
 const route = useRoute(),
   session = useSession();
@@ -25,13 +25,15 @@ let controller: AbortController | undefined,
 const back = computed(() => {
   if (typeof route.query.returnTo === "string" && route.query.returnTo) {
     const target = safeReturnTo(route.query.returnTo);
+    if (isOpsPath(target) && session.isAdmin) return target;
     if (
       (target !== "/" || route.query.returnTo === "/") &&
-      isMerchantPath(target) === session.isMerchant
+      isMerchantPath(target) === session.isMerchant &&
+      !isOpsPath(target)
     )
       return target;
   }
-  return session.isMerchant ? "/merchant" : "/me";
+  return session.isAdmin ? "/ops" : session.isMerchant ? "/merchant" : "/me";
 });
 const loginTarget = computed(() => {
   const query: Record<string, string> = {};

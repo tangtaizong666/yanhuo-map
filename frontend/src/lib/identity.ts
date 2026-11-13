@@ -5,6 +5,16 @@ export function isMerchantPath(value: string) {
   return path === "/merchant" || path.startsWith("/merchant/");
 }
 
+export function isOpsPath(value: string) {
+  const path = value.split(/[?#]/, 1)[0];
+  return path === "/ops" || path.startsWith("/ops/");
+}
+
+export function isOpsLoginPath(value: string) {
+  const path = value.split(/[?#]/, 1)[0];
+  return path === "/ops/login" || path.startsWith("/ops/login/");
+}
+
 export function safeReturnTo(value: unknown) {
   if (
     typeof value !== "string" ||
@@ -14,18 +24,29 @@ export function safeReturnTo(value: unknown) {
   )
     return "/";
   const path = value.split(/[?#]/, 1)[0];
-  return path === "/login" || path.startsWith("/login/") ? "/" : value;
+  return path === "/login" ||
+    path.startsWith("/login/") ||
+    isOpsLoginPath(path)
+    ? "/"
+    : value;
 }
 
 export function loginDestination(user: User | null, returnTo: unknown) {
   const target = safeReturnTo(returnTo);
-  if (user?.is_merchant || user?.is_staff) {
+  const path = target.split(/[?#]/, 1)[0];
+  if (user?.is_staff) {
+    if (isOpsPath(target)) return target;
+    if (user.is_merchant && isMerchantPath(target) && path !== "/merchant/apply")
+      return target;
+    return "/ops";
+  }
+  if (user?.is_merchant) {
     // An approved merchant has nothing left to apply for; open the workspace instead.
-    if (target.split(/[?#]/, 1)[0] === "/merchant/apply") return "/merchant";
+    if (path === "/merchant/apply") return "/merchant";
     return isMerchantPath(target) ? target : "/merchant";
   }
-  if (target.split(/[?#]/, 1)[0] === "/merchant/apply") return target;
+  if (path === "/merchant/apply") return target;
   if (user?.merchant_application_status && target === "/")
     return "/merchant/apply";
-  return isMerchantPath(target) ? "/" : target;
+  return isMerchantPath(target) || isOpsPath(target) ? "/" : target;
 }

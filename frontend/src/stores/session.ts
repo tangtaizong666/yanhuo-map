@@ -8,17 +8,23 @@ import {
   trackSessionVerification,
 } from "../lib/sessionEpoch";
 import { api } from "../lib/api";
-import type { User, Config } from "../lib/types";
+import type { User, Config, OpsPermissions } from "../lib/types";
 export const useSession = defineStore("session", () => {
   const user = ref<User | null>(null),
     config = ref<Config | null>(null),
     loaded = ref(false),
     consumerPreview = ref(false);
-  const isMerchant = computed(
-    () => !!user.value && (user.value.is_merchant || user.value.is_staff),
-  );
+  const isMerchant = computed(() => !!user.value?.is_merchant);
+  const isAdmin = computed(() => !!user.value?.is_staff);
+  const canPreviewConsumer = computed(() => isMerchant.value || isAdmin.value);
+  function hasOpsPerm(key: keyof OpsPermissions) {
+    return (
+      !!user.value?.is_staff &&
+      (!!user.value.is_superuser || !!user.value.ops_permissions?.[key])
+    );
+  }
   function setConsumerPreview(value: boolean) {
-    consumerPreview.value = value && isMerchant.value;
+    consumerPreview.value = value && canPreviewConsumer.value;
     try {
       if (consumerPreview.value)
         sessionStorage.setItem(
@@ -64,7 +70,7 @@ export const useSession = defineStore("session", () => {
       else config.value = { ...config.value, user: user.value };
       try {
         consumerPreview.value =
-          isMerchant.value &&
+          canPreviewConsumer.value &&
           sessionStorage.getItem("yanhuo-consumer-preview") ===
             String(user.value?.id);
       } catch {
@@ -101,6 +107,8 @@ export const useSession = defineStore("session", () => {
     config,
     loaded,
     isMerchant,
+    isAdmin,
+    hasOpsPerm,
     consumerPreview,
     setConsumerPreview,
     load,
