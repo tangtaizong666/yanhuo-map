@@ -6,6 +6,7 @@ product lock order as checkout so a price edit cannot restore reserved stock.
 import io
 import hashlib
 import json
+import logging
 import mimetypes
 import re
 import uuid
@@ -33,6 +34,23 @@ from .auth_limits import TrustedUserRateThrottle
 from .errors import BusinessError
 from .models import active_prep_q, DeliveryPoint, Event, Follow, MerchantProfile, Order, OrderItem, PaymentRefund, Product, Review, SiteConfiguration, Stall
 from .serializers import ProductSerializer, ReviewSerializer, StallSerializer
+
+logger = logging.getLogger(__name__)
+
+
+def _cleanup_unreferenced_stall_media(media_url_value, rel_path):
+    """Delete replaced stall QR/media only if no stall or product still references it."""
+    if (
+        Stall.objects.filter(
+            Q(payment_qr_image=media_url_value) | Q(image=media_url_value) | Q(arrival_image=media_url_value)
+        ).exists()
+        or Product.objects.filter(image=media_url_value).exists()
+    ):
+        return
+    try:
+        default_storage.delete(rel_path)
+    except OSError:
+        logger.warning('Failed to delete unreferenced media %s', rel_path, exc_info=True)
 from .services import audit
 from .views import merchant_stall, stall_context
 from .tastes import TasteOptionsField
@@ -304,7 +322,7 @@ def profile(request, stall_id):
             merchant.save(update_fields=['contact_phone'])
             stall.merchant = merchant
         if 'payment_qr_image' in values:
-            from .media_policy import protected_qr_image
+            from .media_policy import owned_media_path, protected_qr_image
             qr = values['payment_qr_image']
             # Students pay this image directly, so only this stall's dedicated protected qr-* upload qualifies.
             if qr == stall.payment_qr_image:
@@ -318,10 +336,11 @@ def profile(request, stall_id):
                 old_qr = stall.payment_qr_image
                 audit(request.user, 'payment_qr_changed', stall.id, before=old_qr, after=qr)
                 values['payment_qr_updated_at'] = timezone.now()
-                old_valid = protected_qr_image(old_qr, stall_id=stall.pk)
-                if old_valid:
-                    old_rel = old_valid.removeprefix(settings.MEDIA_URL)
-                    transaction.on_commit(lambda rel=old_rel: default_storage.delete(rel))
+                old_owned = owned_media_path(old_qr)
+                stall_media_prefix = f'{settings.MEDIA_URL}merchants/{stall.pk}/'
+                if old_owned and old_owned.startswith(stall_media_prefix):
+                    old_rel = old_owned.removeprefix(settings.MEDIA_URL)
+                    transaction.on_commit(lambda url=old_owned, rel=old_rel: _cleanup_unreferenced_stall_media(url, rel))
         for key, value in values.items():
             setattr(stall, key, value)
         if values:

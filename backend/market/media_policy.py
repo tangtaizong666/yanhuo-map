@@ -15,9 +15,10 @@ def owned_media_path(value):
         for _ in range(3):
             path = unquote(path)
         if (parsed.scheme or parsed.netloc or parsed.query or parsed.fragment
+                or '%' in value or path != value
                 or not value.startswith(('/images/', '/media/'))
                 or '\\' in path or any(ord(char) < 32 for char in path)
-                or any(part in ('.', '..') for part in path.split('/'))):
+                or any(part in ('', '.', '..') for part in path.split('/')[1:])):
             return ''
     except (TypeError, ValueError):
         return ''
@@ -44,6 +45,6 @@ def protected_qr_image(value, stall_id=None):
 
 def public_image(value):
     cleaned = owned_media_path(value)
-    if not cleaned or '/qr-' in cleaned:
+    if not cleaned or '/qr-' in cleaned.lower():
         return ''
     return cleaned

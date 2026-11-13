@@ -158,6 +158,7 @@ export async function api<T = any>(
     // Include no-content responses: an old successful mutation must not clear
     // recovery state or report completion in a newer identity.
     requireCurrentIdentity();
+    if (mutating && response.status === 403) csrfNeedsRefresh = true;
     if (response.status === 204 || (method === "HEAD" && response.ok))
       return null as T;
     let data: any;
@@ -177,7 +178,6 @@ export async function api<T = any>(
     // Identity can also change while a slow response body is being consumed.
     requireCurrentIdentity();
     if (!response.ok) {
-      if (mutating && response.status === 403) csrfNeedsRefresh = true;
       if (data?.code === "session_changed" && requestEpoch === sessionEpoch())
         window.dispatchEvent(
           new CustomEvent("session-changed", { detail: { epoch: requestEpoch } }),

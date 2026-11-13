@@ -352,16 +352,17 @@ print('RESULT ' + json.dumps({'stall_id': stall.pk, 'product_id': product.pk}))
         with anon_opener.open(urllib.request.Request(origin + media_path), timeout=15) as anon_pub:
             require(anon_pub.status == 200 and anon_pub.read().startswith(b'\xff\xd8'),
                     'Anonymous client could not read public stall media')
-        try:
-            with anon_opener.open(urllib.request.Request(origin + qr_path), timeout=15):
-                raise RuntimeError('Anonymous client unexpectedly read protected payment QR through Caddy')
-        except urllib.error.HTTPError as exc:
+        for blocked_qr_path in (qr_path, qr_path.replace('/qr-', '/%71r-', 1)):
             try:
-                exc.read()
-                require(exc.status == 404 and exc.headers.get('Cache-Control') == 'private, no-store',
-                        f'Protected payment QR through Caddy returned unexpected {exc.status} / {exc.headers.get("Cache-Control")}')
-            finally:
-                exc.close()
+                with anon_opener.open(urllib.request.Request(origin + blocked_qr_path), timeout=15):
+                    raise RuntimeError(f'Anonymous client unexpectedly read protected payment QR ({blocked_qr_path}) through Caddy')
+            except urllib.error.HTTPError as exc:
+                try:
+                    exc.read()
+                    require(exc.status == 404 and exc.headers.get('Cache-Control') == 'private, no-store',
+                            f'Protected payment QR ({blocked_qr_path}) through Caddy returned unexpected {exc.status} / {exc.headers.get("Cache-Control")}')
+                finally:
+                    exc.close()
         require(any(cookie.name == 'sessionid' and cookie.secure for cookie in jar), 'Session cookie is not secure')
         self.report['stages']['https'] = {'status': 'passed', 'origin': origin,
             'trust': 'temporary CA used only by this client; system trust unchanged', 'checks': checks,

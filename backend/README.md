@@ -172,7 +172,7 @@ prep_minutes 为 1–180 的整数，reason 不超过 200 字，idempotency_key 
 ### 到摊查单与订单求助
 
 - `POST /merchant/stalls/:id/pickup-lookup` 接收 `{pickup_code,number?}`。取餐码为 4 位数字（兼容极端饱和回退或历史 8 位数字），仅查询所属摊位状态为 ready 的自取订单；number 为可选完整订单号。单一结果返回商家订单对象，仍隐藏 pickup_code；查询不收款、不核销、不推进状态。
-- 未匹配返回 404 `pickup_order_not_found`；多个待取单重码时返回 409 `pickup_code_ambiguous`，要求补充完整订单号，绝不返回候选订单列表。接口按账号限制 60 次/分钟，响应禁止缓存，审计仅记录匹配订单 ID 和摊位 ID，不记录输入取餐码。正式多进程部署仍需共享限流缓存及边缘限制。
+- 未匹配返回 404 `pickup_order_not_found`；多个待取单重码时返回 409 `pickup_code_ambiguous`，要求补充完整订单号，绝不返回候选订单列表。接口按账号限制 30 次/分钟，响应禁止缓存，审计仅记录匹配订单 ID 和摊位 ID，不记录输入取餐码。正式多进程部署仍需共享限流缓存及边缘限制。
 - 订单响应新增 `merchant_contact_phone`，取当前经营主体联系电话；本人可读订单即使摊位暂时隐藏，也能取得该联系入口。没有电话时为空，不编造联系方式。
 - `POST /feedback` 可在原 content/contact/idempotency_key 请求中增加 `order_id`（UUID），无需新增 kind。必须登录且订单属于本人；自动关联对应摊位，即使摊位隐藏也能提交。若另传 stall_id，必须与订单一致。联系方式仍不公开给其他用户；成功仅代表提交运营人工处理，不表示商家收到或已处理。
 

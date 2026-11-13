@@ -545,6 +545,160 @@ class SecurityCapacityAndThrottleHardeningTests(DeliverySetup, TestCase):
             self.assertEqual(second.pickup_code, first.pickup_code)
             Order.objects.filter(pk=second.pk).update(pickup_code=pickup_code({first.pickup_code}))
 
+    @override_settings(AMAP_KEY='test-key', AMAP_SECURITY_CODE='test-secret')
+    def test_map_busy_does_not_deduct_daily_amap_quota(self):
+        from . import proxy
+        with patch.object(proxy._proxy_slots, 'acquire', return_value=False):
+            res = self.client.get(
+                '/api/v1/amap-proxy/_AMapService/v3/ip',
+                HTTP_ORIGIN='http://testserver',
+            )
+        self.assertEqual(res.status_code, 503)
+        self.assertEqual(res.json()['code'], 'map_busy')
+        self.assertEqual(DailyQuotaCounter.objects.count(), 0)
+
+    def test_media_policy_rejects_percent_encoded_and_duplicate_slash_paths(self):
+        from .media_policy import owned_media_path, protected_qr_image, public_image
+        malformed = [
+            f'/media/merchants/{self.stall.pk}/%71r-secret.jpg',
+            f'/media/merchants/{self.stall.pk}/qr%2dsecret.jpg',
+            f'/media/merchants//{self.stall.pk}/qr-secret.jpg',
+            f'/media/merchants/{self.stall.pk}/QR-secret.jpg',
+            '/images//food-burger.jpg',
+            '/images/food%2dburger.jpg',
+        ]
+        for candidate in malformed:
+            self.assertEqual(public_image(candidate), '', candidate)
+            self.assertEqual(protected_qr_image(candidate, stall_id=self.stall.pk), '', candidate)
+        self.assertEqual(owned_media_path('/images/food-burger.jpg'), '/images/food-burger.jpg')
+
+    def test_qr_replacement_on_commit_preserves_reverted_active_qr_and_cleans_legacy_file(self):
+        from django.core.files.base import ContentFile
+        from django.core.files.storage import default_storage
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(MEDIA_ROOT=tmpdir):
+            api = APIClient()
+            api.force_authenticate(self.vendor)
+            qr_a_rel = f'merchants/{self.stall.pk}/qr-alpha.jpg'
+            qr_b_rel = f'merchants/{self.stall.pk}/qr-beta.jpg'
+            legacy_rel = f'merchants/{self.stall.pk}/legacy-public.jpg'
+            default_storage.save(qr_a_rel, ContentFile(b'alpha'))
+            default_storage.save(qr_b_rel, ContentFile(b'beta'))
+            default_storage.save(legacy_rel, ContentFile(b'legacy'))
+            qr_a_url = f'{settings.MEDIA_URL}{qr_a_rel}'
+            qr_b_url = f'{settings.MEDIA_URL}{qr_b_rel}'
+            legacy_url = f'{settings.MEDIA_URL}{legacy_rel}'
+
+            Stall.objects.filter(pk=self.stall.pk).update(payment_qr_image=legacy_url)
+            # Legacy public file replaced by qr-alpha -> legacy file cleaned up on commit
+            with self.captureOnCommitCallbacks(execute=True):
+                r0 = api.patch(
+                    f'/api/v1/merchant/stalls/{self.stall.pk}/profile',
+                    {'payment_qr_image': qr_a_url},
+                    format='json',
+                )
+            self.assertEqual(r0.status_code, 200, r0.data)
+            self.assertFalse(default_storage.exists(legacy_rel))
+            self.assertTrue(default_storage.exists(qr_a_rel))
+
+            # Rapid A -> B -> A before on_commit executes must NOT delete active A
+            with self.captureOnCommitCallbacks(execute=False) as callbacks:
+                r1 = api.patch(
+                    f'/api/v1/merchant/stalls/{self.stall.pk}/profile',
+                    {'payment_qr_image': qr_b_url},
+                    format='json',
+                )
+                self.assertEqual(r1.status_code, 200, r1.data)
+                r2 = api.patch(
+                    f'/api/v1/merchant/stalls/{self.stall.pk}/profile',
+                    {'payment_qr_image': qr_a_url},
+                    format='json',
+                )
+                self.assertEqual(r2.status_code, 200, r2.data)
+            for cb in callbacks:
+                cb()
+            self.assertTrue(default_storage.exists(qr_a_rel))
+            self.assertFalse(default_storage.exists(qr_b_rel))
+
+
+class HistoricalMigrationUpgradeTests(TransactionTestCase):
+    def test_0023_to_0025_dedupes_open_pickup_codes_and_relocates_legacy_qr(self):
+        from django.core.files.base import ContentFile
+        from django.core.files.storage import default_storage
+        from django.db.migrations.executor import MigrationExecutor
+
+        migrate_from = [('market', '0023_auditlog_target_index')]
+        migrate_to = [('market', '0025_migrate_legacy_public_payment_qr')]
+
+        def restore_latest():
+            exec_restore = MigrationExecutor(connection)
+            exec_restore.migrate(exec_restore.loader.graph.leaf_nodes())
+
+        self.addCleanup(restore_latest)
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(MEDIA_ROOT=tmpdir):
+            executor = MigrationExecutor(connection)
+            executor.migrate(migrate_from)
+            old_apps = executor.loader.project_state(migrate_from).apps
+            HistUser = old_apps.get_model('auth', 'User')
+            HistArea = old_apps.get_model('market', 'Area')
+            HistMerchant = old_apps.get_model('market', 'MerchantProfile')
+            HistStall = old_apps.get_model('market', 'Stall')
+            HistOrder = old_apps.get_model('market', 'Order')
+
+            u = HistUser.objects.create(username='hist-user')
+            m_user = HistUser.objects.create(username='hist-vendor')
+            area = HistArea.objects.create(name='旧区', latitude=30.0, longitude=120.0)
+            mp = HistMerchant.objects.create(user=m_user, business_name='旧摊商户', is_verified=True)
+            stall = HistStall.objects.create(merchant=mp, area=area, name='旧摊', category='小吃')
+            legacy_rel = f'merchants/{stall.pk}/legacy-qr.jpg'
+            default_storage.save(legacy_rel, ContentFile(b'legacy-qr-bytes'))
+            HistStall.objects.filter(pk=stall.pk).update(payment_qr_image=f'/media/{legacy_rel}')
+
+            now = timezone.now()
+            common = dict(
+                user=u,
+                stall=stall,
+                stall_name='旧摊',
+                total_cents=800,
+                expires_at=now + timedelta(minutes=15),
+                pickup_address='南门',
+                pickup_latitude=30.0,
+                pickup_longitude=120.0,
+            )
+            open_a = HistOrder.objects.create(
+                status='ready', pickup_code='4455', idempotency_key='k1', request_hash='h1', **common
+            )
+            open_b = HistOrder.objects.create(
+                status='preparing', pickup_code='4455', idempotency_key='k2', request_hash='h2', **common
+            )
+            done_a = HistOrder.objects.create(
+                status='completed', pickup_code='8899', idempotency_key='k3', request_hash='h3', **common
+            )
+            done_b = HistOrder.objects.create(
+                status='completed', pickup_code='8899', idempotency_key='k4', request_hash='h4', **common
+            )
+
+            executor = MigrationExecutor(connection)
+            executor.loader.build_graph()
+            executor.migrate(migrate_to)
+
+            new_apps = executor.loader.project_state(migrate_to).apps
+            NewOrder = new_apps.get_model('market', 'Order')
+            NewStall = new_apps.get_model('market', 'Stall')
+
+            code_a = NewOrder.objects.get(pk=open_a.pk).pickup_code
+            code_b = NewOrder.objects.get(pk=open_b.pk).pickup_code
+            self.assertEqual(code_a, '4455')
+            self.assertNotEqual(code_b, '4455')
+            self.assertEqual(NewOrder.objects.get(pk=done_a.pk).pickup_code, '8899')
+            self.assertEqual(NewOrder.objects.get(pk=done_b.pk).pickup_code, '8899')
+
+            upgraded_stall = NewStall.objects.get(pk=stall.pk)
+            expected_protected_rel = f'merchants/{stall.pk}/qr-legacy-qr.jpg'
+            self.assertEqual(upgraded_stall.payment_qr_image, f'/media/{expected_protected_rel}')
+            self.assertTrue(default_storage.exists(expected_protected_rel))
+            self.assertFalse(default_storage.exists(legacy_rel))
+
 
 @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL race test')
 class DailyQuotaPostgreSQLRaceTests(TransactionTestCase):

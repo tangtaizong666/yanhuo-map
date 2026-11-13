@@ -78,17 +78,17 @@ def amap_proxy(request, upstream_path=''):
             raise BusinessError('地图请求参数无效。', status=400)
     if 'callback' in request.GET and not re.fullmatch(r'[A-Za-z_$][A-Za-z0-9_$.]{0,100}', request.GET['callback']):
         raise BusinessError('地图回调格式无效。', status=400)
-    if daily_quota_exhausted():
-        return JsonResponse({'detail': '今日地图服务额度已用完，请先用列表找摊。', 'code': 'map_quota_exhausted'}, status=429)
     if not _proxy_slots.acquire(blocking=False):
         return JsonResponse({'detail': '地图服务繁忙，请稍后再试或使用列表找摊。', 'code': 'map_busy'}, status=503)
-    query = request.GET.copy()
-    for existing_key in [k for k in query if k.lower() in ('key', 'jscode')]:
-        query.pop(existing_key, None)
-    query['key'], query['jscode'] = settings.AMAP_KEY, settings.AMAP_SECURITY_CODE
-    host = 'webapi.amap.com' if upstream_path == 'v4/map/styles' else 'restapi.amap.com'
-    url = f'https://{host}/{upstream_path}?{query.urlencode()}'
     try:
+        if daily_quota_exhausted():
+            return JsonResponse({'detail': '今日地图服务额度已用完，请先用列表找摊。', 'code': 'map_quota_exhausted'}, status=429)
+        query = request.GET.copy()
+        for existing_key in [k for k in query if k.lower() in ('key', 'jscode')]:
+            query.pop(existing_key, None)
+        query['key'], query['jscode'] = settings.AMAP_KEY, settings.AMAP_SECURITY_CODE
+        host = 'webapi.amap.com' if upstream_path == 'v4/map/styles' else 'restapi.amap.com'
+        url = f'https://{host}/{upstream_path}?{query.urlencode()}'
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
         with opener.open(urllib.request.Request(url, headers={'User-Agent': 'YanhuoMap/1.0'}), timeout=5) as upstream:
             body = upstream.read(2*1024*1024+1)

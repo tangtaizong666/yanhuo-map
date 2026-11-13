@@ -65,7 +65,11 @@ async function fixture(page: Page) {
       const body = req.postDataJSON(); state.corrections.push(body)
       if (state.failCorrectionCsrfOnce) {
         state.failCorrectionCsrfOnce = false
-        return route.fulfill({ status: 403, json: { detail: 'CSRF Failed: CSRF token missing or incorrect.' } })
+        return route.fulfill({
+          status: 403,
+          contentType: 'text/html; charset=utf-8',
+          body: '<html><body>403 Forbidden - CSRF verification failed</body></html>',
+        })
       }
       const replayed = state.correctionAppliedKeys.has(body.idempotency_key)
       if (!replayed) {
