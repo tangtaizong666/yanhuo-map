@@ -122,7 +122,7 @@ async function submit() {
             <FileSpreadsheet :size="18" />
             <div>
               <strong>只读履约监督与渠道对账</strong>
-              <span>不越权代点商家出餐，所有操作全量写入不可篡改审计日志。</span>
+              <span>治理台默认只读监督履约，关键治理操作全程留痕，支持责任追溯。</span>
             </div>
           </div>
         </div>

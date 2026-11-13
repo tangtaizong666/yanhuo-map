@@ -100,6 +100,7 @@ def ops_permissions_map(user):
             or has('market.view_merchantprofile')
             or has('market.change_merchantprofile')
         ),
+        'view_merchant_profiles': has('market.view_merchantprofile') or has('market.change_merchantprofile'),
         'manage_merchants': has('market.change_merchantprofile'),
         'manage_stalls': has('market.change_stall'),
         'view_areas': (
@@ -284,34 +285,48 @@ class UserGovernanceInput(StrictInput):
     display_name = serializers.CharField(max_length=30, allow_blank=True, required=False)
 
 
-def _serialize_merchant(merchant: MerchantProfile):
+def _can_view_merchant_sensitive(user) -> bool:
+    return bool(
+        user.is_superuser
+        or can_operate_all(user, 'market.view_merchantprofile')
+        or can_operate_all(user, 'market.change_merchantprofile')
+    )
+
+
+def _serialize_merchant(merchant: MerchantProfile, *, include_sensitive: bool = True):
     return {
         'id': merchant.pk,
         'user_id': merchant.user_id,
         'username': merchant.user.username,
         'display_name': merchant.user.first_name or merchant.user.username,
         'business_name': merchant.business_name,
-        'contact_phone': merchant.contact_phone,
-        'qualification_note': merchant.qualification_note,
+        'contact_phone': merchant.contact_phone if include_sensitive else '',
+        'qualification_note': merchant.qualification_note if include_sensitive else '',
         'qualification_tier': merchant.qualification_tier,
         'is_verified': merchant.is_verified,
-        'license_number': merchant.license_number,
-        'licensed_business_address': merchant.licensed_business_address,
-        'food_preparation_address': merchant.food_preparation_address,
+        'license_number': merchant.license_number if include_sensitive else '',
+        'licensed_business_address': merchant.licensed_business_address if include_sensitive else '',
+        'food_preparation_address': merchant.food_preparation_address if include_sensitive else '',
         'license_valid_until': merchant.license_valid_until.isoformat() if merchant.license_valid_until else None,
-        'wechat_pay_account': merchant.wechat_pay_account or '',
+        'wechat_pay_account': (merchant.wechat_pay_account or '') if include_sensitive else '',
         'trade_reason': merchant_trade_reason(merchant),
+        'sensitive_redacted': not include_sensitive,
     }
 
 
-def _serialize_stall_governance(stall: Stall, cfg: SiteConfiguration):
+def _serialize_stall_governance(
+    stall: Stall,
+    cfg: SiteConfiguration,
+    *,
+    include_merchant_sensitive: bool = True,
+):
     loc = getattr(stall, 'location', None)
     session = stall.current_session
     caps = capabilities(stall, {'config': cfg})
     return {
         'id': stall.pk,
         'merchant_id': stall.merchant_id,
-        'merchant': _serialize_merchant(stall.merchant),
+        'merchant': _serialize_merchant(stall.merchant, include_sensitive=include_merchant_sensitive),
         'area_id': stall.area_id,
         'area_name': stall.area.name,
         'name': stall.name,
@@ -605,7 +620,11 @@ def stalls_governance(request):
             | Q(merchant__business_name__icontains=q)
             | Q(merchant__user__username__icontains=q)
         )
-    serialized = [_serialize_stall_governance(s, cfg) for s in query]
+    include_sensitive = _can_view_merchant_sensitive(request.user)
+    serialized = [
+        _serialize_stall_governance(s, cfg, include_merchant_sensitive=include_sensitive)
+        for s in query
+    ]
     eligibility = request.query_params.get('eligibility', 'all')
     if eligibility == 'trade':
         serialized = [row for row in serialized if row['transaction_eligible']]
@@ -615,7 +634,7 @@ def stalls_governance(request):
         raise BusinessError('交易资格筛选无效。', 'invalid_eligibility', status=400)
 
     merchants = [
-        _serialize_merchant(m)
+        _serialize_merchant(m, include_sensitive=include_sensitive)
         for m in MerchantProfile.objects.select_related('user').order_by('id')
     ]
     areas = [
@@ -678,6 +697,10 @@ def update_merchant(request, merchant_id):
         for field, value in data.items():
             if field == 'wechat_pay_account':
                 value = (value or '').strip() or None
+                if merchant.wechat_pay_account != value and not (
+                    request.user.is_superuser or can_operate_all(request.user, 'market.resolve_payments')
+                ):
+                    raise BusinessError('修改微信直连收款配置标识需要支付核验或超级管理员权限。', 'forbidden', status=403)
             if getattr(merchant, field) != value:
                 setattr(merchant, field, value)
                 changed.append(field)
@@ -796,6 +819,9 @@ def update_stall(request, stall_id):
             if current_ids != point_ids:
                 stall.delivery_points.set(points)
                 changed.append('delivery_points')
+        elif 'area' in changed and stall.delivery_points.exclude(area_id=stall.area_id).exists():
+            stall.delivery_points.set(stall.delivery_points.filter(area_id=stall.area_id))
+            changed.append('delivery_points')
 
         if changed:
             audit(request.user, 'ops_stall_updated', f'market.Stall:{stall.pk}', fields=changed)
@@ -805,7 +831,15 @@ def update_stall(request, stall_id):
         .prefetch_related('delivery_points', 'products')
         .get(pk=stall_id)
     )
-    return Response({'stall': _serialize_stall_governance(refreshed, SiteConfiguration.current())})
+    return Response(
+        {
+            'stall': _serialize_stall_governance(
+                refreshed,
+                SiteConfiguration.current(),
+                include_merchant_sensitive=_can_view_merchant_sensitive(request.user),
+            )
+        }
+    )
 
 
 def _serialize_area(area: Area):
@@ -969,6 +1003,10 @@ def delivery_point_detail_view(request, point_id):
         changed = []
         if 'area_id' in data and data['area_id'] != point.area_id:
             area = get_object_or_404(Area, pk=data['area_id'])
+            if not settings.DEMO_MODE and area.is_demo:
+                raise BusinessError('非演示环境不能分配示例校园区域。', 'invalid_area', status=400)
+            if point.stalls.exclude(area_id=area.pk).exists():
+                raise BusinessError('已有原区域摊位关联该交接点，请先解除摊位关联后再变更所属区域。', 'delivery_point_in_use', status=409)
             point.area = area
             changed.append('area_id')
         for field in ('name', 'address', 'latitude', 'longitude', 'is_active'):

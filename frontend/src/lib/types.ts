@@ -4,6 +4,7 @@ export interface OpsPermissions {
   review_applications: boolean;
   create_assisted_application: boolean;
   view_merchants: boolean;
+  view_merchant_profiles: boolean;
   manage_merchants: boolean;
   manage_stalls: boolean;
   view_areas: boolean;

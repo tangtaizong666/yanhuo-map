@@ -278,6 +278,40 @@ class OpsGovernanceApiTests(TestCase):
                 format='json',
             )
             self.assertEqual(demo_blocked.status_code, 400)
+            demo_area = Area.objects.create(name='旧示例区', latitude=31.21, longitude=121.41, is_demo=True)
+            move_to_demo = self.api.patch(
+                f'/api/v1/ops/delivery-points/{point_id}',
+                {'area_id': demo_area.pk},
+                format='json',
+            )
+            self.assertEqual(move_to_demo.status_code, 400)
+            self.assertEqual(move_to_demo.data['code'], 'invalid_area')
+
+        # Cross-area consistency: bound delivery point cannot change area while linked,
+        # and moving stall area clears old-area delivery points automatically.
+        other_area = Area.objects.create(name='西操场区', latitude=31.24, longitude=121.48)
+        temp_stall = Stall.objects.create(
+            merchant=self.stall.merchant,
+            area_id=area_id,
+            name='跨区校验摊位',
+            category='小吃',
+        )
+        temp_stall.delivery_points.set([point_id])
+        in_use = self.api.patch(
+            f'/api/v1/ops/delivery-points/{point_id}',
+            {'area_id': other_area.pk},
+            format='json',
+        )
+        self.assertEqual(in_use.status_code, 409)
+        self.assertEqual(in_use.data['code'], 'delivery_point_in_use')
+
+        moved_stall = self.api.patch(
+            f'/api/v1/ops/stalls/{temp_stall.pk}',
+            {'area_id': other_area.pk},
+            format='json',
+        )
+        self.assertEqual(moved_stall.status_code, 200, moved_stall.data)
+        self.assertEqual(moved_stall.data['stall']['delivery_point_ids'], [])
 
     def test_orders_redaction_pagination_financial_resolution_and_csv_export(self):
         order_one, _ = create_order(self.student, payload(self.stall, self.product))
@@ -418,3 +452,76 @@ class OpsGovernanceApiTests(TestCase):
         logs = self.api.get('/api/v1/ops/audit-logs?action=ops_user_updated')
         self.assertEqual(logs.status_code, 200, logs.data)
         self.assertGreaterEqual(len(logs.data['results']), 1)
+
+    def test_stalls_field_level_redaction_and_payment_routing_guard(self):
+        m = self.stall.merchant
+        m.contact_phone = '13911112222'
+        m.qualification_note = '持证备案核查'
+        m.license_number = 'JY999888777'
+        m.licensed_business_address = '测试路 88 号'
+        m.food_preparation_address = '测试路 88 号后厨'
+        m.wechat_pay_account = 'wx_acct_initial'
+        m.save()
+
+        stall_only = User.objects.create_user('stall_only_ops', password='password123', is_staff=True)
+        stall_only.user_permissions.add(
+            Permission.objects.get(content_type__app_label='market', codename='view_stall'),
+            Permission.objects.get(content_type__app_label='market', codename='change_stall'),
+        )
+        self.auth(stall_only)
+        res = self.api.get('/api/v1/ops/stalls')
+        self.assertEqual(res.status_code, 200, res.data)
+        row_merchant = next(s['merchant'] for s in res.data['stalls'] if s['id'] == self.stall.pk)
+        self.assertTrue(row_merchant['sensitive_redacted'])
+        for redacted_key in (
+            'contact_phone',
+            'qualification_note',
+            'license_number',
+            'licensed_business_address',
+            'food_preparation_address',
+            'wechat_pay_account',
+        ):
+            self.assertEqual(row_merchant[redacted_key], '')
+
+        patched_stall = self.api.patch(
+            f'/api/v1/ops/stalls/{self.stall.pk}',
+            {'public_phone_enabled': False},
+            format='json',
+        )
+        self.assertEqual(patched_stall.status_code, 200, patched_stall.data)
+        self.assertTrue(patched_stall.data['stall']['merchant']['sensitive_redacted'])
+        self.assertEqual(patched_stall.data['stall']['merchant']['license_number'], '')
+
+        merchant_editor = User.objects.create_user('merchant_editor_ops', password='password123', is_staff=True)
+        merchant_editor.user_permissions.add(
+            Permission.objects.get(content_type__app_label='market', codename='view_merchantprofile'),
+            Permission.objects.get(content_type__app_label='market', codename='change_merchantprofile'),
+        )
+        self.auth(merchant_editor)
+        full_res = self.api.get('/api/v1/ops/stalls')
+        self.assertEqual(full_res.status_code, 200, full_res.data)
+        full_merchant = next(s['merchant'] for s in full_res.data['stalls'] if s['id'] == self.stall.pk)
+        self.assertFalse(full_merchant['sensitive_redacted'])
+        self.assertEqual(full_merchant['license_number'], 'JY999888777')
+
+        # Changing wechat_pay_account requires resolve_payments or superuser
+        denied_pay = self.api.patch(
+            f'/api/v1/ops/merchants/{m.pk}',
+            {'wechat_pay_account': 'wx_acct_hijack'},
+            format='json',
+        )
+        self.assertEqual(denied_pay.status_code, 403)
+        self.assertEqual(denied_pay.data['code'], 'forbidden')
+
+        merchant_editor.user_permissions.add(
+            Permission.objects.get(content_type__app_label='market', codename='resolve_payments'),
+        )
+        merchant_editor = User.objects.get(pk=merchant_editor.pk)
+        self.auth(merchant_editor)
+        allowed_pay = self.api.patch(
+            f'/api/v1/ops/merchants/{m.pk}',
+            {'wechat_pay_account': 'wx_acct_verified'},
+            format='json',
+        )
+        self.assertEqual(allowed_pay.status_code, 200, allowed_pay.data)
+        self.assertEqual(allowed_pay.data['merchant']['wechat_pay_account'], 'wx_acct_verified')

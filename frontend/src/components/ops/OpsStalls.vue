@@ -395,7 +395,14 @@ onMounted(() => {
                 </div>
               </div>
 
-              <div class="o-form-grid">
+              <p
+                v-if="stall.merchant.sensitive_redacted"
+                class="o-callout"
+              >
+                当前管理员账号仅具备摊位查看/治理权限，未授予商户证照与收款配置查看权限；敏感联系方式、许可证号与支付标识已由服务端脱敏。
+              </p>
+
+              <div v-else class="o-form-grid">
                 <label class="o-field">
                   经营主体名称 *
                   <input
@@ -461,6 +468,10 @@ onMounted(() => {
                     v-model="merchantDraft.wechat_pay_account"
                     class="o-input"
                     placeholder="对应服务端商户收款账户 key"
+                    :disabled="
+                      !session.user?.is_superuser &&
+                      !session.hasOpsPerm('resolve_payments')
+                    "
                   />
                 </label>
                 <label class="o-field">
