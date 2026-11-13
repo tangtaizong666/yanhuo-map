@@ -262,16 +262,21 @@ class Verification:
             urllib.request.HTTPCookieProcessor(jar), urllib.request.HTTPSHandler(context=context))
         checks = []
 
-        def request(path, data=None, headers=None, expected=200):
-            req = urllib.request.Request(origin + path, data=data, headers=headers or {})
+        def request(path, data=None, headers=None, expected=200, method=None):
+            req = urllib.request.Request(origin + path, data=data, headers=headers or {}, method=method)
             try:
                 response = opener.open(req, timeout=15)
             except urllib.error.HTTPError as exc:
                 response = exc
-            body = response.read()
-            require(response.status == expected, f'HTTPS {path}: expected {expected}, got {response.status}')
-            checks.append({'path': path, 'status': response.status, 'bytes': len(body)})
-            return body, response.headers
+            try:
+                body = response.read()
+                status = response.status
+                resp_headers = response.headers
+            finally:
+                response.close()
+            require(status == expected, f'HTTPS {path}: expected {expected}, got {status}')
+            checks.append({'path': path, 'status': status, 'bytes': len(body)})
+            return body, resp_headers
 
         # Wait for Caddy's first TLS certificate without skipping certificate validation.
         for attempt in range(30):
@@ -330,10 +335,12 @@ print('RESULT ' + json.dumps({'stall_id': stall.pk, 'product_id': product.pk}))
                 'Payment QR upload did not use protected qr-* path')
         request(f"/api/v1/merchant/stalls/{fixture['stall_id']}/profile",
                 json.dumps({'payment_qr_image': media_path}).encode(),
-                {'Content-Type': 'application/json', 'X-CSRFToken': csrf, 'Referer': origin + '/'}, expected=400)
+                {'Content-Type': 'application/json', 'X-CSRFToken': csrf, 'Referer': origin + '/'},
+                expected=400, method='PATCH')
         request(f"/api/v1/merchant/stalls/{fixture['stall_id']}/profile",
                 json.dumps({'payment_qr_image': qr_path}).encode(),
-                {'Content-Type': 'application/json', 'X-CSRFToken': csrf, 'Referer': origin + '/'}, expected=200)
+                {'Content-Type': 'application/json', 'X-CSRFToken': csrf, 'Referer': origin + '/'},
+                expected=200, method='PATCH')
         qr_media, qr_headers = request(qr_path)
         require(qr_media.startswith(b'\xff\xd8') and qr_headers.get('Cache-Control') == 'private, no-store',
                 'Authenticated merchant could not read protected payment QR with private no-store headers')
