@@ -34,6 +34,12 @@ class Area(models.Model):
     class Meta:
         verbose_name = verbose_name_plural = '校园区域'
     def __str__(self): return self.name
+    def clean(self):
+        super().clean()
+        for field, limit in [('latitude', 90), ('longitude', 180)]:
+            value = getattr(self, field)
+            if value is None or not math.isfinite(value) or not -limit <= value <= limit:
+                raise ValidationError({field: '请输入有效范围内的经纬度。'})
 
 
 class MerchantProfile(models.Model):
@@ -177,6 +183,12 @@ class StallLocation(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     class Meta:
         verbose_name = verbose_name_plural = '摊位位置'
+    def clean(self):
+        super().clean()
+        for field, limit in [('latitude', 90), ('longitude', 180)]:
+            value = getattr(self, field)
+            if value is None or not math.isfinite(value) or not -limit <= value <= limit:
+                raise ValidationError({field: '请输入有效范围内的经纬度。'})
 
 
 class BusinessSession(models.Model):

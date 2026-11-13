@@ -231,7 +231,14 @@ watch(selected, () => {
   fetching.value = false;
   if (!cached) void load();
 });
+function resumeOrders() {
+  if (!document.hidden && !disposed && session.user && !loading.value) {
+    void pollAttention();
+  }
+}
 onMounted(async () => {
+  window.addEventListener("focus", resumeOrders);
+  document.addEventListener("visibilitychange", resumeOrders);
   try {
     await session.load();
     if (disposed) return;
@@ -252,6 +259,8 @@ onMounted(async () => {
 });
 onUnmounted(() => {
   disposed = true;
+  window.removeEventListener("focus", resumeOrders);
+  document.removeEventListener("visibilitychange", resumeOrders);
   cancelPoll();
   pageController?.abort();
   sequence++;
@@ -352,7 +361,7 @@ function orderAction(order: any) {
   <div class="page orders-page">
     <div class="page-heading">
       <div>
-        <span class="eyebrow">A TASTE OF YOUR DAY</span>
+        <span class="eyebrow">今日食记</span>
         <h1>我的订单<span class="heading-dot">.</span></h1>
         <p class="muted">每一份期待，都有热气腾腾的回应。</p>
       </div>
@@ -478,9 +487,13 @@ function orderAction(order: any) {
         </p>
         <div class="order-food">
           <img
+            v-if="order.items?.[0]?.image || order.stall_image"
             :src="order.items?.[0]?.image || order.stall_image"
             :alt="order.items?.[0]?.name || order.stall_name"
           />
+          <div v-else class="order-food-placeholder" aria-hidden="true">
+            <ShoppingBag :size="24" />
+          </div>
           <div class="food-copy">
             <h3>{{ order.items?.map((item: any) => item.name).join("、") }}</h3>
             <p class="muted">
@@ -730,11 +743,19 @@ function orderAction(order: any) {
   gap: 14px;
   padding: 24px 0;
 }
-.order-food img {
+.order-food img,
+.order-food-placeholder {
   width: 73px;
   height: 73px;
   object-fit: cover;
   border-radius: 12px;
+  flex: none;
+}
+.order-food-placeholder {
+  display: grid;
+  place-items: center;
+  background: #f5ead9;
+  color: #9e7348;
 }
 .food-copy {
   min-width: 0;

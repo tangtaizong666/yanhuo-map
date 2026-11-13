@@ -132,8 +132,49 @@ router.beforeEach(async (to) => {
   return true;
 });
 
+const CHUNK_RELOAD_KEY = "yanhuo-chunk-reload";
+let pageUnloading = false;
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeunload", () => {
+    pageUnloading = true;
+  });
+  window.addEventListener("pagehide", () => {
+    pageUnloading = true;
+  });
+  window.addEventListener("pageshow", () => {
+    pageUnloading = false;
+  });
+}
+
 router.afterEach((to) => {
   document.title = `${to.meta.title || "校园好味"} · 烟火地图`;
+  try {
+    sessionStorage.removeItem(CHUNK_RELOAD_KEY);
+  } catch {
+    /* sessionStorage unavailable */
+  }
+});
+
+router.onError((err, to) => {
+  if (pageUnloading || typeof window === "undefined") return;
+  const msg = String((err as Error)?.message || err || "");
+  if (
+    /Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module/i.test(
+      msg,
+    )
+  ) {
+    window.setTimeout(() => {
+      if (pageUnloading) return;
+      try {
+        if (sessionStorage.getItem(CHUNK_RELOAD_KEY) !== to.fullPath) {
+          sessionStorage.setItem(CHUNK_RELOAD_KEY, to.fullPath);
+          window.location.assign(to.fullPath);
+        }
+      } catch {
+        /* sessionStorage unavailable */
+      }
+    }, 150);
+  }
 });
 
 installBrowseReturn(router);

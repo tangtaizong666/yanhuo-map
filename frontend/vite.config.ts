@@ -5,7 +5,9 @@ export default defineConfig({
   server: {
     port: 5183,
     strictPort: true,
-    watch: { ignored: ["**/test-results*/**", "**/playwright-report/**"] },
+    watch: {
+      ignored: ["**/test-results*/**", "**/playwright-report/**", "**/.runtime/**", "**/tour-shots/**"],
+    },
     proxy: {
       "/api": { target: "http://127.0.0.1:8087", changeOrigin: false },
       "/admin": { target: "http://127.0.0.1:8087", changeOrigin: false },

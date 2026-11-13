@@ -39,16 +39,30 @@ def private_response(data, status=200):
     return response
 
 
+class RecoveryWriteThrottle(AuthThrottle):
+    def allow_request(self, request, view):
+        if request.method in ('GET', 'HEAD', 'OPTIONS'):
+            return True
+        return super().allow_request(request, view)
+
+
 @sensitive_post_parameters('password')
 @api_view(['GET', 'POST', 'DELETE'])
 @permission_classes([IsAuthenticated])
-@throttle_classes([AuthThrottle])
+@throttle_classes([RecoveryWriteThrottle])
 def manage_recovery(request):
     if request.method == 'GET':
         record = AccountRecovery.objects.filter(user=request.user).first()
         return private_response({'enabled': available(record, request.user),
                                  'created_at': record.created_at if record else None})
     password = serializers.CharField(max_length=128, trim_whitespace=False).run_validation(request.data.get('password'))
+    try:
+        verified = login_attempt(request, request.user.username,
+            lambda: request.user if request.user.is_active and request.user.check_password(password) else None)
+    except LoginRateLimited as exc:
+        raise Throttled(wait=exc.retry_after, detail='密码验证失败次数过多，请稍后再试。')
+    if not verified:
+        raise BusinessError('当前密码不正确。', 'invalid_password', status=400)
     with transaction.atomic():
         user = get_user_model().objects.select_for_update().get(pk=request.user.pk)
         if not user.is_active or not user.check_password(password):

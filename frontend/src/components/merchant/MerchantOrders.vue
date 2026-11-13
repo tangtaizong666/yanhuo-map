@@ -9,6 +9,7 @@ import {
   ref,
   watch,
 } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import {
   Bike,
   Check,
@@ -214,6 +215,8 @@ function filterCount(value: string) {
   );
 }
 const lookupOrder = ref<any>(null);
+const route = useRoute();
+const router = useRouter();
 const toolsOpen = ref(["all", "completed", "cancelled"].includes(props.initialFilter));
 const searchToolsButton = ref<HTMLButtonElement>();
 const lookupOpen = ref(false);
@@ -222,7 +225,21 @@ function selectStage(value: string) {
   cancellationOnly.value = false;
   query.value = "";
   fulfillment.value = "all";
+  if (route.query.filter) {
+    const nextQuery = { ...route.query };
+    delete nextQuery.filter;
+    void router.replace({ path: route.path, query: nextQuery });
+  }
 }
+watch(
+  () => props.initialFilter,
+  (val) => {
+    if (!val || val === "active") return;
+    filter.value = val === "cancellation" ? "pending" : val;
+    cancellationOnly.value = val === "cancellation";
+    if (["all", "completed", "cancelled"].includes(val)) toolsOpen.value = true;
+  },
+);
 const query = ref("");
 const fulfillment = ref("all");
 const hasSearchFilters = computed(() => !!query.value.trim() || fulfillment.value !== "all");
@@ -1549,8 +1566,8 @@ onUnmounted(() => {
         </div>
         <div class="m-orders-card-items">
           <div
-            v-for="item in order.items"
-            :key="item.product_id"
+            v-for="(item, idx) in order.items"
+            :key="item.product_id ?? `deleted-${idx}`"
             class="m-simple-dish"
           >
             <div class="m-simple-dish-title">
@@ -1767,8 +1784,8 @@ onUnmounted(() => {
               </h3>
               <div class="m-orders-card-items">
                 <div
-                  v-for="item in selectedOrder.items"
-                  :key="item.product_id"
+                  v-for="(item, idx) in selectedOrder.items"
+                  :key="item.product_id ?? `deleted-${idx}`"
                   class="m-orders-item"
                 >
                   <div>
@@ -3339,6 +3356,11 @@ onUnmounted(() => {
   overflow-y: auto;
   background: #fffaf2;
   color: #493723;
+  box-shadow: 0 24px 64px rgba(36, 25, 16, 0.34);
+}
+.m-orders-confirm::backdrop {
+  background: rgba(36, 25, 16, 0.58);
+  backdrop-filter: blur(4px);
 }
 .m-orders-confirm header {
   display: flex;

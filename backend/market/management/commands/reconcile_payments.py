@@ -29,6 +29,8 @@ class Command(BaseCommand):
             except Exception as exc:
                 record_worker_failure('reconcile_payments', exc)
                 self.stderr.write('payment_reconcile_batch_failed')
+                if not options['loop']:
+                    raise
             if not options['loop']: break
             time.sleep(interval)
 
@@ -54,7 +56,10 @@ class Command(BaseCommand):
         for order_id in ids:
             try:
                 sync_payment(order_id)
-                if (PaymentAttempt.objects.filter(Q(status__in=PaymentAttempt.ACTIVE_STATUSES) | Q(status='paid', order__payment_review_required=True), order_id=order_id).exclude(error_code='').exists()
+                if (PaymentAttempt.objects.filter(
+                        Q(status__in=PaymentAttempt.ACTIVE_STATUSES)
+                        | Q(status='paid', order__payment_review_required=True) & ~Q(error_code='EXTERNAL_REFUND_REQUIRES_REVIEW'),
+                        order_id=order_id).exclude(error_code='').exists()
                         or PaymentRefund.objects.filter(order_id=order_id, resolved_at__isnull=True).exclude(error_code='').exists()):
                     raise ReconciliationUnverified()
             except Exception as exc:

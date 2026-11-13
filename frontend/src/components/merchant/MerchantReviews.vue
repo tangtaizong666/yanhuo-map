@@ -10,7 +10,7 @@ import {
 } from "lucide-vue-next";
 import { api, formatTime } from "../../lib/api";
 import { notify } from "../../lib/notify";
-const props = defineProps<{ stall: any }>();
+const props = defineProps<{ stall: any; refreshTick?: number }>();
 type Review = {
   id: number;
   mode: "live" | "simulation";
@@ -95,6 +95,12 @@ const shown = computed(() =>
     ),
 );
 watch(
+  () => props.refreshTick,
+  (tick, prev) => {
+    if (tick !== undefined && tick !== prev) void load();
+  },
+);
+watch(
   () => `${props.stall?.id}:${mode.value}`,
   () => {
     reviews.value = [];
@@ -170,7 +176,7 @@ async function withdrawReply(review: Review) {
   <section class="reviews-panel">
     <div class="reviews-heading">
       <div>
-        <span class="eyebrow">WORDS FROM YOUR GUESTS</span>
+        <span class="eyebrow">食客回响</span>
         <h2>{{ mode === 'simulation' ? '模拟评价演练' : '听见每一份真实反馈' }}</h2>
         <p>{{ mode === 'simulation' ? '仅用于演练，不计入公开评分与真实订单评价。' : '认真回应，让一次光顾成为下一次期待。' }}</p>
       </div>

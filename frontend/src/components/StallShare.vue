@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from "vue";
 import { Copy, Download, QrCode, Share2, X } from "lucide-vue-next";
 import QRCode from "qrcode";
 import type { Stall } from "../lib/types";
@@ -14,6 +14,9 @@ const qr = ref("");
 const message = ref("");
 const generating = ref(false);
 const linkField = ref<HTMLInputElement>();
+const shareUid = useId();
+const titleId = `stall-share-title-${shareUid}`;
+const linkId = `public-stall-link-${shareUid}`;
 const configuredOrigin = computed(() => {
   try {
     const value = session.config?.public_base_url;
@@ -139,7 +142,7 @@ onMounted(() => {
   <Teleport to="body"><dialog
     ref="dialog"
     class="stall-share-dialog"
-    aria-labelledby="stall-share-title"
+    :aria-labelledby="titleId"
     @click.self="close"
     @cancel.prevent="close"
     @close="restoreFocus"
@@ -155,8 +158,8 @@ onMounted(() => {
         <X :size="20" />
       </button>
     </header>
-    <span class="eyebrow">GOOD TASTE, PASSED ALONG</span>
-    <h2 id="stall-share-title">把好味道分享出去</h2>
+    <span class="eyebrow">好味相传</span>
+    <h2 :id="titleId">把好味道分享出去</h2>
     <p>
       {{ stall.name }}<br /><small
         >扫码查看最新出摊信息，出发前再确认一次。</small
@@ -180,9 +183,9 @@ onMounted(() => {
           : "仅同网络体验。手机需与电脑连接同一可互访网络，电脑保持开机。"
       }}
     </p>
-    <label class="share-link-label" for="public-stall-link">公开摊位链接</label
+    <label class="share-link-label" :for="linkId">公开摊位链接</label
     ><input
-      id="public-stall-link"
+      :id="linkId"
       ref="linkField"
       class="share-link"
       :value="shareUrl"

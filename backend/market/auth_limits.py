@@ -88,7 +88,12 @@ def login_attempt(request, username, authenticate_callback):
         # Consistent lock order also covers first-use races through unique keys.
         for key, limit in candidates:
             AuthenticationFailureBucket.objects.get_or_create(key=key)
-            row = AuthenticationFailureBucket.objects.select_for_update().get(pk=key)
+            try:
+                row = AuthenticationFailureBucket.objects.select_for_update().get(pk=key)
+            except AuthenticationFailureBucket.DoesNotExist:
+                with transaction.atomic():
+                    AuthenticationFailureBucket.objects.get_or_create(key=key)
+                row = AuthenticationFailureBucket.objects.select_for_update().get(pk=key)
             if row.window_started_at + window <= now:
                 row.failures, row.window_started_at = 0, now
             if row.failures >= limit:

@@ -20,7 +20,7 @@ from .models import Area, Feedback, MerchantApplication, MerchantProfile, Order,
 from .serializers import OrderSerializer, ProductSerializer
 from .services import audit
 from .views import csrf, merchant_stall, order_query, visible_stalls
-from .auth_limits import client_ip
+from .auth_limits import client_ip_bucket
 from .permissions import can_operate_all
 
 
@@ -220,7 +220,7 @@ class FeedbackThrottle(SimpleRateThrottle):
     scope = 'location_feedback'
     rate = '20/hour'
     def get_cache_key(self, request, view):
-        ident = f'user:{request.user.pk}' if request.user.is_authenticated else f'ip:{client_ip(request)}'
+        ident = f'user:{request.user.pk}' if request.user.is_authenticated else f'ip:{client_ip_bucket(request)}'
         return self.cache_format % {'scope': self.scope, 'ident': ident}
 
 

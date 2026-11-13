@@ -36,6 +36,10 @@ const sourceLabels: Record<string, string> = {
   follow: "关注列表",
   homepage: "首页",
   home: "首页",
+  home_recent: "首页常买",
+  recent_order: "最近订单",
+  stall_detail: "摊位详情",
+  merchant_preview: "商家预览",
   direct: "直接访问",
   unknown: "未标记来源",
 };
@@ -44,8 +48,12 @@ const eventLabels: Record<string, string> = {
   share_open: "分享链接打开",
   share_click: "点击分享",
   navigation_click: "点击导航",
+  route_click: "路线规划",
   follow: "新增关注",
   stall_view: "摊位页面浏览",
+  browse: "浏览发现",
+  reorder: "再来一单",
+  checkout_view: "进入结算",
 };
 const stats = computed(() => [
   {
@@ -255,7 +263,7 @@ function exportCsv() {
         ><small>{{
           s.label === "关注人数"
             ? "当前累计关注"
-            : s.label === "收款客单价"
+            : s.label.endsWith("收款客单价")
               ? "收款总额 ÷ 收款订单数"
               : "所选自然日期范围"
         }}</small>

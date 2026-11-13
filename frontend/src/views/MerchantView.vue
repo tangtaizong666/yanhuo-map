@@ -274,6 +274,7 @@ async function refresh() {
     if (currentContext(context) && seq === refreshSeq) {
       refreshing.value = false;
       loading.value = false;
+      reviewRefreshTick.value++;
       if (refreshQueued) {
         refreshQueued = false;
         void refresh();
@@ -410,12 +411,16 @@ onUnmounted(() => {
   orderSeq++;
   metricSeq++;
 });
+const reviewRefreshTick = ref(0);
 </script>
 <template>
   <div v-if="!allowed" class="m-application-page">
     <RouterLink class="brand" to="/merchant"><span class="brand-mark"><Store :size="25" /></span><span>烟火地图<small>商家入驻</small></span></RouterLink>
     <MerchantOnboarding :key="session.user?.id || 'guest'" @approved="applicationApproved" />
-    <RouterLink to="/" class="m-text-link" @click="session.setConsumerPreview(true)">去学生端逛逛 <ArrowUpRight :size="14" /></RouterLink>
+    <div class="m-application-footer">
+      <RouterLink to="/" class="m-text-link" @click="session.setConsumerPreview(true)">去学生端逛逛 <ArrowUpRight :size="14" /></RouterLink>
+      <button v-if="session.user" type="button" class="m-text-link" @click="logout"><LogOut :size="14" /> 退出登录</button>
+    </div>
   </div>
   <div v-else class="m-shell" :class="{ 'm-orders-workspace': orderWorkspace }">
     <aside class="m-sidebar">
@@ -454,11 +459,11 @@ onUnmounted(() => {
             <p v-if="orderWorkspace && !discoveryOnly && (!stall.is_visible || !stall.activation?.has_location)" class="m-setup-link"><span>完成开摊准备后，才能接到新订单。</span><RouterLink to="/merchant/more#activation">查看准备事项 <ArrowRight :size="16" /></RouterLink></p>
             <p v-else-if="orderWorkspace && locationDue" class="m-setup-link"><span>位置即将过期，请核对后确认。</span><RouterLink to="/merchant/store">确认位置 <ArrowRight :size="16" /></RouterLink></p>
             <p v-if="heartbeatError" class="m-alert" role="status">{{ heartbeatError }}</p>
-            <MerchantOrders v-if="orderWorkspace" :key="`${session.user!.id}:${stall.id}:${route.query.filter || 'active'}`" :stall="stall" :orders="orders" :orders-ready="ordersReady" :sync-error="error" :loading="refreshing" :initial-filter="String(route.query.filter || 'active')" :counts="orderCounts" @refresh="orderChanged" />
+            <MerchantOrders v-if="orderWorkspace" :key="`${session.user!.id}:${stall.id}`" :stall="stall" :orders="orders" :orders-ready="ordersReady" :sync-error="error" :loading="refreshing" :initial-filter="String(route.query.filter || 'active')" :counts="orderCounts" @refresh="orderChanged" />
             <MerchantProducts v-else-if="section === 'products'" :key="stall.id" :stall="stall" :discovery-only="discoveryOnly" @refresh="mutationRefresh" />
             <MerchantMore v-else-if="section === 'more'" :stall="stall" :sellable="!!sellable" :discovery-only="discoveryOnly" />
             <MerchantAnalytics v-else-if="section === 'analytics'" :metrics="metrics" :days="days" :mode="effectiveAnalyticsMode" :can-switch-mode="!!session.config?.services_simulation_enabled || stall.services?.mode === 'simulation'" :error="metricsError" :loading="metricsLoading" @period="changePeriod" @mode="changeAnalyticsMode" />
-            <MerchantReviews v-else-if="section === 'reviews'" :key="stall.id" :stall="stall" @refresh="mutationRefresh" />
+            <MerchantReviews v-else-if="section === 'reviews'" :key="stall.id" :stall="stall" :refresh-tick="reviewRefreshTick" @refresh="mutationRefresh" />
             <MerchantStore v-else-if="section === 'store'" :key="`${session.user!.id}:${stall.id}`" :stall="stall" :orders="orders" :orders-ready="ordersReady" :discovery-only="discoveryOnly" @refresh="mutationRefresh" />
             <div id="notifications" :class="{ 'm-reminder-settings': section === 'more' }">
               <h2 v-if="section === 'more' && (!discoveryOnly || hasOrderHistory)">{{ discoveryOnly ? '已有订单提醒' : '新订单提醒' }}</h2>
@@ -477,5 +482,6 @@ onUnmounted(() => {
 </template>
 <style scoped>
 .m-application-page { max-width: 920px; margin: 0 auto; padding: 28px 18px; }
+.m-application-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-top: 8px; }
 .m-more-final-action { width: 100%; max-width: 820px; margin-top: 24px; }
 </style>

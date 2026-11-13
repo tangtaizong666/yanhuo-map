@@ -709,11 +709,11 @@ async function submitReview() {
           <div class="receipt-header">
             <Store :size="20" />
             <h2>{{ order.stall_name }}</h2>
-            <span>ORDER RECEIPT</span>
+            <span>本单明细</span>
           </div>
           <article
-            v-for="item in order.items"
-            :key="item.product_id"
+            v-for="(item, idx) in order.items"
+            :key="item.product_id ?? `deleted-${idx}`"
             class="receipt-product"
           >
             <RouterLink
@@ -721,9 +721,24 @@ async function submitReview() {
               :to="`/stalls/${order.stall_id}/products/${item.product_id}`"
               class="receipt-photo"
               :aria-label="`查看${item.name}详情`"
-              ><img :src="item.image" :alt="item.name"
-            /></RouterLink>
-            <img v-else :src="item.image" :alt="item.name" />
+              ><img v-if="item.image" :src="item.image" :alt="item.name" /><span
+                v-else
+                class="receipt-photo-placeholder"
+                aria-hidden="true"
+                ><ShoppingBag :size="18" /></span
+            ></RouterLink>
+            <img
+              v-else-if="item.image"
+              :src="item.image"
+              :alt="item.name"
+              class="receipt-photo"
+            />
+            <span
+              v-else
+              class="receipt-photo receipt-photo-placeholder"
+              aria-hidden="true"
+              ><ShoppingBag :size="18"
+            /></span>
             <div>
               <h3>
                 <RouterLink
@@ -1269,6 +1284,16 @@ async function submitReview() {
   height: 49px;
   border-radius: 8px;
   overflow: hidden;
+  object-fit: cover;
+}
+.receipt-photo-placeholder {
+  width: 49px;
+  height: 49px;
+  display: grid;
+  place-items: center;
+  background: #f5ead9;
+  color: #9e7348;
+  border-radius: 8px;
 }
 .receipt-product h3 a {
   display: inline-flex;

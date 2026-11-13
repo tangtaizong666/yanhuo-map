@@ -820,3 +820,202 @@ class DailyQuotaPostgreSQLRaceTests(TransactionTestCase):
                     self.assertEqual(status_code, 400)
                     self.assertEqual(stall.payment_qr_image, qr_b_url)
                     self.assertFalse(default_storage.exists(qr_a_rel))
+
+
+class ComprehensiveAuditRegressionTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.area, self.student, self.vendor, self.stall, self.product = fixtures()
+
+    def test_serve_public_media_blocks_all_qr_path_variants_and_serves_normal_media(self):
+        from config.urls import serve_public_media
+        from django.core.files.base import ContentFile
+        from django.core.files.storage import default_storage
+
+        rf = RequestFactory()
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(MEDIA_ROOT=tmpdir):
+            default_storage.save(f'merchants/{self.stall.pk}/qr-secret.jpg', ContentFile(b'qr-secret'))
+            default_storage.save(f'merchants/{self.stall.pk}/dish.jpg', ContentFile(b'dish-bytes'))
+
+            for blocked_path in (
+                f'merchants/{self.stall.pk}/qr-secret.jpg',
+                f'merchants//{self.stall.pk}/qr-secret.jpg',
+                f'merchants/{self.stall.pk}/./qr-secret.jpg',
+                f'merchants/{self.stall.pk}/QR-SECRET.JPG',
+                '../manage.py',
+            ):
+                res = serve_public_media(rf.get(f'/media/{blocked_path}'), path=blocked_path)
+                self.assertEqual(res.status_code, 404, blocked_path)
+                self.assertEqual(res.headers.get('Cache-Control'), 'private, no-store')
+
+            ok = serve_public_media(
+                rf.get(f'/media/merchants/{self.stall.pk}/dish.jpg'),
+                path=f'merchants/{self.stall.pk}/dish.jpg',
+            )
+            try:
+                self.assertEqual(ok.status_code, 200)
+                self.assertEqual(b''.join(ok.streaming_content), b'dish-bytes')
+            finally:
+                ok.close()
+
+    def test_expire_orders_handles_missing_session_and_idempotent_stale_event(self):
+        from django.core.management import call_command
+        from .models import BusinessSession, Event, SiteConfiguration
+
+        session = self.stall.current_session
+        self.assertIsNotNone(session)
+        config = SiteConfiguration.current()
+        stale_time = timezone.now() - timedelta(minutes=config.stale_minutes + 15)
+        BusinessSession.objects.filter(pk=session.pk).update(status='open', last_confirmed_at=stale_time)
+        call_command('expire_orders')
+        call_command('expire_orders')
+        events = Event.objects.filter(
+            stall=self.stall,
+            type='stall_stale',
+            metadata__session_id=session.pk,
+        )
+        self.assertEqual(events.count(), 1)
+
+    def test_merchant_analytics_excludes_cancelled_top_products_and_tracks_paid_attempts(self):
+        completed, _ = create_order(self.student, payload(self.stall, self.product))
+        merchant_action(completed.pk, self.vendor, 'accept')
+        merchant_action(completed.pk, self.vendor, 'ready')
+        merchant_action(completed.pk, self.vendor, 'confirm_payment')
+        merchant_action(completed.pk, self.vendor, 'complete', completed.pickup_code)
+
+        cancelled, _ = create_order(
+            self.student,
+            {
+                **payload(self.stall, self.product),
+                'items': [
+                    {
+                        'product_id': self.product.pk,
+                        'quantity': 4,
+                        'expected_price_cents': self.product.price_cents,
+                    }
+                ],
+            },
+        )
+        merchant_action(cancelled.pk, self.vendor, 'reject', '售罄取消')
+
+        # Compensated duplicate payment order: order remains paid with two verified paid attempts
+        dup_order, _ = create_order(self.student, payload(self.stall, self.product))
+        now = timezone.now()
+        Order.objects.filter(pk=dup_order.pk).update(
+            status='completed',
+            payment_method='wechat_pay',
+            payment_status='paid',
+            paid_at=now,
+        )
+        PaymentAttempt.objects.create(
+            order=dup_order,
+            merchant=self.stall.merchant,
+            mode=dup_order.mode,
+            account_key='acct-1',
+            mchid='1234567890',
+            appid='wx1',
+            out_trade_no=uuid.uuid4().hex,
+            transaction_id='wx-tx-kept',
+            channel='native',
+            amount_cents=dup_order.total_cents,
+            status='paid',
+            paid_at=now,
+            expires_at=now + timedelta(minutes=10),
+        )
+        PaymentAttempt.objects.create(
+            order=dup_order,
+            merchant=self.stall.merchant,
+            mode=dup_order.mode,
+            account_key='acct-1',
+            mchid='1234567890',
+            appid='wx1',
+            out_trade_no=uuid.uuid4().hex,
+            transaction_id='wx-tx-extra',
+            channel='jsapi',
+            amount_cents=dup_order.total_cents,
+            status='paid',
+            paid_at=now,
+            expires_at=now + timedelta(minutes=10),
+        )
+
+        api = APIClient()
+        api.force_authenticate(self.vendor)
+        res = api.get(f'/api/v1/merchant/metrics?stall={self.stall.pk}&mode={dup_order.mode}')
+        self.assertEqual(res.status_code, 200, res.data)
+        top = res.data['top_products']
+        self.assertEqual(len(top), 1)
+        # Only completed + dup_order count (1 + 1 = 2), NOT the rejected 4-item order!
+        self.assertEqual(top[0]['quantity'], 2)
+        # Receipts sum offline completed (1x) + 2 verified paid attempts (2x) = 3x product price
+        self.assertEqual(res.data['revenue_cents'], self.product.price_cents * 3)
+        for row in res.data['recent_payments']:
+            if row['id'] == dup_order.pk:
+                self.assertFalse(row['refunded'])
+
+    def test_expired_pending_order_rejects_merchant_accept_with_409_order_expired(self):
+        order, _ = create_order(self.student, payload(self.stall, self.product))
+        Order.objects.filter(pk=order.pk).update(expires_at=timezone.now() - timedelta(minutes=2))
+        with self.assertRaises(BusinessError) as ctx:
+            merchant_action(order.pk, self.vendor, 'accept')
+        self.assertEqual(ctx.exception.detail['code'], 'order_expired')
+        order.refresh_from_db()
+        self.assertEqual(order.status, 'cancelled')
+
+    def test_logout_exempt_from_mismatched_actor_header_and_account_delete_scrubs_application(self):
+        from .models import MerchantApplication
+
+        applicant = User.objects.create_user('applicant-del', password='Password123!')
+        app_row = MerchantApplication.objects.create(
+            user=applicant,
+            business_name='测试个体户',
+            stall_name='测试烧烤摊',
+            category='烧烤',
+            contact_phone='13812345678',
+            address_note='北门广场',
+            description='炭火烤串',
+            confirmed_at=timezone.now(),
+        )
+        # Historical simulation order must not block account deletion when simulation is disabled
+        Order.objects.create(
+            user=applicant,
+            stall=self.stall,
+            stall_name=self.stall.name,
+            mode='simulation',
+            status='preparing',
+            pickup_code='7788',
+            total_cents=1200,
+            expires_at=timezone.now() + timedelta(minutes=15),
+            pickup_address='北门',
+            pickup_latitude=30.0,
+            pickup_longitude=120.0,
+            idempotency_key=uuid.uuid4().hex,
+            request_hash='sim-hold-check',
+        )
+
+        # Logout succeeds even with mismatched X-Yanhuo-Actor
+        session_client = APIClient()
+        session_client.force_login(self.student)
+        logout_res = session_client.post(
+            '/api/v1/auth/logout',
+            HTTP_X_YANHUO_ACTOR=f'user:{self.vendor.pk}',
+        )
+        self.assertEqual(logout_res.status_code, 200)
+
+        with override_settings(SERVICES_SIMULATION_ENABLED=False):
+            del_client = APIClient()
+            del_client.force_authenticate(applicant)
+            del_res = del_client.delete(
+                '/api/v1/auth/account',
+                {'password': 'Password123!'},
+                format='json',
+            )
+            self.assertEqual(del_res.status_code, 200, del_res.data)
+
+        app_row.refresh_from_db()
+        self.assertEqual(app_row.business_name, '')
+        self.assertEqual(app_row.stall_name, '')
+        self.assertEqual(app_row.contact_phone, '')
+        self.assertEqual(app_row.address_note, '')
+        self.assertEqual(app_row.description, '')
+        self.assertEqual(app_row.status, 'rejected')
+

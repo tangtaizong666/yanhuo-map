@@ -44,11 +44,15 @@ const merchantArea = computed(
         isMerchantPath(safeReturnTo(route.query.returnTo)))),
 );
 const opsArea = computed(() => isOpsPath(route.path));
+const notFoundRoute = computed(() =>
+  route.matched.some((record) => record.path === "/:pathMatch(.*)*"),
+);
 const consumerPreview = computed(
   () =>
     (session.isMerchant || session.isAdmin) &&
     !merchantArea.value &&
     !opsArea.value &&
+    !(notFoundRoute.value && !session.consumerPreview) &&
     !["/login", "/recover", "/account-security"].includes(route.path),
 );
 const consumerShell = computed(
@@ -60,7 +64,7 @@ const consumerShell = computed(
     !opsArea.value &&
     !(
       (session.isMerchant || session.isAdmin) &&
-      route.path === "/" &&
+      (route.path === "/" || notFoundRoute.value) &&
       !session.consumerPreview
     ),
 );

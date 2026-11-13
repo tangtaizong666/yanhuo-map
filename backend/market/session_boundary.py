@@ -4,16 +4,23 @@ from django.http import JsonResponse
 
 class SessionActorMiddleware:
     # These explicitly change identity, or authenticate with provider signatures.
-    IDENTITY_ACTIONS = {'/api/v1/auth/login', '/api/v1/ops/auth/login', '/api/v1/auth/register', '/api/v1/auth/recovery/reset'}
+    IDENTITY_ACTIONS = {
+        '/api/v1/auth/login',
+        '/api/v1/ops/auth/login',
+        '/api/v1/auth/register',
+        '/api/v1/auth/logout',
+        '/api/v1/auth/recovery/reset',
+    }
 
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
+        path = request.path_info or request.path
         if (request.method not in ('GET', 'HEAD', 'OPTIONS', 'TRACE')
-                and request.path.startswith('/api/v1/')
-                and request.path not in self.IDENTITY_ACTIONS
-                and not request.path.startswith('/api/v1/payments/wechat/notify/')):
+                and path.startswith('/api/v1/')
+                and path not in self.IDENTITY_ACTIONS
+                and not path.startswith('/api/v1/payments/wechat/notify/')):
             expected = request.headers.get('X-Yanhuo-Actor')
             # Existing clients remain compatible. The SPA always sends the
             # identity whose state produced the action, including anonymous.

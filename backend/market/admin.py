@@ -56,6 +56,27 @@ class StallAdmissionForm(forms.ModelForm):
 
     def clean(self):
         values = super().clean()
+        prep_minutes = values.get('prep_minutes')
+        if prep_minutes is not None and not 1 <= prep_minutes <= 180:
+            self.add_error('prep_minutes', '预计备餐分钟数需在 1 至 180 之间。')
+        eta_min = values.get('delivery_eta_min_minutes')
+        eta_max = values.get('delivery_eta_max_minutes')
+        if eta_min is not None and eta_min < 1:
+            self.add_error('delivery_eta_min_minutes', '配送最快预计分钟数不能小于 1。')
+        if eta_min is not None and eta_max is not None and eta_max < eta_min:
+            self.add_error('delivery_eta_max_minutes', '配送最慢预计分钟数不能小于最快预计分钟数。')
+        delivery_capacity = values.get('delivery_capacity')
+        if delivery_capacity is not None and delivery_capacity < 1:
+            self.add_error('delivery_capacity', '同时配送单数上限不能小于 1。')
+        starts_at, ends_at = values.get('delivery_starts_at'), values.get('delivery_ends_at')
+        if starts_at is not None and ends_at is not None and starts_at == ends_at:
+            self.add_error('delivery_ends_at', '配送开始与结束时间不能完全相同。')
+        area = values.get('area')
+        points = values.get('delivery_points')
+        if area is not None and points is not None and any(point.area_id != area.pk for point in points):
+            self.add_error('delivery_points', '只能选择同一校园区域内的配送交接点。')
+        if self.errors:
+            return values
         merchant = values.get('merchant')
         if merchant is None:
             return values  # Invalid/missing foreign keys already have field errors.

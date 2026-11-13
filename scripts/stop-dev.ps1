@@ -10,19 +10,20 @@ try {
     foreach ($record in $state.processes) {
         $process = Get-Process -Id $record.id -ErrorAction SilentlyContinue
         $recordedTime = [datetime]$record.started
-        if ($process -and $process.StartTime.ToUniversalTime().Ticks -eq $recordedTime.ToUniversalTime().Ticks) {
+        if (Test-SameProcessStartTime -Process $process -RecordedTime $recordedTime) {
             # Windows venv python.exe launches a second Python process. Only stop a
             # direct child whose command still belongs to this verified workspace.
-            $children = Get-CimInstance Win32_Process -Filter "ParentProcessId = $($record.id)"
+            $children = Get-CimInstance Win32_Process -Filter "ParentProcessId = $($record.id)" -ErrorAction SilentlyContinue
             foreach ($child in $children) {
-                if ($child.CommandLine -and $child.CommandLine.Contains($projectRoot)) {
-                    Stop-Process -Id $child.ProcessId -ErrorAction SilentlyContinue
+                if ($child.CommandLine -and $child.CommandLine.IndexOf($projectRoot, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                    Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue
                 }
             }
-            Stop-Process -Id $record.id
+            Stop-Process -Id $record.id -Force -ErrorAction SilentlyContinue
             Write-Host "Stopped recorded Yanhuo process $($record.id)."
         }
     }
+    Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
 } finally {
     $lifecycleLock.Dispose()
 }

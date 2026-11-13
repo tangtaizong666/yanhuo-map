@@ -26,16 +26,22 @@ class Command(BaseCommand):
                 config = SiteConfiguration.current()
                 for stall in Stall.objects.select_related('current_session').filter(is_visible=True).iterator(chunk_size=100):
                     if stall.effective_status(config) == 'stale':
-                        Event.objects.get_or_create(type='stall_stale', stall=stall,
-                            metadata={'session_id': stall.current_session_id, 'confirmed': stall.current_session.last_confirmed_at.isoformat()})
+                        confirmed = (stall.current_session.last_confirmed_at.isoformat()
+                            if stall.current_session and stall.current_session.last_confirmed_at else None)
+                        stale_meta = {'session_id': stall.current_session_id, 'confirmed': confirmed}
+                        if not Event.objects.filter(type='stall_stale', stall=stall, metadata=stale_meta).exists():
+                            Event.objects.create(type='stall_stale', stall=stall, metadata=stale_meta)
                 now = timezone.now()
                 for order in Order.objects.filter(
                     status='ready',
                     ready_at__gte=now - timedelta(days=2),
                     ready_at__lt=now - timedelta(hours=1),
                 ).iterator(chunk_size=100):
-                    Event.objects.get_or_create(type='order_uncollected', stall_id=order.stall_id, user_id=order.user_id,
-                        metadata={'order_id': str(order.pk)})
+                    uncollected_meta = {'order_id': str(order.pk)}
+                    if not Event.objects.filter(type='order_uncollected', stall_id=order.stall_id,
+                            user_id=order.user_id, metadata=uncollected_meta).exists():
+                        Event.objects.create(type='order_uncollected', stall_id=order.stall_id,
+                            user_id=order.user_id, metadata=uncollected_meta)
                 if failures:
                     for failure in failures:
                         record_worker_failure('expire_orders', failure)

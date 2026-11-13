@@ -2,6 +2,7 @@
 import logging
 from datetime import timedelta
 
+from django.db import close_old_connections, connection
 from django.db.models import Count, F, Min, Q
 from django.utils import timezone
 
@@ -25,6 +26,8 @@ def record_worker_failure(name, exc):
     now = timezone.now()
     code = type(exc).__name__[:80]
     try:
+        if not connection.in_atomic_block:
+            close_old_connections()
         WorkerHeartbeat.objects.get_or_create(name=name)
         WorkerHeartbeat.objects.filter(name=name).update(
             last_attempt_at=now, last_failure_at=now, last_error_code=code,

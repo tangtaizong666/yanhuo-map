@@ -20,19 +20,25 @@ def enforce_reservation_limits(user, stall, items):
         raise BusinessError(f'每笔订单合计最多 {settings.CHECKOUT_MAX_PORTIONS} 份，请调整餐袋后重试。',
                             'order_quantity_limit', limit=settings.CHECKOUT_MAX_PORTIONS)
     owned = Order.objects.filter(user=user)
-    held = owned.annotate(
+    from .simulation import enabled as simulation_enabled
+    held_base = owned if simulation_enabled() else owned.filter(mode='live')
+    held = held_base.annotate(
         uncertain=Exists(PaymentAttempt.objects.filter(order_id=OuterRef('pk'), status__in=PaymentAttempt.ACTIVE_STATUSES)),
         unresolved=Exists(PaymentRefund.objects.filter(order_id=OuterRef('pk'), resolved_at__isnull=True).exclude(status='success')),
     # Match financial.hold_code: inventory release and fulfillment completion do
     # not settle unknown payments/refunds. Ordinary paid terminal orders are free.
     ).filter(Q(status__in=ACTIVE) | Q(payment_review_required=True) |
         Q(payment_status='refunding') | Q(uncertain=True) | Q(unresolved=True))
-    # A pickup or arrived delivery left uncollected long after handoff must not lock the customer
+    # A pickup or arrived delivery left uncollected long after handoff (or an unpaid
+    # preparing order abandoned >12h matching active_prep_q) must not lock the customer
     # out of the stall forever. Money questions above (refund/payment review) still hold the account.
-    stale_cutoff = timezone.now() - timedelta(hours=settings.CHECKOUT_STALE_READY_HOURS)
+    now = timezone.now()
+    stale_cutoff = now - timedelta(hours=settings.CHECKOUT_STALE_READY_HOURS)
+    abandoned_prep_cutoff = now - timedelta(hours=12)
     stale_handoff = (
         Q(fulfillment_type='pickup', status='ready', ready_at__lt=stale_cutoff)
         | Q(fulfillment_type='delivery', status='arrived', arrived_at__lt=stale_cutoff)
+        | Q(status__in=('preparing', 'delivering'), payment_status='unpaid', created_at__lt=abandoned_prep_cutoff)
     )
     money_hold = Q(payment_review_required=True) | Q(payment_status='refunding') | Q(uncertain=True) | Q(unresolved=True)
     held = held.exclude(stale_handoff & ~money_hold)

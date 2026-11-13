@@ -5,14 +5,23 @@ const props = defineProps<{ series: any[] }>();
 const max = computed(() =>
   Math.max(100, ...props.series.map((d) => d.revenue_cents)),
 );
-const points = computed(() =>
-  props.series
-    .map(
-      (d, i) =>
-        `${40 + (i * 580) / Math.max(1, props.series.length - 1)},${162 - (d.revenue_cents / max.value) * 130}`,
-    )
-    .join(" "),
-);
+function xAt(index: number) {
+  return props.series.length === 1
+    ? 330
+    : 40 + (index * 580) / (props.series.length - 1);
+}
+function yAt(cents: number) {
+  return 162 - (cents / max.value) * 130;
+}
+const points = computed(() => {
+  if (props.series.length === 1) {
+    const y = yAt(props.series[0].revenue_cents);
+    return `40,${y} 620,${y}`;
+  }
+  return props.series
+    .map((d, i) => `${xAt(i)},${yAt(d.revenue_cents)}`)
+    .join(" ");
+});
 const labels = computed(() =>
   props.series.filter(
     (_, i) =>
@@ -59,8 +68,8 @@ const labels = computed(() =>
       <circle
         v-for="(d, i) in series"
         :key="d.date"
-        :cx="40 + (i * 580) / Math.max(1, series.length - 1)"
-        :cy="162 - (d.revenue_cents / max) * 130"
+        :cx="xAt(i)"
+        :cy="yAt(d.revenue_cents)"
         r="3.5"
         fill="#fff"
         stroke="#e9712e"
@@ -71,7 +80,7 @@ const labels = computed(() =>
       <text
         v-for="d in labels"
         :key="d.date"
-        :x="40 + (series.indexOf(d) * 580) / Math.max(1, series.length - 1)"
+        :x="xAt(series.indexOf(d))"
         y="190"
         text-anchor="middle"
         fill="#88796a"

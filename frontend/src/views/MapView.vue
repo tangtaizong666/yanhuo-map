@@ -12,6 +12,7 @@ import {
   X,
   Clock3,
   Map as MapIcon,
+  Store,
 } from "lucide-vue-next";
 import { useStalls } from "../lib/discovery";
 import { useSession } from "../stores/session";
@@ -56,10 +57,19 @@ const stalls = computed(() =>
     ? allStalls.value.filter((s) => s.is_followed)
     : allStalls.value,
 );
+let savedStatusBeforeFollow = "";
 watch(
   followOnly,
   (only) => {
-    if (only) filters.status = "";
+    if (only) {
+      savedStatusBeforeFollow = filters.status;
+      filters.status = "";
+    } else if (savedStatusBeforeFollow && !filters.status) {
+      filters.status = savedStatusBeforeFollow;
+      savedStatusBeforeFollow = "";
+    } else {
+      savedStatusBeforeFollow = "";
+    }
   },
   { immediate: true },
 );
@@ -112,10 +122,17 @@ function renderMarkers() {
       (s.id === selected.value?.id ? " selected" : "");
     content.type = "button";
     content.setAttribute("aria-label", s.name);
-    const image = document.createElement("img");
-    image.src = s.image;
-    image.alt = "";
-    content.appendChild(image);
+    if (s.image) {
+      const image = document.createElement("img");
+      image.src = s.image;
+      image.alt = "";
+      content.appendChild(image);
+    } else {
+      const initial = document.createElement("span");
+      initial.className = "food-map-pin-initial";
+      initial.textContent = s.name.slice(0, 1) || "摊";
+      content.appendChild(initial);
+    }
     const marker = new window.AMap.Marker({
       position: [s.longitude, s.latitude],
       content,
@@ -310,7 +327,7 @@ onUnmounted(() => {
   <div class="page map-page">
     <div class="page-heading">
       <div>
-        <p class="eyebrow">FOLLOW THE GOOD SMELL</p>
+        <p class="eyebrow">循味找摊</p>
         <h1>循着烟火，找到好味。</h1>
       </div>
       <button
@@ -469,7 +486,10 @@ onUnmounted(() => {
           <LocateFixed :size="20" />
         </button>
         <div v-if="selected" ref="selectedPanel" class="selected-stall" tabindex="-1" role="region" :aria-label="`${selected.name}的位置与路线`">
-          <img :src="selected.image" :alt="selected.name" />
+          <img v-if="selected.image" :src="selected.image" :alt="selected.name" />
+          <div v-else class="selected-stall-placeholder" aria-hidden="true">
+            <Store :size="24" />
+          </div>
           <div class="selected-info">
             <span v-if="!selectionLoading && !selectionError" :class="['badge', selected.status]">{{
               statusText(selected.status)
@@ -779,11 +799,18 @@ onUnmounted(() => {
   max-height: calc(100% - 40px);
   overflow-y: auto;
 }
-.selected-stall > img {
+.selected-stall > img,
+.selected-stall-placeholder {
   width: 70px;
   height: 80px;
   border-radius: 10px;
   object-fit: cover;
+}
+.selected-stall-placeholder {
+  background: #f5ead9;
+  color: #9e7348;
+  display: grid;
+  place-items: center;
 }
 .selected-info {
   min-width: 0;
@@ -839,7 +866,8 @@ onUnmounted(() => {
     right: 65px;
     grid-template-columns: 1fr;
   }
-  .selected-stall > img {
+  .selected-stall > img,
+  .selected-stall-placeholder {
     display: none;
   }
 }
@@ -927,10 +955,14 @@ onUnmounted(() => {
     grid-template-columns: 57px 1fr;
     gap: 9px;
   }
-  .selected-stall > img {
+  .selected-stall > img,
+  .selected-stall-placeholder {
     display: block;
     width: 57px;
     height: 65px;
+  }
+  .selected-stall-placeholder {
+    display: grid;
   }
   .selected-info h3 {
     font-size: 14px;
@@ -979,6 +1011,16 @@ onUnmounted(() => {
   height: 100%;
   object-fit: cover;
   transform: rotate(45deg) scale(1.25);
+}
+.food-map-pin-initial {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  transform: rotate(45deg);
+  font-size: 15px;
+  font-weight: 700;
+  color: #8f481f;
 }
 .food-map-pin.selected {
   border-color: #e76b28;

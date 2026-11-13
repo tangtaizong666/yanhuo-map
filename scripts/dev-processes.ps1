@@ -14,6 +14,16 @@ function Enter-DevProcessLock {
     }
 }
 
+function Test-SameProcessStartTime {
+    param($Process, [datetime]$RecordedTime)
+    if (-not $Process) { return $false }
+    try {
+        return $Process.StartTime.ToUniversalTime().Ticks -eq $RecordedTime.ToUniversalTime().Ticks
+    } catch {
+        return $false
+    }
+}
+
 # Persist each launch before attempting the next one. A partial startup remains
 # stoppable, and surviving workers must not be replaced by a second set.
 function New-DevProcessRegistry {
@@ -24,7 +34,7 @@ function New-DevProcessRegistry {
         if ($previous.root -ne $Root) { throw 'Process record belongs to another workspace.' }
         foreach ($record in $previous.processes) {
             $process = Get-Process -Id $record.id -ErrorAction SilentlyContinue
-            if ($process -and $process.StartTime.ToUniversalTime().Ticks -eq ([datetime]$record.started).ToUniversalTime().Ticks) {
+            if (Test-SameProcessStartTime -Process $process -RecordedTime ([datetime]$record.started)) {
                 throw 'Previously recorded Yanhuo processes are still running. Use scripts/stop-dev.ps1 before restarting this workspace.'
             }
         }

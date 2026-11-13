@@ -340,6 +340,11 @@ async function upload(
     input.value = "";
     return;
   }
+  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+    input.value = "";
+    error.value = "请上传 JPG、PNG 或 WebP 格式的图片";
+    return;
+  }
   if (file.size > 5 * 1024 * 1024) {
     input.value = "";
     error.value = "图片不能超过 5MB";
@@ -668,7 +673,9 @@ async function upload(
         <p class="m-muted">
           保存一次性恢复码，忘记密码时可自行重设。恢复码请自己保管，不要贴在摊位二维码旁。
         </p>
-        <RouterLink to="/account-security" class="btn btn-secondary"
+        <RouterLink
+          to="/account-security?returnTo=/merchant/store"
+          class="btn btn-secondary"
           >管理账号恢复码</RouterLink
         >
       </section>

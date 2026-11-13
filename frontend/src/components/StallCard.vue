@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Heart, Star, MapPin, Clock3, ArrowUpRight } from "lucide-vue-next";
+import { Heart, Star, MapPin, Clock3, ArrowUpRight, Store } from "lucide-vue-next";
 import { confirmedText, statusText, money } from "../lib/api";
 import type { StallSummary as Stall } from "../lib/types";
 import { productAvailable, preparationLabel } from "../lib/availability";
@@ -11,12 +11,15 @@ defineEmits<{ follow: [stall: Stall] }>();
   <article :class="['stall-card', { compact }]">
     <RouterLink :to="`/stalls/${stall.id}`" class="stall-photo"
       ><img
+        v-if="stall.image"
         :src="stall.image"
         :alt="stall.name + '美食配图'"
         loading="lazy"
         width="640"
         height="420"
-      /><span :class="['badge', stall.status]">{{
+      /><span v-else class="stall-photo-placeholder" aria-hidden="true"
+        ><Store :size="30" /></span
+      ><span :class="['badge', stall.status]">{{
         statusText(stall.status)
       }}</span></RouterLink
     ><button
@@ -137,6 +140,13 @@ defineEmits<{ follow: [stall: Stall] }>();
   height: 100%;
   object-fit: cover;
   transition: transform 0.5s;
+}
+.stall-photo-placeholder {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: #9e7348;
 }
 .stall-card:hover .stall-photo img {
   transform: scale(1.035);

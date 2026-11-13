@@ -55,10 +55,19 @@ const searching = computed(() => route.path === "/search"),
 const visible = computed(() =>
   followOnly.value ? stalls.value.filter((s) => s.is_followed) : stalls.value,
 );
+let savedStatusBeforeFollow = "";
 watch(
   followOnly,
   (only) => {
-    if (only) filters.status = "";
+    if (only) {
+      savedStatusBeforeFollow = filters.status;
+      filters.status = "";
+    } else if (savedStatusBeforeFollow && !filters.status) {
+      filters.status = savedStatusBeforeFollow;
+      savedStatusBeforeFollow = "";
+    } else {
+      savedStatusBeforeFollow = "";
+    }
   },
   { immediate: true },
 );
@@ -308,10 +317,22 @@ function search() {
     query: { ...route.query, q: filters.q || undefined },
   });
 }
+function clearSearchInput() {
+  filters.q = "";
+  if (searching.value && route.query.q) {
+    const nextQuery = { ...route.query };
+    delete nextQuery.q;
+    void router.replace({ path: "/search", query: nextQuery });
+  }
+}
 watch(
-  () => route.query.q,
-  (query) => {
-    if (searching.value) filters.q = typeof query === "string" ? query : "";
+  () => [route.path, route.query.q] as const,
+  ([path, query], prev) => {
+    if (path === "/search") {
+      filters.q = typeof query === "string" ? query : "";
+    } else if (prev?.[0] === "/search") {
+      filters.q = "";
+    }
   },
   { immediate: true },
 );
@@ -342,7 +363,7 @@ onMounted(() =>
         /><button
           v-if="filters.q"
           type="button"
-          @click="filters.q = ''"
+          @click="clearSearchInput"
           aria-label="清空搜索"
         >
           <X :size="15" /></button
@@ -489,7 +510,7 @@ onMounted(() =>
     >
       <div v-if="!compactMealEmpty" class="section-heading">
         <div>
-          <p class="eyebrow">FIND YOUR NEXT BITE</p>
+          <p class="eyebrow">寻味餐点</p>
           <h2>
             想吃的，在这里 <span class="count">{{ meals.length }}</span>
           </h2>
@@ -560,11 +581,7 @@ onMounted(() =>
       <div v-if="!compactStallEmpty" class="section-heading">
         <div>
           <p class="eyebrow">
-            {{
-              followOnly
-                ? "YOUR LITTLE FAVORITES"
-                : "GOOD FOOD, AROUND THE CORNER"
-            }}
+            {{ followOnly ? "心头好味" : "转角烟火" }}
           </p>
           <h2>
             {{
@@ -632,7 +649,7 @@ onMounted(() =>
           router.push('/');
         "
         @all-areas="
-          filters.area = 0;
+          filters.setArea(0);
           filters.q = '';
           filters.category = '';
           filters.status = '';
@@ -691,8 +708,28 @@ onMounted(() =>
           />
           <div v-else class="recent-placeholder"><History :size="24" /></div>
           <div class="recent-order-copy">
-            <h3>{{ order.stall_name }}</h3>
-            <p>{{ order.items.map((item) => item.name).join("、") }}</p>
+            <h3>
+              <RouterLink
+                :to="`/stalls/${order.stall_id}`"
+                class="recent-stall-link"
+                >{{ order.stall_name }}</RouterLink
+              >
+            </h3>
+            <p>
+              <template
+                v-for="(item, idx) in order.items"
+                :key="item.product_id ?? `deleted-${idx}`"
+              >
+                <span v-if="idx > 0">、</span>
+                <RouterLink
+                  v-if="item.product_id"
+                  :to="`/stalls/${order.stall_id}/products/${item.product_id}`"
+                  class="recent-dish-link"
+                  >{{ item.name }}</RouterLink
+                >
+                <span v-else>{{ item.name }}</span>
+              </template>
+            </p>
             <small
               >{{ order.mode === "simulation" ? "模拟订单 · " : "" }}上次 ¥{{
                 money(order.total_cents)
@@ -723,7 +760,7 @@ onMounted(() =>
     >
       <div class="section-heading">
         <div>
-          <p class="eyebrow">A LITTLE SOMETHING DELICIOUS</p>
+          <p class="eyebrow">今日食光</p>
           <h2>今天，想吃哪一口？</h2>
         </div>
         <RouterLink
@@ -948,6 +985,12 @@ onMounted(() =>
 .recent-order-copy h3 {
   font-size: 15px;
   margin: 0 0 5px;
+}
+.recent-stall-link:hover,
+.recent-dish-link:hover {
+  color: #a3481d;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 .recent-order-copy p {
   overflow: hidden;

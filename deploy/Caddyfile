@@ -4,6 +4,7 @@
         max_size 6MiB
     }
     header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
         X-Content-Type-Options nosniff
         Referrer-Policy strict-origin-when-cross-origin
         Permissions-Policy "camera=(), microphone=()"
@@ -49,11 +50,21 @@
         file_server
     }
     handle_path /media/* {
+        @any_qr path_regexp (?i)(^|/)qr-
+        respond @any_qr 404
         header X-Content-Type-Options nosniff
+        header Content-Security-Policy "sandbox; default-src 'none'; img-src 'self'; style-src 'none'; frame-ancestors 'none'"
         root * /srv/backend-media
         file_server
     }
+    handle /assets/* {
+        header Cache-Control "public, max-age=31536000, immutable"
+        root * /srv
+        file_server
+    }
     handle {
+        @spa_entrypoints path / /index.html /notification-worker.js
+        header @spa_entrypoints Cache-Control "no-cache"
         root * /srv
         try_files {path} /index.html
         file_server

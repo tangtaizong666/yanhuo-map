@@ -1,5 +1,6 @@
 import math
 import secrets
+from datetime import timedelta
 from django.conf import settings
 from django.contrib.auth import authenticate, login, logout, update_session_auth_hash
 from django.contrib.auth.models import User
@@ -12,6 +13,7 @@ from django.middleware.csrf import get_token
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.views.decorators.debug import sensitive_post_parameters
 from rest_framework import serializers
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
@@ -99,6 +101,7 @@ def me(request): return JsonResponse(user_data(request.user), safe=False)
 def csrf_token(request): return Response({'csrfToken': get_token(request)})
 
 
+@sensitive_post_parameters('password')
 @api_view(['POST'])
 @permission_classes([AllowAny])
 @throttle_classes([])
@@ -116,6 +119,7 @@ def login_view(request):
     return Response(user_data(user))
 
 
+@sensitive_post_parameters('password')
 @api_view(['POST'])
 @permission_classes([AllowAny])
 @throttle_classes([AuthThrottle])
@@ -151,12 +155,20 @@ def profile(request):
     return Response(user_data(request.user))
 
 
+@sensitive_post_parameters('old_password', 'new_password')
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 @throttle_classes([AuthThrottle])
 def password(request):
     old = serializers.CharField(max_length=128, trim_whitespace=False).run_validation(request.data.get('old_password'))
     new = serializers.CharField(max_length=128, trim_whitespace=False).run_validation(request.data.get('new_password'))
+    try:
+        verified = login_attempt(request, request.user.username,
+            lambda: request.user if request.user.is_active and request.user.check_password(old) else None)
+    except LoginRateLimited as exc:
+        raise Throttled(wait=exc.retry_after, detail='密码验证失败次数过多，请稍后再试。')
+    if not verified:
+        raise BusinessError('原密码不正确。', 'invalid_password', status=400)
     with transaction.atomic():
         user = User.objects.select_for_update().get(pk=request.user.pk)
         if not user.is_active or not user.check_password(old):
@@ -170,17 +182,36 @@ def password(request):
     return Response({'detail': '密码已更新，其他设备需要重新登录。'})
 
 
+@sensitive_post_parameters('password')
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated])
 @throttle_classes([AuthThrottle])
 def account(request):
-    from .models import PaymentAttempt, PaymentRefund
+    from .models import MerchantApplication, PaymentAttempt, PaymentRefund
+    from .simulation import enabled as simulation_enabled
     expire_pending_orders(user_id=request.user.pk)
     def _has_active_obligations(target_user):
-        return (target_user.orders.filter(Q(status__in=['pending_payment', 'pending', 'preparing', 'ready', 'delivering', 'arrived'])
-                | Q(payment_status='refunding') | Q(payment_review_required=True)).exists()
-                or PaymentAttempt.objects.filter(order__user=target_user, status__in=PaymentAttempt.ACTIVE_STATUSES).exists()
-                or PaymentRefund.objects.filter(order__user=target_user, resolved_at__isnull=True).exclude(status='success').exists())
+        now = timezone.now()
+        stale_cutoff = now - timedelta(hours=settings.CHECKOUT_STALE_READY_HOURS)
+        abandoned_cutoff = now - timedelta(hours=12)
+        orders_qs = target_user.orders.all() if simulation_enabled() else target_user.orders.filter(mode='live')
+        attempts_qs = PaymentAttempt.objects.filter(order__user=target_user)
+        refunds_qs = PaymentRefund.objects.filter(order__user=target_user)
+        if not simulation_enabled():
+            attempts_qs = attempts_qs.filter(mode='live')
+            refunds_qs = refunds_qs.filter(mode='live')
+        stale_unpaid = (
+            Q(fulfillment_type='pickup', status='ready', payment_status='unpaid', ready_at__lt=stale_cutoff)
+            | Q(status__in=('preparing', 'delivering'), payment_status='unpaid', created_at__lt=abandoned_cutoff)
+        )
+        active_order_hold = orders_qs.filter(
+            (Q(status__in=['pending_payment', 'pending', 'preparing', 'ready', 'delivering', 'arrived']) & ~stale_unpaid)
+            | Q(payment_status='refunding')
+            | Q(payment_review_required=True)
+        ).exists()
+        return (active_order_hold
+                or attempts_qs.filter(status__in=PaymentAttempt.ACTIVE_STATUSES).exists()
+                or refunds_qs.filter(resolved_at__isnull=True).exclude(status='success').exists())
     if request.user.is_staff or hasattr(request.user, 'merchant_profile'):
         raise BusinessError('商家与运营账号请联系平台处理注销。', 'managed_account')
     if _has_active_obligations(request.user):
@@ -211,6 +242,10 @@ def account(request):
             item.save(update_fields=['portions'])
         AccountRecovery.objects.filter(user=user).update(code_hash='', password_stamp='', used_at=timezone.now())
         Feedback.objects.filter(user=user).update(contact='')
+        MerchantApplication.objects.filter(user=user).update(
+            business_name='', stall_name='', contact_phone='', address_note='',
+            description='', confirmed_at=None, status='rejected',
+        )
         user.username = 'deleted_' + secrets.token_hex(12)
         user.first_name, user.last_name, user.email, user.is_active = '已注销用户', '', '', False
         user.set_unusable_password()

@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import secrets
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -381,6 +382,9 @@ def restore_check(config, requested):
     snapshot = selected_snapshot(config, requested)
     with tempfile.TemporaryDirectory(prefix='restore-', dir=config.state) as temporary:
         bundle, manifest = restore_bundle(config, Path(temporary), snapshot)
+        db_user = manifest.get('database_user') or 'yanhuo'
+        if not isinstance(db_user, str) or not re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_]{0,62}', db_user):
+            raise BackupError('unsupported_database_identity')
         suffix = secrets.token_hex(8)
         name, volume = 'yanhuo-restore-' + suffix, 'yanhuo-restore-data-' + suffix
         label = 'yanhuo.restore-run=' + suffix
@@ -389,7 +393,7 @@ def restore_check(config, requested):
         try:
             env = {**config.env, 'POSTGRES_PASSWORD': secrets.token_hex(32)}
             container = run(['docker', 'create', '--network', 'none', '--name', name, '--label', label,
-                '--env', 'POSTGRES_PASSWORD', '--env', 'POSTGRES_USER=yanhuo', '--mount', f'type=volume,source={volume},target=/var/lib/postgresql/data',
+                '--env', 'POSTGRES_PASSWORD', '--env', f'POSTGRES_USER={db_user}', '--mount', f'type=volume,source={volume},target=/var/lib/postgresql/data',
                 '--mount', f'type=bind,source={bundle / "database.dump"},target=/restore/database.dump,readonly',
                 'postgis/postgis:17-3.5'], env=env).decode().strip()
             run(['docker', 'start', container])
@@ -400,19 +404,19 @@ def restore_check(config, requested):
                     # init scripts, then shuts it down. TCP is enabled only by
                     # the final server; do not begin restoring into that first
                     # server and lose the connection midway through pg_restore.
-                    run(['docker', 'exec', container, 'pg_isready', '-h', '127.0.0.1', '-U', 'yanhuo'], timeout=5)
+                    run(['docker', 'exec', container, 'pg_isready', '-h', '127.0.0.1', '-U', db_user], timeout=5)
                     break
                 except BackupError:
                     time.sleep(1)
             else:
                 raise BackupError('restore_database_not_ready')
             STAGE = 'restore_create_database'
-            run(['docker', 'exec', container, 'createdb', '-U', 'yanhuo', 'yanhuo_restore_check'])
+            run(['docker', 'exec', container, 'createdb', '-U', db_user, 'yanhuo_restore_check'])
             STAGE = 'restore_load_dump'
-            run(['docker', 'exec', container, 'pg_restore', '-U', 'yanhuo', '--exit-on-error', '--no-owner',
+            run(['docker', 'exec', container, 'pg_restore', '-U', db_user, '--exit-on-error', '--no-owner',
                 '-d', 'yanhuo_restore_check', '/restore/database.dump'], timeout=config.rto)
             STAGE = 'restore_content_check'
-            if fingerprint(container, 'yanhuo', 'yanhuo_restore_check') != manifest['tables']:
+            if fingerprint(container, db_user, 'yanhuo_restore_check') != manifest['tables']:
                 raise BackupError('restored_database_content_mismatch')
         finally:
             # Unique labels and IDs: never discover or delete by a shared name prefix.
@@ -455,13 +459,18 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 def alert(env, stage):
     path = private_file(Path(env.get('BACKUP_FAILURE_WEBHOOK_FILE', '')))
     url = path.read_text(encoding='utf-8').strip()
-    if not url.startswith('https://'):
+    parsed = urlsplit(url)
+    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
         raise BackupError('failure_webhook_requires_https')
     body = json.dumps({'service': 'yanhuo-backup', 'status': 'failed', 'stage': stage, 'time': utcnow()}).encode()
     request = urllib.request.Request(url, data=body, headers={'Content-Type': 'application/json'})
-    with urllib.request.build_opener(NoRedirect()).open(request, timeout=15) as response:
+    with urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect()).open(request, timeout=15) as response:
         if not 200 <= response.status < 300:
             raise BackupError('failure_alert_not_delivered')
+
+
+def _raise_terminated(signum, frame):
+    raise BackupError('terminated_by_signal')
 
 
 def main():
@@ -469,6 +478,9 @@ def main():
     parser.add_argument('operation', choices=['backup', 'status', 'restore-check', 'resume', 'alert'])
     parser.add_argument('--snapshot', default='latest', help='Full snapshot id or latest within this project only.')
     options = parser.parse_args()
+    previous_sigterm = None
+    if hasattr(signal, 'SIGTERM'):
+        previous_sigterm = signal.signal(signal.SIGTERM, _raise_terminated)
     config = None
     try:
         if options.operation == 'alert':
@@ -502,6 +514,9 @@ def main():
             except OSError:
                 print('{"status":"failed","reason":"failure_state_not_written"}', file=sys.stderr)
         return 1
+    finally:
+        if previous_sigterm is not None:
+            signal.signal(signal.SIGTERM, previous_sigterm)
     return 0
 
 

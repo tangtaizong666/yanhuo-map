@@ -665,7 +665,7 @@ function tasteValues(groups: Draft["taste_options"]) {
       >
         <header :inert="discardOpen">
           <div>
-            <span class="eyebrow">MENU EDITOR</span>
+            <span class="eyebrow">菜单编辑</span>
             <h2 id="product-editor-title">
               {{ editingId == null ? "添加新商品" : "编辑商品" }}
             </h2>
@@ -736,7 +736,10 @@ function tasteValues(groups: Draft["taste_options"]) {
             <p v-else class="stock-help">
               这里仅编辑商品资料。新增线上份数使用“今天补货”，盘点调整使用商品卡片中的“更正线上可卖份数”。
             </p>
-            <details class="editor-extras">
+            <details
+              class="editor-extras"
+              :open="Boolean(form.image && !ownedImage(form.image))"
+            >
               <summary>照片、分类与介绍（选填）</summary>
               <div class="editor-photo-row">
                 <div class="editor-photo">
@@ -801,7 +804,10 @@ function tasteValues(groups: Draft["taste_options"]) {
                 /><small>{{ form.description.length }} / 200</small></label
               >
             </details>
-            <details class="editor-extras taste-editor">
+            <details
+              class="editor-extras taste-editor"
+              :open="form.taste_options.length > 0"
+            >
               <summary>
                 口味选择（选填、免费）<span v-if="form.taste_options.length">
                   · {{ form.taste_options.length }} 组</span

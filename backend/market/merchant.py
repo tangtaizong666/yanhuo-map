@@ -20,7 +20,7 @@ from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.db import DatabaseError, transaction
 from django.db.models import Count, Exists, F, IntegerField, OuterRef, Q, Sum, Subquery
-from django.db.models.functions import TruncDate
+from django.db.models.functions import Coalesce, TruncDate
 from django.http import FileResponse, HttpResponseNotAllowed, HttpResponseNotFound
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -32,7 +32,7 @@ from rest_framework.response import Response
 
 from .auth_limits import TrustedUserRateThrottle
 from .errors import BusinessError
-from .models import active_prep_q, DeliveryPoint, Event, Follow, MerchantProfile, Order, OrderItem, PaymentRefund, Product, Review, SiteConfiguration, Stall
+from .models import active_prep_q, DeliveryPoint, Event, Follow, MerchantProfile, Order, OrderItem, PaymentAttempt, PaymentRefund, Product, Review, SiteConfiguration, Stall
 from .serializers import ProductSerializer, ReviewSerializer, StallSerializer
 
 logger = logging.getLogger(__name__)
@@ -483,6 +483,26 @@ def payment_aggregates():
     }
 
 
+def combined_receipts(order_qs, attempt_qs):
+    order_sums = order_qs.aggregate(
+        offline=Sum('total_cents', filter=Q(payment_method='offline'), default=0),
+        online=Sum('total_cents', filter=Q(payment_method='wechat'), default=0),
+        orders=Count('id'),
+    )
+    attempt_sums = attempt_qs.aggregate(
+        cents=Sum('amount_cents', default=0),
+        orders=Count('order_id', distinct=True),
+    )
+    offline_cents = order_sums['offline']
+    online_cents = order_sums['online'] + attempt_sums['cents']
+    return {
+        'revenue_cents': offline_cents + online_cents,
+        'offline_revenue_cents': offline_cents,
+        'online_revenue_cents': online_cents,
+        'paid_orders': order_sums['orders'] + attempt_sums['orders'],
+    }
+
+
 def net_receipts(gross, refund_cents):
     return {**gross, 'refund_cents': refund_cents,
             'net_received_cents': gross.get('revenue_cents', 0) - refund_cents}
@@ -514,6 +534,12 @@ def metrics(request):
     # A later refund does not remove the original receipt from its payment day.
     received = query.filter(payment_status__in=('paid', 'refunding', 'refunded'),
                             paid_at__gte=start, paid_at__lte=now)
+    unbacked_received = received.exclude(
+        Exists(PaymentAttempt.objects.filter(order_id=OuterRef('pk'), status='paid'))
+    )
+    paid_attempts = PaymentAttempt.objects.filter(
+        order__in=query, status='paid', paid_at__gte=start, paid_at__lte=now
+    )
     refunded = PaymentRefund.objects.filter(order__in=query, status='success',
                                            completed_at__gte=start, completed_at__lte=now)
     fulfilled = query.filter(completed_at__gte=start, completed_at__lte=now, status='completed')
@@ -530,34 +556,53 @@ def metrics(request):
     source_counts = [{'source': row['metadata__source'], 'event_type': row['type'], 'count': row['event_count']}
         for row in source_rows]
     views, total, completed = recent_events.filter(type='stall_view').count(), recent.count(), recent.filter(status='completed').count()
-    gross = received.aggregate(**payment_aggregates())
+    gross = combined_receipts(unbacked_received, paid_attempts)
     paid_count, revenue = gross['paid_orders'], gross['revenue_cents']
     refund_cents = refunded.aggregate(cents=Sum('amount_cents', default=0))['cents']
     created_daily = daily(recent, 'created_at', count=Count('id'))
     completed_daily = daily(fulfilled, 'completed_at', count=Count('id'))
-    paid_daily = daily(received, 'paid_at', **payment_aggregates())
+    paid_daily = daily(unbacked_received, 'paid_at', **payment_aggregates())
+    attempt_daily = daily(paid_attempts, 'paid_at', cents=Sum('amount_cents', default=0), orders=Count('order_id', distinct=True))
     refund_daily = daily(refunded, 'completed_at', cents=Sum('amount_cents', default=0))
-    empty_gross = {name: 0 for name in payment_aggregates()}
     series = []
     for offset in range(days):
         day = first_day + timedelta(days=offset)
-        day_gross = {name: paid_daily.get(day, {}).get(name, 0) for name in empty_gross}
+        day_order = paid_daily.get(day, {})
+        day_attempt = attempt_daily.get(day, {})
+        day_offline = day_order.get('offline_revenue_cents', 0)
+        day_online = day_order.get('online_revenue_cents', 0) + day_attempt.get('cents', 0)
+        day_gross = {
+            'revenue_cents': day_offline + day_online,
+            'offline_revenue_cents': day_offline,
+            'online_revenue_cents': day_online,
+            'paid_orders': day_order.get('paid_orders', 0) + day_attempt.get('orders', 0),
+        }
         series.append({'date': day.isoformat(), 'orders_created': created_daily.get(day, {}).get('count', 0),
             'orders_completed': completed_daily.get(day, {}).get('count', 0),
             **net_receipts(day_gross, refund_daily.get(day, {}).get('cents', 0))})
     products = Product.objects.filter(stall__in=stall_query)
-    today_paid = received.filter(paid_at__gte=today_start)
-    today_gross = today_paid.aggregate(**payment_aggregates())
+    today_gross = combined_receipts(unbacked_received.filter(paid_at__gte=today_start), paid_attempts.filter(paid_at__gte=today_start))
     today_refunded = refunded.filter(completed_at__gte=today_start).aggregate(cents=Sum('amount_cents', default=0))['cents']
-    top = OrderItem.objects.filter(order__in=received).values('name').annotate(
+    valid_sales = received.exclude(status__in=('cancelled', 'rejected')).exclude(payment_status__in=('refunding', 'refunded'))
+    top = OrderItem.objects.filter(order__in=valid_sales).values('name').annotate(
         revenue_cents=Sum(F('unit_price_cents') * F('quantity'), output_field=IntegerField()),
         quantity=Sum('quantity')).order_by('-quantity', '-revenue_cents', 'name')[:5]
     latest_refund = PaymentRefund.objects.filter(order_id=OuterRef('pk')).order_by('-created_at', '-pk')
-    payments = list(received.order_by('-paid_at').values('id', 'number', 'total_cents', 'paid_at', 'stall_name',
+    latest_paid_attempt = PaymentAttempt.objects.filter(
+        order_id=OuterRef('pk'), status='paid', paid_at__gte=start, paid_at__lte=now
+    ).order_by('-paid_at', '-pk')
+    payment_orders = query.filter(
+        Q(pk__in=received.values('pk')) | Exists(latest_paid_attempt)
+    ).annotate(
+        effective_paid_at=Coalesce('paid_at', Subquery(latest_paid_attempt.values('paid_at')[:1]))
+    )
+    payments = list(payment_orders.order_by('-effective_paid_at', '-pk').values(
+        'id', 'number', 'total_cents', 'effective_paid_at', 'stall_name',
         'payment_method', 'payment_status', refund_status=Subquery(latest_refund.values('status')[:1]),
         refunded_at=Subquery(latest_refund.values('completed_at')[:1]))[:20])
     for payment in payments:
-        payment['refunded'] = payment['refund_status'] == 'success'
+        payment['paid_at'] = payment.pop('effective_paid_at')
+        payment['refunded'] = payment['payment_status'] == 'refunded'
     from .pilot_metrics import evidence
     return Response({'mode': mode, 'period_days': days, 'stall_views': views, 'orders_created': total, 'orders_completed': completed,
         'pilot_evidence': evidence(query, stall_query, start, now, mode),

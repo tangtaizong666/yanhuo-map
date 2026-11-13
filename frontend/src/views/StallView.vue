@@ -172,14 +172,22 @@ onUnmounted(() => {
         <button class="btn btn-secondary" @click="load">刷新摊位</button>
       </div>
       <section class="stall-hero">
-        <img :src="stall.image" :alt="stall.name" width="1200" height="500" />
+        <img
+          v-if="stall.image"
+          :src="stall.image"
+          :alt="stall.name"
+          width="1200"
+          height="500"
+        />
         <div class="stall-hero-shade"></div>
         <div class="stall-hero-caption">
           <span>{{ stall.category }} / {{ stall.area_name }}</span>
           <h1>{{ stall.name }}</h1>
           <p>{{ stall.description }}</p>
         </div>
-        <span v-if="session.config?.demo_mode" class="demo-image-label"
+        <span
+          v-if="session.config?.demo_mode && stall.image"
+          class="demo-image-label"
           >美食示例配图</span
         ><button
           :class="['hero-follow', { followed: stall.is_followed }]"
@@ -322,12 +330,21 @@ onUnmounted(() => {
                   :aria-label="`查看${p.name}照片与详情`"
                 >
                   <img
+                    v-if="p.image || stall.image"
                     :src="p.image || stall.image"
                     :alt="p.name"
                     loading="lazy"
                     width="160"
                     height="160"
-                  /><span v-if="!productAvailable(p)">{{
+                  />
+                  <div
+                    v-else
+                    class="product-image-placeholder"
+                    aria-hidden="true"
+                  >
+                    <Utensils :size="28" />
+                  </div>
+                  <span v-if="!productAvailable(p)">{{
                     p.sale_paused
                       ? "暂停供应"
                       : p.display_only
@@ -377,10 +394,25 @@ onUnmounted(() => {
                         <Plus :size="16" />
                       </button>
                     </div>
-                    <span v-else class="product-off">{{
-                      productUnavailableReason(p) ||
-                      (stall.transaction_enabled ? "暂不可点单" : "到摊选购")
-                    }}</span>
+                    <div v-else class="product-off-wrap">
+                      <span class="product-off">{{
+                        productUnavailableReason(p) ||
+                        (stall.transaction_enabled ? "暂不可点单" : "到摊选购")
+                      }}</span>
+                      <div
+                        v-if="stall.transaction_enabled && quantity(p)"
+                        class="qty-control"
+                      >
+                        <button
+                          type="button"
+                          @click="change(p, -1)"
+                          :aria-label="'减少' + p.name"
+                        >
+                          <Minus :size="14" />
+                        </button>
+                        <span>{{ quantity(p) }}</span>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </article>
@@ -430,7 +462,7 @@ onUnmounted(() => {
             </article>
           </section>
           <section v-else class="card info-panel">
-            <p class="eyebrow">ABOUT THIS LITTLE STALL</p>
+            <p class="eyebrow">小摊档案</p>
             <h2>关于这份烟火气</h2>
             <p class="about-description">{{ stall.description }}</p>
             <dl>
@@ -492,7 +524,7 @@ onUnmounted(() => {
             <span class="pickup-icon"
               ><ShoppingBag :size="24" :stroke-width="1.5"
             /></span>
-            <p class="eyebrow">PICK UP SOMETHING GOOD</p>
+            <p class="eyebrow">顺路带走</p>
             <h2>{{ stall.delivery?.available ? "提前点好，自取或送达" : "提前点好，到摊就取" }}</h2>
             <p class="pickup-description">
               少一点排队，多一点热乎。<br />{{
@@ -526,6 +558,13 @@ onUnmounted(() => {
               </div>
             </div>
             <RouterLink
+              v-if="!cart.count(id) && cart.guestCount > 0"
+              to="/cart"
+              class="guest-cart-hint"
+              >登录前餐袋还有 {{ cart.guestCount }} 份餐点 · 去合并
+              <ChevronRight :size="14"
+            /></RouterLink>
+            <RouterLink
               v-if="cart.count(id) && stall.can_order"
               :to="`/checkout/${id}`"
               class="btn btn-primary checkout-button"
@@ -544,9 +583,9 @@ onUnmounted(() => {
         v-if="stall.transaction_enabled && cart.count(id)"
         class="mobile-cart"
       >
-        <div class="cart-bag">
+        <RouterLink to="/cart" class="cart-bag" aria-label="前往我的餐袋">
           <ShoppingBag :size="22" /><b>{{ cart.count(id) }}</b>
-        </div>
+        </RouterLink>
         <div class="mobile-cart-total">
           <span class="price">¥{{ money(cart.total(id)) }}</span
           ><small>{{
@@ -821,6 +860,32 @@ onUnmounted(() => {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+.product-image-placeholder {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: #a0764a;
+}
+.product-off-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.guest-cart-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border-radius: 10px;
+  background: #fff4e4;
+  border: 1px solid #ead0ad;
+  color: #964c1f;
+  font-size: 12px;
+  font-weight: 500;
 }
 .product-image > span {
   position: absolute;

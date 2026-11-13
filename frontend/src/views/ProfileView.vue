@@ -301,7 +301,7 @@ async function deleteAccount() {
   <div class="page profile-page">
     <div class="page-heading">
       <div>
-        <span class="eyebrow">YOUR CORNER OF CAMPUS</span>
+        <span class="eyebrow">校园日常</span>
         <h1>我的烟火日常<span class="heading-dot">.</span></h1>
         <p class="muted">记住喜欢的味道，也记住生活的小美好。</p>
       </div>
@@ -388,14 +388,14 @@ async function deleteAccount() {
           </button>
         </nav>
         <p class="sidebar-note">
-          烟火就在转角处。<br /><span>SEE YOU AROUND THE CORNER.</span>
+          烟火就在转角处。<br /><span>下课顺路，去尝一口热乎。</span>
         </p>
       </aside>
       <section class="profile-content">
         <template v-if="section === 'follows'"
           ><div class="section-heading">
             <div>
-              <span class="eyebrow">MY FAVORITE PLACES</span>
+              <span class="eyebrow">常去小摊</span>
               <h2>总想再吃一口的摊位</h2>
             </div>
             <span v-if="followsLoaded" class="muted count-label">{{
@@ -443,7 +443,12 @@ async function deleteAccount() {
               class="card followed-stall"
             >
               <RouterLink :to="`/stalls/${stall.id}`" class="follow-image"
-                ><img :src="stall.image" :alt="stall.name" /><span
+                ><img v-if="stall.image" :src="stall.image" :alt="stall.name" /><span
+                  v-else
+                  class="follow-image-placeholder"
+                  aria-hidden="true"
+                  ><Store :size="28" /></span
+                ><span
                   class="stall-status"
                   :class="stall.status"
                   >{{ statusText(stall.status) }}</span
@@ -862,6 +867,14 @@ async function deleteAccount() {
   position: relative;
   height: 165px;
   overflow: hidden;
+  background: #f3e6d4;
+}
+.follow-image-placeholder {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: #9e7348;
 }
 .follow-image img {
   width: 100%;

@@ -446,13 +446,30 @@ function reconcileRejectedAmounts(record: CheckoutSubmission) {
     );
     if (current && current.price_cents !== item.product.price_cents) {
       changes[`product-${current.id}`] = `${current.name}单价：¥${money(item.product.price_cents)} → ¥${money(current.price_cents)}`;
-      cart.setQuantity(stallId, current, item.quantity);
+      cart.setQuantity(stallId, current, item.quantity, item.portions);
     }
   }
   if (!Object.keys(changes).length) return false;
   amountChanges.value = { ...amountChanges.value, ...changes };
   priceChanged.value = true;
   return true;
+}
+function acceptItemPrice(item: CartItem) {
+  const current = currentProduct(item);
+  if (!current) return;
+  cart.setQuantity(stallId, current, item.quantity, item.portions);
+}
+async function reloadCheckout() {
+  if (busy.value || !isCurrentPage()) return;
+  loading.value = true;
+  error.value = "";
+  try {
+    await refreshStall();
+  } catch (e) {
+    if (isCurrentPage()) error.value = (e as Error).message;
+  } finally {
+    if (isCurrentPage()) loading.value = false;
+  }
 }
 async function refreshChangedLocation() {
   if (busy.value || !isCurrentPage()) return;
@@ -468,7 +485,10 @@ async function refreshChangedLocation() {
   } catch {
     // Keep the old address visibly unconfirmed until a current read succeeds.
   } finally {
-    if (isCurrentPage()) busy.value = false;
+    if (isCurrentPage()) {
+      busy.value = false;
+      confirmingRecovery.value = false;
+    }
   }
 }
 onMounted(async () => {
@@ -528,8 +548,10 @@ async function confirmSubmission() {
   // already exist, even if its stock is now sold out or the shop has closed.
   await sendSubmission(submission.value, true);
 }
+const confirmingRecovery = ref(false);
 async function sendSubmission(record: CheckoutSubmission, recovering = false) {
   busy.value = true;
+  confirmingRecovery.value = recovering;
   error.value = "";
   relatedOrderIds.value = [];
   try {
@@ -662,7 +684,10 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
       /* Preserve the actionable original request error. */
     }
   } finally {
-    if (isCurrentPage()) busy.value = false;
+    if (isCurrentPage()) {
+      busy.value = false;
+      confirmingRecovery.value = false;
+    }
   }
 }
 </script>
@@ -681,7 +706,7 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
     >
     <div class="page-heading">
       <div>
-        <span class="eyebrow">ALMOST THERE</span>
+        <span class="eyebrow">确认这一餐</span>
         <h1>把好味道，带走。</h1>
         <p class="muted">核对餐点与取餐方式，再安心下单。</p>
       </div>
@@ -760,8 +785,16 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
               class="checkout-product-photo"
               :to="`/stalls/${stallId}/products/${item.product.id}`"
               :aria-label="`查看${item.product.name}图片与详情`"
-              ><img :src="item.product.image" :alt="item.product.name"
-            /></RouterLink>
+              ><img
+                v-if="item.product.image"
+                :src="item.product.image"
+                :alt="item.product.name"
+              /><span
+                v-else
+                class="checkout-photo-placeholder"
+                aria-hidden="true"
+                ><ShoppingBag :size="24" /></span
+            ></RouterLink>
             <div class="product-text">
               <h3>
                 <RouterLink
@@ -819,6 +852,14 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
               当前标价已变为 ¥{{
                 money(currentProduct(item).price_cents)
               }}，提交时将重新核对价格，请确认更新后的金额。
+              <button
+                type="button"
+                class="checkout-accept-price"
+                :disabled="editingLocked"
+                @click="acceptItemPrice(item)"
+              >
+                确认新价格 ¥{{ money(currentProduct(item).price_cents) }}
+              </button>
             </p>
           </article>
           <div v-if="items.length > 3" class="checkout-meal-summary">
@@ -1045,7 +1086,7 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
           }}
         </p>
         <div
-          v-if="!unresolved || busy"
+          v-if="!unresolved || (busy && !confirmingRecovery)"
           ref="actionBar"
           class="checkout-action-bar"
           aria-label="确认金额并提交"
@@ -1112,7 +1153,9 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
     </form>
     <div v-else class="empty-state card">
       <p class="error-message">{{ error || "暂时无法加载摊位" }}</p>
-      <button class="btn btn-secondary" @click="router.go(0)">重新加载</button>
+      <button type="button" class="btn btn-secondary" @click="reloadCheckout">
+        重新加载
+      </button>
     </div>
   </div>
 </template>
@@ -1264,11 +1307,29 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
 .checkout-product > .portion-editor {
   flex-basis: 100%;
 }
-.checkout-product img {
+.checkout-product img,
+.checkout-photo-placeholder {
   height: 87px;
   width: 87px;
   object-fit: cover;
   border-radius: 13px;
+}
+.checkout-photo-placeholder {
+  display: grid;
+  place-items: center;
+  background: #f5ead9;
+  color: #9e7348;
+}
+.checkout-accept-price {
+  margin-left: 8px;
+  padding: 4px 10px;
+  min-height: 32px;
+  border-radius: 999px;
+  border: 1px solid #d59d6d;
+  background: #fff9f2;
+  color: #9a491d;
+  font-size: 12px;
+  font-weight: 600;
 }
 .checkout-product-photo {
   flex: none;

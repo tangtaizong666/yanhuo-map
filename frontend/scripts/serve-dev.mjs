@@ -14,7 +14,8 @@ process.on("uncaughtExceptionMonitor", (error) => {
 process.on("exit", (code) => {
   console.error(new Date().toISOString(), "Preview process exited", code);
 });
-const server = await createServer({ server: { host }, clearScreen: false });
+const hmr = process.env.VITE_HMR === "true";
+const server = await createServer({ server: { host, hmr }, clearScreen: false });
 await server.listen();
 server.printUrls();
 let closing = false;

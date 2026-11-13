@@ -14,6 +14,7 @@ import {
   portionText,
   specifiedPortions,
 } from "../src/lib/portions";
+import { ownedImage } from "../src/lib/media";
 import type { Product, User } from "../src/lib/types";
 
 const studentUser: User = {
@@ -169,5 +170,25 @@ describe("portion normalization and taste validation", () => {
     expect(portionText({ options: { 辣度: "微辣" }, note: "不要葱 " })).toBe(
       "辣度：微辣 · 不要葱",
     );
+  });
+});
+
+describe("ownedImage media allowlist and merchant account-security returnTo", () => {
+  it("blocks external URLs, traversal segments, query strings, and backslashes while allowing owned paths", () => {
+    expect(ownedImage("https://external.example/dish.jpg")).toBe("");
+    expect(ownedImage("//external.example/dish.jpg")).toBe("");
+    expect(ownedImage("/media/merchants/1/../2/dish.jpg")).toBe("");
+    expect(ownedImage("/media/merchants/1/%2e%2e/2/dish.jpg")).toBe("");
+    expect(ownedImage("/media/merchants/1/dish.jpg?track=1")).toBe("");
+    expect(ownedImage("/media\\merchants\\1\\dish.jpg")).toBe("");
+    expect(ownedImage("")).toBe("");
+    expect(ownedImage("/images/food-jianbing.jpg")).toBe(
+      "/images/food-jianbing.jpg",
+    );
+    expect(ownedImage("/media/merchants/1/dish-abc.jpg")).toBe(
+      "/media/merchants/1/dish-abc.jpg",
+    );
+    expect(safeReturnTo("/merchant/store")).toBe("/merchant/store");
+    expect(isMerchantPath("/merchant/store")).toBe(true);
   });
 });

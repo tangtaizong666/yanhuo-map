@@ -147,7 +147,7 @@ onUnmounted(() => {
         >
           <X :size="21" />
         </button>
-        <span class="eyebrow">A TASTE WORTH RETURNING TO</span>
+        <span class="eyebrow">念念不忘</span>
         <h2 id="reorder-title">再来一单</h2>
         <p id="reorder-description">把想念的味道放回餐袋，先看看今天的菜单。</p>
       </header>
@@ -188,16 +188,24 @@ onUnmounted(() => {
           </div>
           <ul class="reorder-items">
             <li
-              v-for="row in rows"
-              :key="row.previous.product_id"
+              v-for="(row, idx) in rows"
+              :key="row.previous.product_id ?? `deleted-${idx}`"
               class="reorder-item"
               :class="{ 'reorder-skipped': !row.add }"
               :data-product-id="row.previous.product_id"
             >
               <img
+                v-if="row.product?.image || row.previous.image"
                 :src="row.product?.image || row.previous.image"
                 :alt="row.product?.name || row.previous.name"
               />
+              <div
+                v-else
+                class="reorder-item-placeholder"
+                aria-hidden="true"
+              >
+                <ShoppingBag :size="22" />
+              </div>
               <div class="reorder-item-content">
                 <h3>
                   <RouterLink
@@ -435,12 +443,19 @@ onUnmounted(() => {
 .reorder-item:first-child {
   padding-top: 5px;
 }
-.reorder-item img {
+.reorder-item img,
+.reorder-item-placeholder {
   height: 66px;
   width: 66px;
   flex: none;
   border-radius: 12px;
   object-fit: cover;
+}
+.reorder-item-placeholder {
+  display: grid;
+  place-items: center;
+  background: #f5ead9;
+  color: #9e7348;
 }
 .reorder-item-content {
   flex: 1;

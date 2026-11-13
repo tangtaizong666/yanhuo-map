@@ -316,7 +316,7 @@ function acceptPrice(id: string, item: CartItem) {
     >
     <header class="cart-heading">
       <div>
-        <span class="eyebrow">A LITTLE SOMETHING FOR LATER</span>
+        <span class="eyebrow">今日餐袋</span>
         <h1>我的餐袋<span class="cart-title-dot">。</span></h1>
         <p>惦记的好味道，都放在这里。</p>
       </div>
@@ -605,7 +605,7 @@ function acceptPrice(id: string, item: CartItem) {
       </div>
       <aside class="cart-guide">
         <div class="cart-guide-card">
-          <span class="eyebrow">GOOD FOOD, YOUR PACE</span>
+          <span class="eyebrow">安心选餐</span>
           <h2>慢慢挑，<br />好好吃一餐。</h2>
           <p>每个小摊都有自己的烟火，<br />每份餐袋也会单独结算。</p>
           <div class="cart-guide-separator"></div>

@@ -274,7 +274,8 @@ def _merchant_action(order_id, user, action, code='', reason='', *, prep_minutes
             raise BusinessError('备餐预估需要填写1至180分钟。', 'invalid_prep_minutes', status=400)
         if action == 'update_prep' and (prep_minutes is None or not idempotency_key or not reason.strip() or len(reason) > 200):
             raise BusinessError('请填写新的备餐预估、调整说明及提交标识。', 'invalid_prep_update', status=400)
-        if expire_locked(order): return order
+        if expire_locked(order):
+            return BusinessError('订单已超时自动取消，当前无法执行此操作。', 'order_expired')
         delivery = order.fulfillment_type == 'delivery'
         if action in ('accept', 'update_prep', 'ready', 'dispatch', 'arrive', 'confirm_payment', 'approve_cancel', 'complete', 'reject', 'deny_cancel'):
             from .financial import require_no_financial_hold
