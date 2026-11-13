@@ -671,7 +671,7 @@ def update_merchant(request, merchant_id):
             .values_list('pk', flat=True)
         )
         merchant = get_object_or_404(
-            MerchantProfile.objects.select_for_update(no_key=True).select_related('user'),
+            MerchantProfile.objects.select_for_update(no_key=True),
             pk=merchant_id,
         )
         changed = []
@@ -713,7 +713,7 @@ def update_stall(request, stall_id):
     data = form.validated_data
     with transaction.atomic():
         stall = get_object_or_404(Stall.objects.select_for_update(no_key=True), pk=stall_id)
-        merchant = MerchantProfile.objects.select_for_update(no_key=True).select_related('user').get(
+        merchant = MerchantProfile.objects.select_for_update(no_key=True).get(
             pk=stall.merchant_id
         )
         stall.merchant = merchant
@@ -1281,10 +1281,7 @@ def feedback_detail_view(request, feedback_id):
     form.is_valid(raise_exception=True)
     data = form.validated_data
     with transaction.atomic():
-        row = get_object_or_404(
-            Feedback.objects.select_for_update().select_related('stall__location', 'order', 'user'),
-            pk=feedback_id,
-        )
+        row = get_object_or_404(Feedback.objects.select_for_update(), pk=feedback_id)
         next_verification = data.get('verification', row.verification)
         next_note = data.get('verification_note', row.verification_note)
         if next_verification in ('confirmed', 'dismissed') and not next_note.strip():
@@ -1304,6 +1301,7 @@ def feedback_detail_view(request, feedback_id):
                 verification=row.verification,
                 resolved=row.resolved,
             )
+    row = Feedback.objects.select_related('stall__location', 'order', 'user').get(pk=row.pk)
     return Response({'feedback': _serialize_feedback(row)})
 
 
@@ -1318,7 +1316,7 @@ def _user_has_active_obligations(target_user):
         or PaymentRefund.objects.filter(order__user=target_user, resolved_at__isnull=True).exclude(status='success').exists()
     ):
         return True
-    if hasattr(target_user, 'merchant_profile'):
+    if MerchantProfile.objects.filter(user=target_user).exists():
         merchant_orders = Order.objects.filter(stall__merchant__user=target_user)
         if (
             merchant_orders.filter(
@@ -1403,10 +1401,7 @@ def user_detail_view(request, user_id):
     data = form.validated_data
     User = get_user_model()
     with transaction.atomic():
-        target = get_object_or_404(
-            User.objects.select_for_update().select_related('merchant_profile', 'merchant_application'),
-            pk=user_id,
-        )
+        target = get_object_or_404(User.objects.select_for_update(), pk=user_id)
         if target.is_superuser and not request.user.is_superuser:
             raise BusinessError('普通运营人员不能修改超级管理员账号。', 'forbidden', status=403)
         if 'is_active' in data and not data['is_active']:
@@ -1428,6 +1423,7 @@ def user_detail_view(request, user_id):
         if changed:
             target.save(update_fields=changed)
             audit(request.user, 'ops_user_updated', f'auth.User:{target.pk}', fields=changed, is_active=target.is_active)
+    target = User.objects.select_related('merchant_profile', 'merchant_application').get(pk=target.pk)
     return Response({'user': _serialize_user(target)})
 
 
