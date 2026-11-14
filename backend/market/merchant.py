@@ -19,9 +19,9 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.db import DatabaseError, transaction
-from django.db.models import Count, Exists, F, IntegerField, OuterRef, Q, Sum, Subquery
+from django.db.models import Count, Exists, F, IntegerField, OuterRef, ProtectedError, Q, Sum, Subquery
 from django.db.models.functions import Coalesce, TruncDate
-from django.http import FileResponse, HttpResponseNotAllowed, HttpResponseNotFound
+from django.http import FileResponse, Http404, HttpResponseNotAllowed, HttpResponseNotFound
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.conf import settings
@@ -32,7 +32,7 @@ from rest_framework.response import Response
 
 from .auth_limits import TrustedUserRateThrottle
 from .errors import BusinessError
-from .models import active_prep_q, DeliveryPoint, Event, Follow, MerchantProfile, Order, OrderItem, PaymentAttempt, PaymentRefund, Product, Review, SiteConfiguration, Stall
+from .models import active_prep_q, DeliveryPoint, Event, Follow, MerchantProfile, OPEN_ORDER_STATUSES, Order, OrderItem, PaymentAttempt, PaymentRefund, Product, Review, SiteConfiguration, Stall, StockCorrection
 from .serializers import ProductSerializer, ReviewSerializer, StallSerializer
 
 logger = logging.getLogger(__name__)
@@ -48,6 +48,8 @@ def _cleanup_unreferenced_stall_media(stall_id, media_url_value, rel_path):
                     Q(payment_qr_image=media_url_value) | Q(image=media_url_value) | Q(arrival_image=media_url_value)
                 ).exists()
                 or Product.objects.filter(image=media_url_value).exists()
+                or Order.objects.filter(stall_image=media_url_value).exists()
+                or OrderItem.objects.filter(image=media_url_value).exists()
             ):
                 return
             default_storage.delete(rel_path)
@@ -275,9 +277,48 @@ def products(request, stall_id):
     return Response(ProductSerializer(product).data, status=201)
 
 
-@api_view(['PATCH'])
+@api_view(['PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated])
 def product(request, product_id):
+    if request.method == 'DELETE':
+        from .media_policy import owned_media_path
+        with transaction.atomic():
+            original = get_object_or_404(Product, pk=product_id)
+            stall = merchant_stall(original.stall_id, request.user, locked=True, permission='market.delete_product')
+            item = Product.objects.select_for_update().filter(pk=product_id, stall=stall).first()
+            if item is None:
+                raise Http404
+            if OrderItem.objects.filter(product=item, order__status__in=OPEN_ORDER_STATUSES).exists():
+                raise BusinessError(
+                    '该商品仍有进行中的订单，请待订单完结后再处理，或先将商品下架。',
+                    'product_has_active_orders',
+                    status=409,
+                )
+            if OrderItem.objects.filter(product=item).exists() or StockCorrection.objects.filter(product=item).exists():
+                raise BusinessError(
+                    '该商品已有历史订单或盘点记录，为保留账目凭证不能彻底删除；请将其下架隐藏。',
+                    'product_has_history',
+                    status=409,
+                )
+            deleted_id, deleted_name, old_image = item.pk, item.name, item.image
+            try:
+                item.delete()
+            except ProtectedError:
+                raise BusinessError(
+                    '该商品已有历史订单或盘点记录，为保留账目凭证不能彻底删除；请将其下架隐藏。',
+                    'product_has_history',
+                    status=409,
+                )
+            audit(request.user, 'product_deleted', deleted_id, stall_id=stall.id, name=deleted_name)
+            old_owned = owned_media_path(old_image)
+            stall_media_prefix = f'{settings.MEDIA_URL}merchants/{stall.pk}/'
+            if old_owned and old_owned.startswith(stall_media_prefix) and '/qr-' not in old_owned:
+                old_rel = old_owned.removeprefix(settings.MEDIA_URL)
+                sid = stall.pk
+                transaction.on_commit(
+                    lambda stall_pk=sid, url=old_owned, rel=old_rel: _cleanup_unreferenced_stall_media(stall_pk, url, rel)
+                )
+        return Response(status=204)
     if isinstance(request.data, Mapping) and 'stock' in request.data:
         original = get_object_or_404(Product, pk=product_id)
         merchant_stall(original.stall_id, request.user, permission='market.change_product')

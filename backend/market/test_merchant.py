@@ -359,3 +359,84 @@ class MerchantWorkspaceTests(TestCase):
             result = self.client.post(endpoint, {'file': SimpleUploadedFile('large.jpg', b'header')}, format='multipart')
         self.assertEqual(result.status_code, 400)
         self.assertEqual(result.data['code'], 'image_too_large')
+
+    def test_product_delete_removes_unused_item_cleans_orphan_media_and_blocks_idempotent_recreation(self):
+        buffer = io.BytesIO()
+        Image.new('RGB', (24, 18), '#ff781f').save(buffer, 'JPEG')
+        with tempfile.TemporaryDirectory(prefix='yanhuo-delete-media-') as directory, override_settings(MEDIA_ROOT=directory):
+            upload = self.client.post(
+                self.base + '/image',
+                {'file': SimpleUploadedFile('dish.jpg', buffer.getvalue(), content_type='image/jpeg')},
+                format='multipart',
+            )
+            self.assertEqual(upload.status_code, 201, upload.data)
+            media_url = upload.data['url']
+            saved_file = Path(directory) / media_url.removeprefix('/media/')
+            self.assertTrue(saved_file.exists())
+
+            create_payload = {
+                'name': '待清理测试餐点',
+                'price_cents': 900,
+                'stock': 0,
+                'image': media_url,
+                'is_active': False,
+                'idempotency_key': 'delete-product-idem-key',
+            }
+            created = self.client.post(self.base + '/products', create_payload, format='json')
+            self.assertEqual(created.status_code, 201, created.data)
+            first_id = created.data['id']
+
+            shared = Product.objects.create(
+                stall=self.stall, name='共用图餐点', price_cents=1000, stock=2, image=media_url, is_active=False
+            )
+
+            self.client.force_authenticate(self.other)
+            self.assertEqual(self.client.delete(f'/api/v1/merchant/products/{first_id}').status_code, 404)
+            self.assertTrue(Product.objects.filter(pk=first_id).exists())
+
+            self.client.force_authenticate(self.vendor)
+            with self.captureOnCommitCallbacks(execute=True):
+                deleted_first = self.client.delete(f'/api/v1/merchant/products/{first_id}')
+            self.assertEqual(deleted_first.status_code, 204)
+            self.assertFalse(Product.objects.filter(pk=first_id).exists())
+            self.assertTrue(saved_file.exists(), 'Shared image must remain while another product still uses it')
+            self.assertTrue(AuditLog.objects.filter(action='product_deleted', target=str(first_id)).exists())
+
+            replay = self.client.post(self.base + '/products', create_payload, format='json')
+            self.assertEqual(replay.status_code, 409, replay.data)
+            self.assertEqual(replay.data['code'], 'idempotency_resource_gone')
+
+            with self.captureOnCommitCallbacks(execute=True):
+                deleted_second = self.client.delete(f'/api/v1/merchant/products/{shared.pk}')
+            self.assertEqual(deleted_second.status_code, 204)
+            self.assertFalse(Product.objects.filter(pk=shared.pk).exists())
+            self.assertFalse(saved_file.exists(), 'Unreferenced stall media should be cleaned up on commit')
+
+    def test_product_delete_blocks_active_and_historical_orders_and_stock_corrections(self):
+        order = self.order()
+        active_block = self.client.delete(f'/api/v1/merchant/products/{self.product.pk}')
+        self.assertEqual(active_block.status_code, 409, active_block.data)
+        self.assertEqual(active_block.data['code'], 'product_has_active_orders')
+        self.assertTrue(Product.objects.filter(pk=self.product.pk).exists())
+
+        Order.objects.filter(pk=order.pk).update(status='cancelled')
+        history_block = self.client.delete(f'/api/v1/merchant/products/{self.product.pk}')
+        self.assertEqual(history_block.status_code, 409, history_block.data)
+        self.assertEqual(history_block.data['code'], 'product_has_history')
+        self.assertTrue(Product.objects.filter(pk=self.product.pk).exists())
+        off_shelf = self.client.patch(
+            f'/api/v1/merchant/products/{self.product.pk}', {'is_active': False}, format='json'
+        )
+        self.assertEqual(off_shelf.status_code, 200)
+
+        counted = Product.objects.create(stall=self.stall, name='盘点过菜品', price_cents=600, stock=5)
+        corr = self.client.post(
+            f'/api/v1/merchant/products/{counted.pk}/stock-correction',
+            {'stock': 3, 'expected_stock_version': 0, 'reason': '测试盘点', 'idempotency_key': 'corr-keep-audit'},
+            format='json',
+        )
+        self.assertEqual(corr.status_code, 200, corr.data)
+        counted_block = self.client.delete(f'/api/v1/merchant/products/{counted.pk}')
+        self.assertEqual(counted_block.status_code, 409, counted_block.data)
+        self.assertEqual(counted_block.data['code'], 'product_has_history')
+        self.assertTrue(Product.objects.filter(pk=counted.pk).exists())

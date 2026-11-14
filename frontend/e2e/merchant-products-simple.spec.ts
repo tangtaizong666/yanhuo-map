@@ -54,6 +54,7 @@ async function fixture(page: Page) {
   const state = {
     products,
     patches: [] as any[],
+    deletes: [] as number[],
     corrections: [] as any[],
     restocks: [] as any[],
     unexpected: [] as string[],
@@ -108,6 +109,15 @@ async function fixture(page: Page) {
       state.patches.push({ id: row.id, body });
       Object.assign(row, body);
       return send(row);
+    }
+    if (patch && request.method() === "DELETE") {
+      const id = Number(patch[1]);
+      const index = products.findIndex((p) => p.id === id);
+      if (index === -1)
+        return route.fulfill({ status: 404, json: { detail: "未找到。" } });
+      state.deletes.push(id);
+      products.splice(index, 1);
+      return route.fulfill({ status: 204 });
     }
     state.unexpected.push(`${request.method()} ${path}`);
     return route.fulfill({
@@ -520,5 +530,103 @@ test("unconfirmed correction and restock remain automatically visible and reuse 
   await expect.poll(() => state.restocks.length).toBe(1);
   expect(state.restocks[0]).toEqual(restock);
   expect(state.products[2].sale_paused).toBe(true);
+  expect(state.unexpected).toEqual([]);
+});
+
+
+test("off-shelf cards expose quick delete with focus-trapped confirmation and remove unused items", async ({
+  page,
+}, info) => {
+  const state = await fixture(page);
+  state.products[2].is_active = false;
+  await page.goto("/merchant/products");
+  const filters = page.getByRole("group", { name: "商品状态筛选" });
+  await filters.getByRole("button", { name: /^已下架/ }).click();
+  const rice = card(page, "招牌蛋炒饭");
+  const deleteTrigger = rice.getByRole("button", {
+    name: "删除商品：招牌蛋炒饭",
+    exact: true,
+  });
+  await expect(deleteTrigger).toBeVisible();
+  for (const width of [360, 390, 768, 1440]) {
+    await page.setViewportSize({ width, height: width <= 390 ? 844 : 900 });
+    await assertNoHorizontalOverflow(page);
+    expect((await deleteTrigger.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await deleteTrigger.click();
+  const confirmDialog = page.getByRole("alertdialog", {
+    name: "删除「招牌蛋炒饭」？",
+    exact: true,
+  });
+  await expect(confirmDialog).toBeVisible();
+  await expect(
+    confirmDialog.getByRole("button", { name: "取消", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(
+    confirmDialog.getByRole("button", { name: "确认删除", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(
+    confirmDialog.getByRole("button", { name: "取消", exact: true }),
+  ).toBeFocused();
+  await page.screenshot({
+    path: info.outputPath("merchant-delete-confirm-390.png"),
+    fullPage: true,
+  });
+  await page.keyboard.press("Escape");
+  await expect(confirmDialog).toHaveCount(0);
+  expect(state.deletes).toEqual([]);
+
+  await deleteTrigger.click();
+  await confirmDialog.getByRole("button", { name: "确认删除", exact: true }).click();
+  await expect(confirmDialog).toHaveCount(0);
+  await expect(card(page, "招牌蛋炒饭")).toHaveCount(0);
+  expect(state.deletes).toEqual([984]);
+  await expect(filters.getByRole("button", { name: /^已下架/ })).toContainText("0");
+  expect(state.unexpected).toEqual([]);
+});
+
+test("deleting an ordered product from the editor explains history retention and offers one-tap off-shelf", async ({
+  page,
+}) => {
+  const state = await fixture(page);
+  await page.route("**/api/v1/merchant/products/982", async (route) => {
+    if (route.request().method() === "DELETE") {
+      return route.fulfill({
+        status: 409,
+        json: {
+          detail:
+            "该商品已有历史订单或盘点记录，为保留账目凭证不能彻底删除；请将其下架隐藏。",
+          code: "product_has_history",
+        },
+      });
+    }
+    return route.fallback();
+  });
+  await page.goto("/merchant/products");
+  const chicken = card(page, "香菇鸡肉饭");
+  await chicken.getByRole("button", { name: /^编辑商品：/ }).click();
+  const dialog = page.getByRole("dialog", { name: "编辑商品", exact: true });
+  await dialog.getByRole("button", { name: "删除商品", exact: true }).click();
+  const confirmDialog = page.getByRole("alertdialog", {
+    name: "删除「香菇鸡肉饭」？",
+    exact: true,
+  });
+  await confirmDialog.getByRole("button", { name: "确认删除", exact: true }).click();
+  await expect(confirmDialog.getByRole("alert")).toContainText(
+    "已有历史订单或盘点记录",
+  );
+  await expect(
+    confirmDialog.getByRole("button", { name: "确认删除", exact: true }),
+  ).toHaveCount(0);
+  await confirmDialog
+    .getByRole("button", { name: "改为下架隐藏", exact: true })
+    .click();
+  await expect(confirmDialog).toHaveCount(0);
+  await expect(dialog).toHaveCount(0);
+  await expect(chicken.locator(".product-status")).toHaveText("已下架");
+  expect(state.patches).toEqual([{ id: 982, body: { is_active: false } }]);
   expect(state.unexpected).toEqual([]);
 });

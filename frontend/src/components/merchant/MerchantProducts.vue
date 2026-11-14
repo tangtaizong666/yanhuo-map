@@ -11,6 +11,7 @@ import {
   Plus,
   Search,
   SlidersHorizontal,
+  Trash2,
   Upload,
   X,
 } from "lucide-vue-next";
@@ -151,6 +152,22 @@ const modalElement = ref<HTMLElement>();
 const nameInput = ref<HTMLInputElement>();
 let returnFocus: HTMLElement | null = null;
 let previousOverflow = "";
+type DeleteCandidate = {
+  id: number;
+  name: string;
+  is_active: boolean;
+};
+const deleteTarget = ref<DeleteCandidate | null>(null);
+const deleteFromEditor = ref(false);
+const deleting = ref(false);
+const offShelvingBlocked = ref(false);
+const deleteError = ref("");
+const deleteBlockedByHistory = ref(false);
+const deleteUncertain = ref(false);
+const deletePanel = ref<HTMLElement>();
+const cancelDeleteButton = ref<HTMLButtonElement>();
+let deleteReturnFocus: HTMLElement | null = null;
+let deletePreviousOverflow = "";
 const blank = (): Draft => ({
   name: "",
   description: "",
@@ -180,10 +197,25 @@ watch(
     search.value = "";
     category.value = "all";
     status.value = "all";
+    closeDeleteConfirm(true, false);
     closeEditor(true);
     closePhotoAssist(false);
   },
 );
+watch(products, (list) => {
+  if (
+    deleteUncertain.value &&
+    deleteTarget.value &&
+    !list.some((item) => item.id === deleteTarget.value!.id)
+  ) {
+    const removedName = deleteTarget.value.name;
+    const removedId = deleteTarget.value.id;
+    const fromEdit = deleteFromEditor.value || editingId.value === removedId;
+    closeDeleteConfirm(true, !fromEdit);
+    if (fromEdit && modal.value) closeEditor(true);
+    notify(`已核对菜单，「${removedName}」已删除`, "success");
+  }
+});
 function openPhotoAssist(trigger?: EventTarget | null) {
   photoAssistError.value = "";
   photoAssistReturnFocus =
@@ -333,7 +365,15 @@ function startEditor(product?: Product, trigger?: EventTarget | null) {
   nextTick(() => nameInput.value?.focus());
 }
 function closeEditor(force = false) {
-  if (!modal.value || (!force && (saving.value || uploading.value))) return;
+  if (
+    !modal.value ||
+    (!force &&
+      (saving.value ||
+        uploading.value ||
+        deleting.value ||
+        Boolean(deleteTarget.value)))
+  )
+    return;
   // A submitted creation has its own persistent recovery flow. Closing this
   // editor must never be presented as discarding that possibly saved request.
   if (!force && !(editingId.value == null && pendingCreation.value) &&
@@ -359,10 +399,175 @@ function discardLocalEdits() {
   closeEditor(true);
   if (editSaveUncertain.value) emit("refresh");
 }
+function restoreAfterCardDelete() {
+  nextTick(() => {
+    if (deleteReturnFocus?.isConnected) {
+      deleteReturnFocus.focus();
+      return;
+    }
+    statusFilters.value?.querySelector<HTMLElement>(".selected")?.focus();
+  });
+}
+function openDeleteConfirm(
+  product: DeleteCandidate,
+  trigger?: EventTarget | null,
+  fromEditor = false,
+) {
+  if (saving.value || uploading.value || deleting.value || offShelvingBlocked.value)
+    return;
+  deleteTarget.value = {
+    id: product.id,
+    name: product.name,
+    is_active: product.is_active,
+  };
+  deleteFromEditor.value = fromEditor;
+  deleteError.value = "";
+  deleteBlockedByHistory.value = false;
+  deleteUncertain.value = false;
+  deleteReturnFocus =
+    trigger instanceof HTMLElement
+      ? trigger
+      : (document.activeElement as HTMLElement);
+  if (!modal.value && !photoAssistOpen.value) {
+    deletePreviousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+  }
+  nextTick(() => cancelDeleteButton.value?.focus());
+}
+function requestDeleteFromEditor(trigger?: EventTarget | null) {
+  if (editingId.value == null) return;
+  const current = products.value.find((item) => item.id === editingId.value);
+  openDeleteConfirm(
+    {
+      id: editingId.value,
+      name: form.name.trim() || current?.name || original.name,
+      is_active: current?.is_active ?? original.is_active,
+    },
+    trigger,
+    true,
+  );
+}
+function closeDeleteConfirm(force = false, restoreFocus = true) {
+  if (!deleteTarget.value) return;
+  if (!force && (deleting.value || offShelvingBlocked.value)) return;
+  const wasUncertain = deleteUncertain.value;
+  deleteTarget.value = null;
+  deleteFromEditor.value = false;
+  deleteError.value = "";
+  deleteBlockedByHistory.value = false;
+  deleteUncertain.value = false;
+  if (!modal.value && !photoAssistOpen.value) {
+    document.body.style.overflow = deletePreviousOverflow;
+  }
+  if (wasUncertain) emit("refresh");
+  if (restoreFocus) restoreAfterCardDelete();
+}
+function deleteModalKeys(event: KeyboardEvent) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeDeleteConfirm();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const nodes = Array.from(
+    deletePanel.value?.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), [tabindex="0"]',
+    ) || [],
+  ).filter((el) => el.getClientRects().length);
+  const first = nodes[0],
+    last = nodes[nodes.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last?.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first?.focus();
+  }
+}
+async function confirmDeleteProduct() {
+  const target = deleteTarget.value;
+  if (!target || deleting.value || offShelvingBlocked.value) return;
+  deleting.value = true;
+  deleteError.value = "";
+  try {
+    await api(`/merchant/products/${target.id}`, { method: "DELETE" });
+    removeStorage(
+      `merchant-stock-correction:${session.user?.id}:${props.stall.id}:${target.id}`,
+      "session",
+    );
+    const fromEdit = deleteFromEditor.value || editingId.value === target.id;
+    closeDeleteConfirm(true, !fromEdit);
+    if (fromEdit && modal.value) closeEditor(true);
+    notify(`已删除「${target.name}」`, "success");
+    emit("refresh");
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      removeStorage(
+        `merchant-stock-correction:${session.user?.id}:${props.stall.id}:${target.id}`,
+        "session",
+      );
+      const fromEdit = deleteFromEditor.value || editingId.value === target.id;
+      closeDeleteConfirm(true, !fromEdit);
+      if (fromEdit && modal.value) closeEditor(true);
+      notify(`已核对菜单，「${target.name}」已不在列表中`, "success");
+      emit("refresh");
+      return;
+    }
+    if (
+      error instanceof ApiError &&
+      error.status === 409 &&
+      (error.code === "product_has_history" ||
+        error.code === "product_has_active_orders")
+    ) {
+      deleteUncertain.value = false;
+      deleteBlockedByHistory.value = true;
+      deleteError.value = error.message;
+      nextTick(() => cancelDeleteButton.value?.focus());
+      return;
+    }
+    const definitelyRejected =
+      error instanceof ApiError &&
+      (error.data?.submitted === false ||
+        [400, 403, 409, 422].includes(error.status));
+    if (!definitelyRejected) {
+      deleteUncertain.value = true;
+      deleteError.value =
+        "删除结果尚未确认，正在刷新菜单核对最新状态；也可点击重试确认删除。";
+      emit("refresh");
+    } else {
+      deleteError.value = (error as Error).message;
+    }
+  } finally {
+    deleting.value = false;
+  }
+}
+async function offShelfInsteadOfDelete() {
+  const target = deleteTarget.value;
+  if (!target || offShelvingBlocked.value || deleting.value) return;
+  offShelvingBlocked.value = true;
+  deleteError.value = "";
+  try {
+    await api(`/merchant/products/${target.id}`, {
+      method: "PATCH",
+      body: { is_active: false },
+    });
+    const fromEdit = deleteFromEditor.value || editingId.value === target.id;
+    closeDeleteConfirm(true, !fromEdit);
+    if (fromEdit && modal.value) closeEditor(true);
+    notify(`「${target.name}」已改为下架隐藏`, "success");
+    emit("refresh");
+  } catch (error) {
+    deleteError.value = (error as Error).message;
+  } finally {
+    offShelvingBlocked.value = false;
+  }
+}
 onBeforeUnmount(() => {
   if (modal.value) document.body.style.overflow = previousOverflow;
   else if (photoAssistOpen.value)
     document.body.style.overflow = photoAssistPreviousOverflow;
+  else if (deleteTarget.value)
+    document.body.style.overflow = deletePreviousOverflow;
 });
 function modalKeys(event: KeyboardEvent) {
   if (event.key === "Escape") {
@@ -747,6 +952,16 @@ function tasteValues(groups: Draft["taste_options"]) {
           >
             {{ product.sale_paused ? "恢复供应" : "暂停供应" }}
           </button>
+          <button
+            v-else-if="!product.is_active"
+            type="button"
+            class="delete-card-action"
+            :disabled="busy[product.id] || deleting"
+            :aria-label="`删除商品：${product.name}`"
+            @click="openDeleteConfirm(product, $event.currentTarget)"
+          >
+            <Trash2 :size="14" />删除
+          </button>
         </div>
         <div v-if="discoveryOnly && product.is_active" class="display-supply-actions" role="group" :aria-label="`${product.name}今日供应`">
           <button v-for="choice in ([{ value: 'available', label: '今天有' }, { value: 'sold_out', label: '卖完了' }, { value: 'paused', label: '暂时不卖' }] as const)" :key="choice.value" type="button" :aria-pressed="supplyState(product) === choice.value" :disabled="busy[product.id]" @click="patchProduct(product, { display_availability: choice.value }, `${product.name}已标记${choice.label}，线上库存未改变`)">{{ choice.label }}</button>
@@ -826,6 +1041,7 @@ function tasteValues(groups: Draft["taste_options"]) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="product-editor-title"
+        :inert="Boolean(deleteTarget)"
         @keydown="modalKeys"
       >
         <header :inert="discardOpen">
@@ -838,7 +1054,7 @@ function tasteValues(groups: Draft["taste_options"]) {
           <button
             class="modal-close"
             aria-label="关闭商品编辑"
-            :disabled="saving || uploading"
+            :disabled="saving || uploading || deleting"
             @click="closeEditor()"
           >
             <X :size="22" />
@@ -1048,6 +1264,20 @@ function tasteValues(groups: Draft["taste_options"]) {
                 aria-label="上架销售" /><span class="switch-track"
                 ><span /></span
             ></label>
+            <div v-if="editingId != null" class="editor-danger-zone">
+              <div>
+                <strong>彻底删除商品</strong>
+                <small>不再售卖且无订单与盘点记录时可删除；暂时停售请用上方开关下架</small>
+              </div>
+              <button
+                type="button"
+                class="editor-delete-btn"
+                :disabled="saving || uploading || deleting"
+                @click="requestDeleteFromEditor($event.currentTarget)"
+              >
+                <Trash2 :size="15" />删除商品
+              </button>
+            </div>
           </fieldset>
           <p v-if="formError" class="editor-error" role="alert">
             {{ formError }}
@@ -1056,7 +1286,7 @@ function tasteValues(groups: Draft["taste_options"]) {
             <button
               type="button"
               class="catalog-outline"
-              :disabled="saving || uploading"
+              :disabled="saving || uploading || deleting"
               @click="closeEditor()"
             >
               取消</button
@@ -1064,14 +1294,14 @@ function tasteValues(groups: Draft["taste_options"]) {
               v-if="editingId == null && !pendingCreation"
               type="button"
               class="catalog-outline"
-              :disabled="saving || uploading"
+              :disabled="saving || uploading || deleting"
               @click="saveEditor(true)"
             >
               保存并继续添加</button
             ><button
               type="submit"
               class="catalog-primary"
-              :disabled="saving || uploading"
+              :disabled="saving || uploading || deleting"
             >
               <Check :size="17" />{{
                 saving
@@ -1098,6 +1328,64 @@ function tasteValues(groups: Draft["taste_options"]) {
       </section>
     </div></Teleport
   >
+  <Teleport to="body">
+    <div
+      v-if="deleteTarget"
+      class="product-delete-backdrop"
+      @mousedown.self.prevent="closeDeleteConfirm()"
+    >
+      <section
+        ref="deletePanel"
+        class="editor-discard-panel product-delete-panel"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="delete-product-title"
+        aria-describedby="delete-product-description"
+        @keydown="deleteModalKeys"
+      >
+        <h3 id="delete-product-title">删除「{{ deleteTarget.name }}」？</h3>
+        <p id="delete-product-description">
+          删除后无法恢复。若只是暂时停售，建议保留在「已下架」或使用「暂停供应」。
+        </p>
+        <p
+          v-if="deleteError"
+          class="editor-error delete-dialog-error"
+          role="alert"
+        >
+          {{ deleteError }}
+        </p>
+        <div class="delete-dialog-actions">
+          <button
+            ref="cancelDeleteButton"
+            type="button"
+            class="catalog-outline"
+            :disabled="deleting || offShelvingBlocked"
+            @click="closeDeleteConfirm()"
+          >
+            {{ deleteBlockedByHistory && !deleteTarget.is_active ? "知道了" : "取消" }}
+          </button>
+          <button
+            v-if="deleteBlockedByHistory && deleteTarget.is_active"
+            type="button"
+            class="catalog-primary"
+            :disabled="deleting || offShelvingBlocked"
+            @click="offShelfInsteadOfDelete"
+          >
+            {{ offShelvingBlocked ? "正在下架…" : "改为下架隐藏" }}
+          </button>
+          <button
+            v-else-if="!deleteBlockedByHistory"
+            type="button"
+            class="catalog-danger"
+            :disabled="deleting"
+            @click="confirmDeleteProduct"
+          >
+            {{ deleting ? "删除中…" : deleteUncertain ? "重试确认删除" : "确认删除" }}
+          </button>
+        </div>
+      </section>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -1440,6 +1728,25 @@ function tasteValues(groups: Draft["taste_options"]) {
   border-color: #cbdccb;
   color: #375c3b;
 }
+.product-top .delete-card-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 44px;
+  min-width: 68px;
+  padding: 0 10px;
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 10px;
+  background: #fff5f2;
+  border: 1px solid #eccbc3;
+  color: #ad3b25;
+}
+.product-top .delete-card-action:hover:not(:disabled) {
+  background: #ffe8e2;
+}
 .product-top button:disabled {
   opacity: 0.55;
 }
@@ -1517,6 +1824,99 @@ function tasteValues(groups: Draft["taste_options"]) {
 .editor-discard-panel p { margin: 12px 0 20px; font-size: 14px; line-height: 1.6; }
 .editor-discard-panel > div { display: flex; gap: 10px; flex-wrap: wrap; }
 .editor-discard-panel button { flex: 1; }
+.product-delete-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 210;
+  background: #25180f66;
+  backdrop-filter: blur(3px);
+  display: grid;
+  place-items: center;
+  padding: 18px;
+}
+.product-delete-panel {
+  max-width: 390px;
+  box-shadow: 0 22px 60px #25180f30;
+}
+.product-delete-panel .delete-dialog-error {
+  margin: -6px 0 16px;
+}
+.delete-dialog-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.delete-dialog-actions button {
+  flex: 1;
+  min-height: 44px;
+}
+.catalog-danger {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  border-radius: 12px;
+  padding: 0 18px;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 13px;
+  background: #c9442a;
+  color: #fff;
+  border: 1px solid #b83a22;
+}
+.catalog-danger:hover:not(:disabled) {
+  background: #b13720;
+}
+.catalog-danger:disabled {
+  opacity: 0.55;
+}
+.editor-danger-zone {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  padding: 14px 15px;
+  border-radius: 12px;
+  border: 1px solid #efd5cd;
+  background: #fff8f5;
+}
+.editor-danger-zone strong {
+  display: block;
+  font-size: 13px;
+  color: #6e3124;
+}
+.editor-danger-zone small {
+  display: block;
+  font-size: 12px;
+  color: #8c6c62;
+  margin-top: 4px;
+  line-height: 1.5;
+}
+.editor-delete-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid #e3b8ad;
+  color: #b33b24;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.editor-delete-btn:hover:not(:disabled) {
+  background: #ffece7;
+}
+.editor-delete-btn:disabled {
+  opacity: 0.55;
+}
 .product-editor-panel > header {
   display: flex;
   align-items: center;
