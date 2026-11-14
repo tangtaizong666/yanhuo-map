@@ -441,6 +441,9 @@ class SecurityCapacityAndThrottleHardeningTests(DeliverySetup, TestCase):
         self.assertEqual(locked.status_code, 409)
         self.assertEqual(locked.data['code'], 'pickup_code_locked')
 
+        almost_all = {f'{i:04d}' for i in range(10000) if i != 7}
+        self.assertEqual(pickup_code(almost_all), '0007')
+
         all_four_digits = {f'{i:04d}' for i in range(10000)}
         with self.assertRaises(BusinessError) as raised:
             pickup_code(all_four_digits)
@@ -736,14 +739,41 @@ class HistoricalMigrationUpgradeTests(TransactionTestCase):
             pickup_latitude=45.711,
             pickup_longitude=126.634,
         )
-        open_keep = HistOrder.objects.create(
-            status='ready', pickup_code='8562', idempotency_key='k27-1', request_hash='h27-1', **common
-        )
+        # Earlier 8-digit open order shares trailing 4 digits with a later 4-digit open order
         open_legacy = HistOrder.objects.create(
-            status='preparing', pickup_code='76358562', idempotency_key='k27-2', request_hash='h27-2', **common
+            status='preparing',
+            pickup_code='76358562',
+            created_at=now - timedelta(minutes=5),
+            idempotency_key='k27-1',
+            request_hash='h27-1',
+            **common,
+        )
+        open_keep = HistOrder.objects.create(
+            status='ready',
+            pickup_code='8562',
+            created_at=now - timedelta(minutes=2),
+            idempotency_key='k27-2',
+            request_hash='h27-2',
+            **common,
+        )
+        open_leading_zero = HistOrder.objects.create(
+            status='pending',
+            pickup_code='0007',
+            created_at=now - timedelta(minutes=1),
+            idempotency_key='k27-3',
+            request_hash='h27-3',
+            **common,
+        )
+        open_non_ascii = HistOrder.objects.create(
+            status='pending',
+            pickup_code='００３７',
+            created_at=now,
+            idempotency_key='k27-4',
+            request_hash='h27-4',
+            **common,
         )
         closed_legacy = HistOrder.objects.create(
-            status='completed', pickup_code='60659380', idempotency_key='k27-3', request_hash='h27-3', **common
+            status='completed', pickup_code='60650080', idempotency_key='k27-5', request_hash='h27-5', **common
         )
 
         executor = MigrationExecutor(connection)
@@ -754,11 +784,16 @@ class HistoricalMigrationUpgradeTests(TransactionTestCase):
         NewOrder = new_apps.get_model('market', 'Order')
         code_keep = NewOrder.objects.get(pk=open_keep.pk).pickup_code
         code_legacy = NewOrder.objects.get(pk=open_legacy.pk).pickup_code
+        code_zero = NewOrder.objects.get(pk=open_leading_zero.pk).pickup_code
+        code_non_ascii = NewOrder.objects.get(pk=open_non_ascii.pk).pickup_code
         code_closed = NewOrder.objects.get(pk=closed_legacy.pk).pickup_code
         self.assertEqual(code_keep, '8562')
+        self.assertEqual(code_zero, '0007')
         self.assertRegex(code_legacy, r'^[0-9]{4}$')
-        self.assertNotEqual(code_legacy, '8562')
-        self.assertEqual(code_closed, '9380')
+        self.assertNotIn(code_legacy, {'8562', '0007'})
+        self.assertRegex(code_non_ascii, r'^[0-9]{4}$')
+        self.assertEqual(len({code_keep, code_legacy, code_zero, code_non_ascii}), 4)
+        self.assertEqual(code_closed, '0080')
 
     def test_0025_rollback_preserves_legacy_file_and_collision_writes_distinct_qr(self):
         import importlib

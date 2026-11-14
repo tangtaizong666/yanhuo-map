@@ -37,7 +37,8 @@ def normalize_pickup_codes_to_four_digits(apps, schema_editor):
             )
 
     seen_by_stall = {}
-    open_orders = (
+    pending_open_orders = []
+    open_orders = list(
         Order.objects.filter(status__in=OPEN_STATUSES)
         .order_by("stall_id", "created_at", "pk")
         .only("id", "stall_id", "pickup_code")
@@ -47,8 +48,12 @@ def normalize_pickup_codes_to_four_digits(apps, schema_editor):
         candidate = order.pickup_code
         if _is_four_ascii_digits(candidate) and candidate not in seen:
             seen.add(candidate)
-            continue
-        fallback = _trailing_four_digits(candidate)
+        else:
+            pending_open_orders.append(order)
+
+    for order in pending_open_orders:
+        seen = seen_by_stall.setdefault(order.stall_id, set())
+        fallback = _trailing_four_digits(order.pickup_code)
         if fallback != "0000" and fallback not in seen:
             new_code = fallback
         else:

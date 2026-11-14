@@ -416,13 +416,18 @@ const reviewRefreshTick = ref(0);
 const guideOpen = ref(false);
 const renewingLocation = ref(false);
 async function renewCurrentLocation() {
-  if (!stall.value || renewingLocation.value) return;
+  if (
+    !stall.value ||
+    renewingLocation.value ||
+    !["open", "paused"].includes(stall.value.status)
+  )
+    return;
   renewingLocation.value = true;
   try {
     await api(`/merchant/stalls/${stall.value.id}/status`, {
       method: "POST",
       body: {
-        status: stall.value.session_status || "open",
+        status: stall.value.status === "paused" ? "paused" : "open",
         confirm_location: true,
       },
     });
