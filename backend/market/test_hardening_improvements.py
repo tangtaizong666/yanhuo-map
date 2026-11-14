@@ -828,25 +828,61 @@ class ComprehensiveAuditRegressionTests(TestCase):
         self.area, self.student, self.vendor, self.stall, self.product = fixtures()
 
     def test_serve_public_media_blocks_all_qr_path_variants_and_serves_normal_media(self):
+        import os
+        from pathlib import Path
         from config.urls import serve_public_media
         from django.core.files.base import ContentFile
         from django.core.files.storage import default_storage
 
         rf = RequestFactory()
-        with tempfile.TemporaryDirectory() as tmpdir, override_settings(MEDIA_ROOT=tmpdir):
+        with tempfile.TemporaryDirectory() as outer_dir, tempfile.TemporaryDirectory() as tmpdir, override_settings(MEDIA_ROOT=tmpdir):
+            outside_secret = Path(outer_dir) / 'outside-secret.txt'
+            outside_secret.write_bytes(b'outside-secret')
             default_storage.save(f'merchants/{self.stall.pk}/qr-secret.jpg', ContentFile(b'qr-secret'))
             default_storage.save(f'merchants/{self.stall.pk}/dish.jpg', ContentFile(b'dish-bytes'))
 
-            for blocked_path in (
+            symlink_rel = f'merchants/{self.stall.pk}/escaped-link.jpg'
+            symlink_abs = Path(tmpdir) / symlink_rel
+            symlink_created = False
+            try:
+                os.symlink(outside_secret, symlink_abs)
+                symlink_created = True
+            except (OSError, NotImplementedError):
+                symlink_created = False
+
+            blocked_paths = [
                 f'merchants/{self.stall.pk}/qr-secret.jpg',
                 f'merchants//{self.stall.pk}/qr-secret.jpg',
                 f'merchants/{self.stall.pk}/./qr-secret.jpg',
                 f'merchants/{self.stall.pk}/QR-SECRET.JPG',
                 '../manage.py',
-            ):
+            ]
+            if symlink_created:
+                blocked_paths.append(symlink_rel)
+
+            for blocked_path in blocked_paths:
                 res = serve_public_media(rf.get(f'/media/{blocked_path}'), path=blocked_path)
                 self.assertEqual(res.status_code, 404, blocked_path)
                 self.assertEqual(res.headers.get('Cache-Control'), 'private, no-store')
+
+            # Even on Windows without SeCreateSymbolicLinkPrivilege, verify is_symlink() / outside-resolve branches directly
+            with patch.object(Path, 'is_symlink', return_value=True):
+                sym_res = serve_public_media(
+                    rf.get(f'/media/merchants/{self.stall.pk}/dish.jpg'),
+                    path=f'merchants/{self.stall.pk}/dish.jpg',
+                )
+                self.assertEqual(sym_res.status_code, 404)
+                self.assertEqual(sym_res.headers.get('Cache-Control'), 'private, no-store')
+
+            real_media_root = Path(tmpdir).resolve()
+            real_outside = outside_secret.resolve()
+            with patch.object(Path, 'resolve', side_effect=[real_media_root, real_outside]):
+                esc_res = serve_public_media(
+                    rf.get(f'/media/merchants/{self.stall.pk}/dish.jpg'),
+                    path=f'merchants/{self.stall.pk}/dish.jpg',
+                )
+                self.assertEqual(esc_res.status_code, 404)
+                self.assertEqual(esc_res.headers.get('Cache-Control'), 'private, no-store')
 
             ok = serve_public_media(
                 rf.get(f'/media/merchants/{self.stall.pk}/dish.jpg'),

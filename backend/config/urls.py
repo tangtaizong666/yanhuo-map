@@ -1,3 +1,4 @@
+from pathlib import Path
 import posixpath
 from django.contrib import admin
 from django.conf import settings
@@ -16,7 +17,20 @@ def serve_public_media(request, path=''):
             or any(part in ('.', '..') or part.lower().startswith('qr-') for part in raw.split('/') if part)
             or any(part.lower().startswith('qr-') for part in segments)):
         return HttpResponseNotFound(headers={'Cache-Control': 'private, no-store'})
-    return static_serve(request, normalized, document_root=settings.MEDIA_ROOT)
+    try:
+        media_root = Path(settings.MEDIA_ROOT).resolve()
+        current = media_root
+        for part in normalized.split('/'):
+            current = current / part
+            if current.is_symlink():
+                return HttpResponseNotFound(headers={'Cache-Control': 'private, no-store'})
+        resolved = current.resolve()
+        resolved.relative_to(media_root)
+    except (OSError, ValueError):
+        return HttpResponseNotFound(headers={'Cache-Control': 'private, no-store'})
+    if resolved.name.lower().startswith('qr-'):
+        return HttpResponseNotFound(headers={'Cache-Control': 'private, no-store'})
+    return static_serve(request, normalized, document_root=str(media_root))
 
 
 admin.site.login_form = LimitedAdminAuthenticationForm
