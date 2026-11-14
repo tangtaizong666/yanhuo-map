@@ -283,6 +283,13 @@ test("discovery-only vendors, non-food warnings and handoff to full taste editor
   await dialog.getByRole("textbox", { name: "这道菜叫什么名字" }).fill("手工冰粉");
   await dialog.getByRole("spinbutton", { name: "单价（元）" }).fill("6");
 
+  // Unverified non-food image blocks accidental publish until explicitly confirmed or retaken.
+  await dialog.getByRole("button", { name: "确认上架", exact: true }).click();
+  await expect(dialog.getByText(/勾选上方核实确认后再上架/)).toBeVisible();
+  expect(state.created).toHaveLength(0);
+
+  await dialog.getByRole("checkbox", { name: /我已核实这是本店真实菜品照片/ }).check();
+
   // Handoff carries draft into full editor so vendor can configure free taste options.
   await dialog.getByRole("button", { name: "口味与更多", exact: true }).click();
   await expect(dialog).toHaveCount(0);
@@ -290,5 +297,105 @@ test("discovery-only vendors, non-food warnings and handoff to full taste editor
   await expect(fullEditor).toBeVisible();
   await expect(fullEditor.getByRole("textbox", { name: "商品名称" })).toHaveValue("手工冰粉");
   await expect(fullEditor.getByRole("spinbutton", { name: "单价（元）" })).toHaveValue("6");
+  expect(state.unexpected).toEqual([]);
+});
+
+test("skipping AI wait and retaking photo ignores late stale AI response", async ({
+  page,
+}) => {
+  const state = await setupAssistFixture(page);
+  let releaseFirstCall: (() => void) | null = null;
+  const firstCallGate = new Promise<void>((resolve) => {
+    releaseFirstCall = resolve;
+  });
+  let draftCallIndex = 0;
+
+  await page.route("**/api/v1/merchant/stalls/2101/ai-product-draft", async (route) => {
+    draftCallIndex += 1;
+    const myIndex = draftCallIndex;
+    const body = route.request().postDataJSON();
+    state.aiCalls.push(body);
+    if (myIndex === 1) {
+      await firstCallGate;
+      await route.fulfill({
+        status: 200,
+        json: {
+          ai_available: true,
+          fallback_reason: "",
+          is_food: true,
+          name: "迟到的旧识别结果",
+          name_candidates: [],
+          category: "旧分类",
+          description: "这段旧文案不应覆盖新照片。",
+          highlight_tags: ["趁热享用"],
+          ask_hint: "",
+          notice: "",
+        },
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      json: {
+        ai_available: true,
+        fallback_reason: "",
+        is_food: true,
+        name: "现炸脆皮臭豆腐",
+        name_candidates: ["灌汤臭豆腐"],
+        category: "铁板小吃",
+        description: "金黄酥脆臭豆腐浇满汤汁，撒葱花香菜。",
+        highlight_tags: ["外酥里嫩", "汤汁浓郁"],
+        ask_hint: "核对售价即可上架",
+        notice: "",
+      },
+    });
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/merchant/products");
+  await page.getByRole("button", { name: "拍照上架", exact: true }).click();
+
+  const dialog = page.getByRole("dialog", { name: "拍菜识图上架", exact: true });
+  await dialog.locator('input[aria-label="拍照识菜"]').setInputFiles({
+    name: "first-slow.png",
+    mimeType: "image/png",
+    buffer: TINY_PNG,
+  });
+
+  const skipBtn = dialog.getByRole("button", { name: "跳过等待，直接手填", exact: true });
+  await expect(skipBtn).toBeVisible();
+  await skipBtn.click();
+  await expect(dialog.getByText(/已跳过智能识图等待/)).toBeVisible();
+
+  // Immediately retake a second photo while first request's server work finishes late.
+  await dialog.locator('input[aria-label="重拍或更换商品照片"]').setInputFiles({
+    name: "second-fresh.png",
+    mimeType: "image/png",
+    buffer: TINY_PNG,
+  });
+
+  await expect(dialog.getByRole("textbox", { name: "这道菜叫什么名字" })).toHaveValue(
+    "现炸脆皮臭豆腐",
+  );
+  releaseFirstCall?.();
+  await page.waitForTimeout(150);
+
+  await expect(dialog.getByRole("textbox", { name: "这道菜叫什么名字" })).toHaveValue(
+    "现炸脆皮臭豆腐",
+  );
+  await expect(dialog.getByRole("textbox", { name: /商品文案/ })).toHaveValue(
+    "金黄酥脆臭豆腐浇满汤汁，撒葱花香菜。",
+  );
+
+  await dialog.getByRole("button", { name: "¥8", exact: true }).click();
+  await dialog.getByRole("button", { name: "20 份", exact: true }).click();
+  await dialog.getByRole("button", { name: "确认上架", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+
+  expect(state.created).toHaveLength(1);
+  expect(state.created[0]).toMatchObject({
+    name: "现炸脆皮臭豆腐",
+    image: "/media/merchants/2101/dish2abcdef123456.jpg",
+  });
   expect(state.unexpected).toEqual([]);
 });

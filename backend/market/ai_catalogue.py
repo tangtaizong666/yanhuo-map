@@ -39,9 +39,22 @@ _OWNED_DISH_IMAGE_RE = re.compile(
     r'^/media/merchants/([0-9]+)/([A-Za-z0-9_-]+\.(?:jpg|jpeg|png|webp))\Z'
 )
 _BANNED_CLAIM_RE = re.compile(
-    r'(?:月售|日销|日卖|累计售出|已售|销量冠军|好评率|零差评|全校第[一1]|全市第[一1]|全网第[一1]|包治|秘方祖传)[^，。；！？!?\n]*'
+    r'(?:月售|日销|日卖|累计售出|已售|销量冠军|好评率|零差评|全校第[一1]|全市第[一1]|全网第[一1]|包治|秘方祖传|网红爆款|必点榜)[^，,。；;！!？?\n]*'
 )
-_DEFAULT_TAGS = ['现点现做', '趁热享用', '份量实在', '招牌推荐']
+_UNCONFIRMED_FACT_RE = re.compile(
+    r'(?:'
+    r'\d+(?:\.\d+)?\s*(?:千克|公斤|毫升|盎司|厘米|大卡|千卡|卡路里|克|斤|两|升|寸)'
+    r'|(?<![A-Za-z])\d+(?:\.\d+)?\s*(?:kcal|kg|ml|oz|cm|mm|g)(?![A-Za-z])'
+    r'|\d+\s*(?:分钟|秒|小时)[^，,。；;！!？?\n]*(?:出餐|做好|可取|立等|出锅|必达)'
+    r'|(?:不含|无|零|0)[^，,。；;！!？?\n]{0,8}(?:过敏原|花生|坚果|麸质|乳制品|牛奶|鸡蛋|海鲜|大豆|芝麻|添加剂|防腐剂|色素|香精|反式脂肪)'
+    r'|过敏原|低敏|无敏|(?:零|无|0)添加|有机认证|清真认证|非转基因'
+    r'|花生油|菜籽油|橄榄油|大豆油|葵花籽油|猪油|牛油果油|动物奶油'
+    r'|纯手工|100%|百分百|纯牛肉|纯羊肉|纯猪肉|纯虾仁|原切牛|鲜活现杀'
+    r'|低脂|(?:零|0)脂|低卡|(?:零|0)卡|(?:无|零|0)糖|控糖|减肥|减脂|高蛋白|滋补养生'
+    r')',
+    re.IGNORECASE,
+)
+_DEFAULT_TAGS = ['趁热享用', '色泽诱人', '香气扑鼻', '街头风味']
 
 _SYSTEM_PROMPT = """你是校园街头美食平台「烟火地图」的商家菜品上架助手。
 请结合商家实拍照片与商家补充信息，输出严格的 json 对象（不要输出 markdown 代码块之外的任何解释）。
@@ -94,13 +107,35 @@ def _clean_line(value, max_len):
     return re.sub(r'\s{2,}', ' ', cleaned).strip()[:max_len]
 
 
-def _clean_description(value):
+def _has_unconfirmed_fact(text, merchant_source=''):
+    normalized_source = re.sub(r'\s+', '', merchant_source or '').lower()
+    for match in _UNCONFIRMED_FACT_RE.finditer(text):
+        token = re.sub(r'\s+', '', match.group(0)).lower()
+        if token and token not in normalized_source:
+            return True
+    return False
+
+
+def _clean_description(value, *, merchant_source='', enforce_source=False):
     text = _clean_line(value, 240)
     if not text:
         return ''
     text = _BANNED_CLAIM_RE.sub('', text)
-    text = re.sub(r'[，、；]{2,}', '，', text)
-    text = re.sub(r'^[，、；。\s]+', '', text).strip()
+    if enforce_source:
+        kept_clauses = []
+        for raw_clause in re.split(r'[，,。；;！!？?\n]+', text):
+            clause = re.sub(r'^[、\s]+|[、\s]+$', '', raw_clause).strip()
+            if not clause:
+                continue
+            if _has_unconfirmed_fact(clause, merchant_source):
+                continue
+            kept_clauses.append(clause)
+        if not kept_clauses:
+            return ''
+        text = '，'.join(kept_clauses) + '。'
+    else:
+        text = re.sub(r'[，、；]{2,}', '，', text)
+        text = re.sub(r'^[，、；。\s]+', '', text).strip()
     return text[:200]
 
 
@@ -118,6 +153,20 @@ def _unique_clean_list(items, *, max_items, max_len, exclude=''):
         if len(result) >= max_items:
             break
     return result
+
+
+def _filter_ai_tags(items, *, merchant_source=''):
+    cleaned = _unique_clean_list(items, max_items=8, max_len=12)
+    safe = []
+    for tag in cleaned:
+        if _BANNED_CLAIM_RE.search(tag):
+            continue
+        if _has_unconfirmed_fact(tag, merchant_source):
+            continue
+        safe.append(tag)
+        if len(safe) >= 5:
+            break
+    return safe
 
 
 def daily_ai_quota_exhausted():
@@ -224,6 +273,7 @@ def _request_deepseek_vision(*, b64_jpeg, stall, existing_categories, merchant_n
 
     payload = {
         'model': settings.DEEPSEEK_VISION_MODEL,
+        'thinking': {'type': 'disabled'},
         'temperature': 0.35,
         'max_tokens': 500,
         'response_format': {'type': 'json_object'},
@@ -259,19 +309,38 @@ def _request_deepseek_vision(*, b64_jpeg, stall, existing_categories, merchant_n
         if len(raw_body) > 64 * 1024:
             raise ValueError('AI response exceeded 64 KiB limit')
     envelope = json.loads(raw_body.decode('utf-8'))
-    choices = envelope.get('choices') or []
-    if not choices or not isinstance(choices[0], dict):
+    if not isinstance(envelope, dict):
+        raise ValueError('AI response envelope is not a JSON object')
+    choices = envelope.get('choices')
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
         raise ValueError('Missing choices in AI response')
-    content = (choices[0].get('message') or {}).get('content')
+    message = choices[0].get('message')
+    if not isinstance(message, dict):
+        raise ValueError('Missing message object in AI response')
+    content = message.get('content')
     if not isinstance(content, str) or not content.strip():
         raise ValueError('Empty message content in AI response')
     return _extract_json_object(content)
 
 
-def _sanitize_ai_result(parsed, *, default_category, merchant_name, merchant_note, selected_tags):
+def _validate_ai_schema(parsed):
     if not isinstance(parsed, dict):
         raise ValueError('Parsed AI content is not a JSON object')
-    is_food = parsed.get('is_food') is not False
+    if not isinstance(parsed.get('is_food'), bool):
+        raise ValueError('Missing or non-boolean is_food in AI response')
+    for list_key in ('name_candidates', 'highlight_tags'):
+        val = parsed.get(list_key)
+        if val is not None and not isinstance(val, list):
+            raise ValueError(f'Invalid {list_key} type in AI response')
+    for str_key in ('name', 'category', 'description', 'ask_hint', 'notice'):
+        val = parsed.get(str_key)
+        if val is not None and not isinstance(val, str):
+            raise ValueError(f'Invalid {str_key} type in AI response')
+
+
+def _sanitize_ai_result(parsed, *, default_category, merchant_name, merchant_note, selected_tags):
+    _validate_ai_schema(parsed)
+    is_food = parsed['is_food']
     if not is_food:
         notice = _clean_line(
             parsed.get('notice') or '这张图看起来不像菜品实拍（收款码请在店铺收款设置中上传）。建议重拍菜品实物后再上架。',
@@ -286,10 +355,11 @@ def _sanitize_ai_result(parsed, *, default_category, merchant_name, merchant_not
             'category': default_category,
             'description': '',
             'highlight_tags': list(_DEFAULT_TAGS),
-            'ask_hint': '请换一张清晰的菜品实拍图，或手动确认菜名与售价',
+            'ask_hint': '请换一张清晰的菜品实拍图，或核实确认后手动填写菜名与售价',
             'notice': notice,
         }
 
+    merchant_source = ' '.join(part for part in [merchant_name, merchant_note, *selected_tags] if part)
     ai_name = _clean_line(parsed.get('name'), 80)
     effective_name = merchant_name or ai_name
     raw_candidates = list(parsed.get('name_candidates') or [])
@@ -297,10 +367,14 @@ def _sanitize_ai_result(parsed, *, default_category, merchant_name, merchant_not
         raw_candidates.insert(0, ai_name)
     candidates = _unique_clean_list(raw_candidates, max_items=3, max_len=30, exclude=effective_name)
     category = _clean_line(parsed.get('category'), 30) or default_category
-    description = _clean_description(parsed.get('description'))
+    description = _clean_description(
+        parsed.get('description'),
+        merchant_source=merchant_source,
+        enforce_source=True,
+    )
     if not description and (merchant_note or selected_tags):
         description = _factual_local_description(merchant_note, selected_tags)
-    tags = _unique_clean_list(parsed.get('highlight_tags') or [], max_items=5, max_len=12) or list(_DEFAULT_TAGS)
+    tags = _filter_ai_tags(parsed.get('highlight_tags') or [], merchant_source=merchant_source) or list(_DEFAULT_TAGS)
     ask_hint = _clean_line(
         parsed.get('ask_hint') or '可点选符合实物的特色，或补一句真实主料后重写文案',
         80,
@@ -406,7 +480,7 @@ def ai_product_draft(request, stall_id):
             refined=bool(merchant_name or merchant_note or selected_tags),
         )
         return Response(result)
-    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError, TypeError, json.JSONDecodeError) as exc:
         logger.warning('DeepSeek vision draft failed for stall %s (%s)', stall.pk, type(exc).__name__)
         audit(request.user, 'ai_product_draft_fallback', stall.pk, reason='upstream_error')
         return Response(

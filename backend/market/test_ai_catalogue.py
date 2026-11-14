@@ -145,6 +145,7 @@ class AiProductDraftTests(TestCase):
             self.assertEqual(captured['url'], 'https://api.deepseek.com/chat/completions')
             self.assertEqual(captured['auth'], 'Bearer sk-test-never-expose-999')
             self.assertEqual(captured['body']['model'], 'deepseek-flash')
+            self.assertEqual(captured['body']['thinking'], {'type': 'disabled'})
             self.assertEqual(captured['body']['response_format'], {'type': 'json_object'})
             user_blocks = captured['body']['messages'][1]['content']
             self.assertTrue(user_blocks[1]['image_url']['url'].startswith('data:image/jpeg;base64,'))
@@ -207,3 +208,80 @@ class AiProductDraftTests(TestCase):
             self.assertFalse(failed.data['ai_available'])
             self.assertEqual(failed.data['fallback_reason'], 'upstream_error')
             self.assertNotIn('sk-test-secret-abc', json.dumps(failed.data, ensure_ascii=False))
+
+    @override_settings(DEEPSEEK_API_KEY='sk-test-source-guard', AI_PRODUCT_DRAFT_DAILY_LIMIT=50)
+    def test_unconfirmed_factual_claims_are_dropped_unless_merchant_provided(self):
+        with tempfile.TemporaryDirectory(prefix='yanhuo-ai-facts-') as media_dir, override_settings(MEDIA_ROOT=media_dir):
+            dish_url = self._upload_dish_photo()
+
+            def hallucinated_open(req, timeout=None):
+                envelope = {
+                    'choices': [{
+                        'message': {
+                            'content': json.dumps({
+                                'is_food': True,
+                                'name': '手工鲜肉馄饨',
+                                'name_candidates': ['鲜肉小馄饨'],
+                                'category': '暖胃汤食',
+                                'description': '汤色清亮飘着葱花紫菜，采用花生油制作，不含任何过敏原，每份500克，10分钟出餐，纯手工现包。',
+                                'highlight_tags': ['汤鲜味美', '0添加剂', '500g大份', '100%纯猪肉'],
+                            }, ensure_ascii=False)
+                        }
+                    }]
+                }
+                return _FakeUpstreamResponse(json.dumps(envelope, ensure_ascii=False).encode('utf-8'))
+
+            with patch('market.ai_catalogue.urllib.request.OpenerDirector.open', side_effect=hallucinated_open):
+                unconfirmed = self.client.post(self.draft_url, {'image': dish_url}, format='json')
+            self.assertEqual(unconfirmed.status_code, 200, unconfirmed.data)
+            self.assertEqual(unconfirmed.data['description'], '汤色清亮飘着葱花紫菜。')
+            self.assertEqual(unconfirmed.data['highlight_tags'], ['汤鲜味美'])
+
+            with patch('market.ai_catalogue.urllib.request.OpenerDirector.open', side_effect=hallucinated_open):
+                confirmed = self.client.post(
+                    self.draft_url,
+                    {
+                        'image': dish_url,
+                        'merchant_note': '每份500克，纯手工现包',
+                    },
+                    format='json',
+                )
+            self.assertEqual(confirmed.status_code, 200, confirmed.data)
+            self.assertEqual(
+                confirmed.data['description'],
+                '汤色清亮飘着葱花紫菜，每份500克，纯手工现包。',
+            )
+            self.assertNotIn('花生油', confirmed.data['description'])
+            self.assertNotIn('过敏原', confirmed.data['description'])
+            self.assertNotIn('10分钟出餐', confirmed.data['description'])
+
+    @override_settings(DEEPSEEK_API_KEY='sk-test-schema-guard', AI_PRODUCT_DRAFT_DAILY_LIMIT=50)
+    def test_malformed_json_schema_types_degrade_gracefully_without_500(self):
+        with tempfile.TemporaryDirectory(prefix='yanhuo-ai-schema-') as media_dir, override_settings(MEDIA_ROOT=media_dir):
+            dish_url = self._upload_dish_photo()
+            bad_envelopes = [
+                [1, 2, 3],
+                {'choices': 'not-a-list'},
+                {'choices': [{'message': 'not-an-object'}]},
+                {'choices': [{'message': {'content': json.dumps({'is_food': True, 'name_candidates': 123})}}]},
+                {'choices': [{'message': {'content': json.dumps({'name': '缺失is_food字段'})}}]},
+                {'choices': [{'message': {'content': json.dumps({'is_food': 'false', 'name': '字符串布尔'})}}]},
+                {'choices': [{'message': {'content': json.dumps({'is_food': True, 'highlight_tags': {'bad': 1}})}}]},
+                {'choices': [{'message': {'content': json.dumps({'is_food': True, 'description': ['bad']})}}]},
+            ]
+            for idx, env in enumerate(bad_envelopes):
+                with self.subTest(case=idx):
+                    raw = json.dumps(env, ensure_ascii=False).encode('utf-8')
+                    with patch(
+                        'market.ai_catalogue.urllib.request.OpenerDirector.open',
+                        return_value=_FakeUpstreamResponse(raw),
+                    ):
+                        res = self.client.post(
+                            self.draft_url,
+                            {'image': dish_url, 'merchant_name': '摊主手填名'},
+                            format='json',
+                        )
+                    self.assertEqual(res.status_code, 200, res.data)
+                    self.assertFalse(res.data['ai_available'])
+                    self.assertEqual(res.data['fallback_reason'], 'upstream_error')
+                    self.assertEqual(res.data['name'], '摊主手填名')

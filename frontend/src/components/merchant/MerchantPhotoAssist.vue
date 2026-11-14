@@ -60,12 +60,17 @@ const uploading = ref(false);
 const initialAnalyzing = ref(false);
 const refining = ref(false);
 const discardOpen = ref(false);
+const nonFoodConfirmed = ref(false);
 const localError = ref("");
 const localPreviewUrl = ref("");
 const merchantNote = ref("");
 const selectedTags = ref<string[]>([]);
 
+const DEFAULT_TAGS = ["趁热享用", "色泽诱人", "香气扑鼻", "街头风味"];
+
 let aiAbort: AbortController | null = null;
+let uploadSeq = 0;
+let aiRequestSeq = 0;
 let closeFocusTarget: HTMLElement | null = null;
 
 const blankDraft = (): AssistDraft => ({
@@ -90,7 +95,7 @@ const aiState = reactive<AiDraftResponse>({
   name_candidates: [],
   category: "",
   description: "",
-  highlight_tags: ["现点现做", "趁热享用", "份量实在", "招牌推荐"],
+  highlight_tags: [...DEFAULT_TAGS],
   ask_hint: "可点选符合实物的特点，或补一句真实主料后润色文案",
   notice: "",
 });
@@ -117,13 +122,20 @@ function revokePreview() {
   }
 }
 
-function resetState() {
+function cancelInFlight() {
+  uploadSeq += 1;
+  aiRequestSeq += 1;
   aiAbort?.abort();
   aiAbort = null;
+}
+
+function resetState() {
+  cancelInFlight();
   revokePreview();
   Object.assign(draft, blankDraft());
   merchantNote.value = "";
   selectedTags.value = [];
+  nonFoodConfirmed.value = false;
   localError.value = "";
   uploading.value = false;
   initialAnalyzing.value = false;
@@ -137,7 +149,7 @@ function resetState() {
     name_candidates: [],
     category: "",
     description: "",
-    highlight_tags: ["现点现做", "趁热享用", "份量实在", "招牌推荐"],
+    highlight_tags: [...DEFAULT_TAGS],
     ask_hint: "可点选符合实物的特点，或补一句真实主料后润色文案",
     notice: "",
   });
@@ -155,7 +167,7 @@ watch(
         (cameraBtn.value || first)?.focus();
       });
     } else {
-      aiAbort?.abort();
+      cancelInFlight();
       revokePreview();
     }
   },
@@ -169,7 +181,7 @@ watch(
 );
 
 onBeforeUnmount(() => {
-  aiAbort?.abort();
+  cancelInFlight();
   revokePreview();
 });
 
@@ -185,7 +197,7 @@ function requestClose(force = false) {
     }
     return;
   }
-  aiAbort?.abort();
+  cancelInFlight();
   discardOpen.value = false;
   emit("close");
 }
@@ -226,10 +238,12 @@ function handleKeydown(event: KeyboardEvent) {
 }
 
 async function runAiDraft(isInitial: boolean) {
-  if (!draft.image) return;
+  const targetImage = draft.image;
+  if (!targetImage) return;
   aiAbort?.abort();
   const controller = new AbortController();
   aiAbort = controller;
+  const mySeq = ++aiRequestSeq;
   localError.value = "";
   if (isInitial) initialAnalyzing.value = true;
   else refining.value = true;
@@ -242,15 +256,24 @@ async function runAiDraft(isInitial: boolean) {
         method: "POST",
         signal: controller.signal,
         body: {
-          image: draft.image,
+          image: targetImage,
           merchant_name: isInitial ? "" : draft.name.trim(),
           merchant_note: merchantNote.value.trim(),
           selected_tags: selectedTags.value,
         },
       },
     );
-    if (!props.open || stallId !== props.stall.id) return;
+    if (
+      !props.open ||
+      stallId !== props.stall.id ||
+      controller.signal.aborted ||
+      mySeq !== aiRequestSeq ||
+      draft.image !== targetImage
+    ) {
+      return;
+    }
     Object.assign(aiState, res);
+    if (!res.is_food) nonFoodConfirmed.value = false;
     if (isInitial) {
       if (res.name) draft.name = res.name;
       if (res.category) draft.category = res.category;
@@ -266,7 +289,15 @@ async function runAiDraft(isInitial: boolean) {
       else nameInput.value?.focus();
     }
   } catch (err) {
-    if (controller.signal.aborted) return;
+    if (
+      controller.signal.aborted ||
+      mySeq !== aiRequestSeq ||
+      !props.open ||
+      stallId !== props.stall.id ||
+      draft.image !== targetImage
+    ) {
+      return;
+    }
     if (isInitial) {
       Object.assign(aiState, {
         ai_available: false,
@@ -281,16 +312,21 @@ async function runAiDraft(isInitial: boolean) {
     }
   } finally {
     if (aiAbort === controller) aiAbort = null;
-    if (isInitial) initialAnalyzing.value = false;
-    else refining.value = false;
+    if (mySeq === aiRequestSeq) {
+      if (isInitial) initialAnalyzing.value = false;
+      else refining.value = false;
+    }
   }
 }
 
 function skipAiWait() {
+  aiRequestSeq += 1;
   aiAbort?.abort();
   aiAbort = null;
   initialAnalyzing.value = false;
+  refining.value = false;
   aiState.ai_available = false;
+  aiState.is_food = true;
   aiState.notice = "已跳过智能识图等待，照片已保存；请填写菜名与售价后上架。";
   nextTick(() => nameInput.value?.focus());
 }
@@ -300,6 +336,14 @@ async function onPickFile(event: Event) {
   const rawFile = input.files?.[0];
   input.value = "";
   if (!rawFile || locked.value) return;
+
+  const myUploadSeq = ++uploadSeq;
+  aiRequestSeq += 1;
+  aiAbort?.abort();
+  aiAbort = null;
+  initialAnalyzing.value = false;
+  refining.value = false;
+  nonFoodConfirmed.value = false;
 
   localError.value = "";
   uploading.value = true;
@@ -317,16 +361,29 @@ async function onPickFile(event: Event) {
       `/merchant/stalls/${stallId}/image`,
       { method: "POST", body: formData },
     );
-    if (!props.open || stallId !== props.stall.id) return;
+    if (!props.open || stallId !== props.stall.id || myUploadSeq !== uploadSeq) return;
     draft.image = uploaded.url;
     selectedTags.value = [];
+    Object.assign(aiState, {
+      ai_available: false,
+      fallback_reason: "",
+      is_food: true,
+      name: "",
+      name_candidates: [],
+      category: "",
+      description: "",
+      highlight_tags: [...DEFAULT_TAGS],
+      ask_hint: "可点选符合实物的特点，或补一句真实主料后润色文案",
+      notice: "",
+    });
     uploading.value = false;
     await runAiDraft(true);
   } catch (err) {
+    if (myUploadSeq !== uploadSeq) return;
     revokePreview();
     localError.value = (err as Error).message || "照片上传失败，请重试。";
   } finally {
-    uploading.value = false;
+    if (myUploadSeq === uploadSeq) uploading.value = false;
   }
 }
 
@@ -339,6 +396,10 @@ function toggleTag(tag: string) {
 function submit() {
   if (locked.value || initialAnalyzing.value || refining.value) return;
   localError.value = "";
+  if (!aiState.is_food && !nonFoodConfirmed.value) {
+    localError.value = "系统提示该图可能不是菜品实拍；请重拍菜品照片，或勾选上方核实确认后再上架。";
+    return;
+  }
   if (!draft.name.trim()) {
     localError.value = "请先确认这道菜叫什么名字。";
     nameInput.value?.focus();
@@ -358,7 +419,12 @@ function submit() {
 
 function handoff() {
   if (locked.value) return;
-  aiAbort?.abort();
+  localError.value = "";
+  if (!aiState.is_food && !nonFoodConfirmed.value) {
+    localError.value = "系统提示该图可能不是菜品实拍；请重拍菜品照片，或勾选上方核实确认后再继续。";
+    return;
+  }
+  cancelInFlight();
   emit("handoffToEditor", JSON.parse(JSON.stringify(draft)));
 }
 </script>
@@ -519,6 +585,15 @@ function handoff() {
                   <p v-else class="assist-notice">
                     核对菜名、填好定价就能上架；需要补充特色可点下方标签润色。
                   </p>
+                  <label v-if="!aiState.is_food" class="assist-food-confirm">
+                    <input
+                      v-model="nonFoodConfirmed"
+                      type="checkbox"
+                      :disabled="saving"
+                      @change="localError = ''"
+                    />
+                    <span>我已核实这是本店真实菜品照片（非收款码或无关图片）</span>
+                  </label>
                   <label class="assist-retake" :class="{ disabled: locked || refining }">
                     <RefreshCw :size="13" />重拍 / 换图
                     <input
@@ -1031,6 +1106,28 @@ function handoff() {
   font-size: 13px;
   line-height: 1.55;
   color: #65523f;
+}
+.assist-food-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid #ebcdb0;
+  background: #fff3e6;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.45;
+  color: #7c3812;
+  cursor: pointer;
+}
+.assist-food-confirm input {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  accent-color: #d75e1c;
 }
 .assist-retake {
   position: relative;
