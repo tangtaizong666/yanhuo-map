@@ -1,0 +1,1922 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>烟火地图 · Kinetic Commercial Renderer (1080p60)</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 1920px;
+    height: 1080px;
+    overflow: hidden;
+    background: #0f0c0a;
+    font-family: "Microsoft YaHei UI", "Noto Sans SC", "PingFang SC", sans-serif;
+  }
+  #masterCanvas {
+    width: 1920px;
+    height: 1080px;
+    display: block;
+  }
+</style>
+</head>
+<body>
+<canvas id="masterCanvas" width="1920" height="1080"></canvas>
+
+<script type="module">
+import * as THREE from '/three/three.module.js';
+
+const W = 1920;
+const H = 1080;
+const FPS = 60;
+
+const masterCanvas = document.getElementById('masterCanvas');
+const ctx = masterCanvas.getContext('2d', { alpha: false });
+
+// Offscreen buffers for whip-pan transitions & receipt tear compositing
+const bufA = document.createElement('canvas');
+bufA.width = W; bufA.height = H;
+const ctxA = bufA.getContext('2d', { alpha: false });
+
+const bufB = document.createElement('canvas');
+bufB.width = W; bufB.height = H;
+const ctxB = bufB.getContext('2d', { alpha: false });
+
+// WebGL canvas rendered by Three.js
+const glCanvas = document.createElement('canvas');
+glCanvas.width = W;
+glCanvas.height = H;
+
+const CLIP_COUNTS = {
+  c01_wok_fire: 63,
+  c02_sauce_toss: 62,
+  c03_noodles_lift: 55,
+  c04_sprint_steps: 62,
+  c05_empty_gate: 130,
+  c06_phone_walk: 130,
+  c07_collage_noodles: 307,
+  c08_collage_lemon: 300,
+  c09_collage_bite: 300,
+  c10_wok_split: 269,
+  c11_payoff_sauce: 77,
+  c12_payoff_wok: 80,
+  c13_payoff_lemon: 77,
+  c14_payoff_noodles: 77,
+  c15_night_lamp: 320,
+};
+
+// LRU Bitmap Cache
+const bitmapCache = new Map();
+const MAX_CACHE = 42;
+
+function pad4(n) {
+  return String(n).padStart(4, '0');
+}
+
+async function getClipFrame(clipId, idx1Based) {
+  const maxF = CLIP_COUNTS[clipId] || 60;
+  const clamped = Math.max(1, Math.min(maxF, Math.round(idx1Based)));
+  const key = `${clipId}/${clamped}`;
+  if (bitmapCache.has(key)) {
+    const bmp = bitmapCache.get(key);
+    bitmapCache.delete(key);
+    bitmapCache.set(key, bmp);
+    return bmp;
+  }
+  const url = `/work/clips/${clipId}/f_${pad4(clamped)}.jpg`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to load ${url}: ${res.status}`);
+  const blob = await res.blob();
+  const bmp = await createImageBitmap(blob);
+  bitmapCache.set(key, bmp);
+  if (bitmapCache.size > MAX_CACHE) {
+    const oldestKey = bitmapCache.keys().next().value;
+    const oldBmp = bitmapCache.get(oldestKey);
+    bitmapCache.delete(oldestKey);
+    if (oldBmp && oldBmp.close) oldBmp.close();
+  }
+  return bmp;
+}
+
+// Math & Easing Helpers
+const clamp = (v, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const easeOutCubic = (t) => 1 - Math.pow(1 - clamp(t), 3);
+const easeInOutCubic = (t) => {
+  t = clamp(t);
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+};
+const easeOutBack = (t, s = 1.55) => {
+  t = clamp(t);
+  return 1 + (s + 1) * Math.pow(t - 1, 3) + s * Math.pow(t - 1, 2);
+};
+const springPop = (t) => {
+  t = clamp(t);
+  if (t <= 0) return 0;
+  return 1 - Math.exp(-7.5 * t) * Math.cos(13.0 * t);
+};
+
+function roundRectPath(c, x, y, w, h, r) {
+  const rr = Math.min(r, w / 2, h / 2);
+  c.beginPath();
+  c.moveTo(x + rr, y);
+  c.arcTo(x + w, y, x + w, y + h, rr);
+  c.arcTo(x + w, y + h, x, y + h, rr);
+  c.arcTo(x, y + h, x, y, rr);
+  c.arcTo(x, y, x + w, y, rr);
+  c.closePath();
+}
+
+function drawCover(c, img, scale = 1.0, panX = 0, panY = 0) {
+  const dw = W * scale;
+  const dh = H * scale;
+  const dx = (W - dw) * 0.5 + panX;
+  const dy = (H - dh) * 0.5 + panY;
+  c.drawImage(img, dx, dy, dw, dh);
+}
+
+function drawVignette(c, strength = 0.45) {
+  const g = c.createRadialGradient(W * 0.5, H * 0.5, H * 0.28, W * 0.5, H * 0.5, W * 0.68);
+  g.addColorStop(0, 'rgba(12,9,7,0)');
+  g.addColorStop(1, `rgba(10,7,5,${strength})`);
+  c.fillStyle = g;
+  c.fillRect(0, 0, W, H);
+}
+
+function drawPill(c, x, y, text, bg, fg, fontSize = 26, padX = 26, padY = 13, borderColor = null) {
+  c.save();
+  c.font = `700 ${fontSize}px "Microsoft YaHei UI", "Noto Sans SC", sans-serif`;
+  const tw = c.measureText(text).width;
+  const bw = tw + padX * 2;
+  const bh = fontSize + padY * 2;
+  roundRectPath(c, x - bw * 0.5, y - bh * 0.5, bw, bh, bh * 0.5);
+  c.fillStyle = bg;
+  c.fill();
+  if (borderColor) {
+    c.lineWidth = 2.5;
+    c.strokeStyle = borderColor;
+    c.stroke();
+  }
+  c.fillStyle = fg;
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.fillText(text, x, y + 1);
+  c.restore();
+  return { bw, bh };
+}
+
+// ============================================================================
+// THREE.JS WEBGL 3D ENGINE SETUP
+// ============================================================================
+const renderer = new THREE.WebGLRenderer({
+  canvas: glCanvas,
+  alpha: true,
+  antialias: true,
+  powerPreference: 'high-performance',
+});
+renderer.setSize(W, H, false);
+renderer.setPixelRatio(1);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.16;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(38, W / H, 0.1, 200);
+
+// Procedural Studio Reflection Environment Map (for realistic metallic titanium & glass!)
+function createStudioEnvMap() {
+  const envC = document.createElement('canvas');
+  envC.width = 512; envC.height = 256;
+  const ec = envC.getContext('2d');
+  const grad = ec.createLinearGradient(0, 0, 0, 256);
+  grad.addColorStop(0, '#2a211b');
+  grad.addColorStop(0.48, '#17120e');
+  grad.addColorStop(1, '#0b0908');
+  ec.fillStyle = grad;
+  ec.fillRect(0, 0, 512, 256);
+  // Warm key softbox strip + cool rim strip + top ceiling light
+  ec.fillStyle = '#ffcfb3';
+  ec.fillRect(55, 28, 120, 42);
+  ec.fillStyle = '#ffe9d6';
+  ec.fillRect(210, 14, 150, 26);
+  ec.fillStyle = '#ffd1a8';
+  ec.fillRect(380, 48, 95, 55);
+  const tex = new THREE.CanvasTexture(envC);
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const envRT = pmrem.fromEquirectangular(tex);
+  pmrem.dispose();
+  tex.dispose();
+  return envRT.texture;
+}
+scene.environment = createStudioEnvMap();
+
+const ambLight = new THREE.AmbientLight(0xfff5eb, 0.72);
+scene.add(ambLight);
+
+const keyLight = new THREE.DirectionalLight(0xfff1e0, 2.35);
+keyLight.position.set(8, 14, 11);
+keyLight.castShadow = true;
+keyLight.shadow.mapSize.set(2048, 2048);
+keyLight.shadow.camera.near = 1;
+keyLight.shadow.camera.far = 50;
+keyLight.shadow.camera.left = -14;
+keyLight.shadow.camera.right = 14;
+keyLight.shadow.camera.top = 14;
+keyLight.shadow.camera.bottom = -14;
+scene.add(keyLight);
+
+const rimLight = new THREE.PointLight(0xff7a2f, 18, 35, 1.6);
+rimLight.position.set(-8, 5, -4);
+scene.add(rimLight);
+
+const fillLight = new THREE.DirectionalLight(0xdbeafe, 0.85);
+fillLight.position.set(-10, 6, 8);
+scene.add(fillLight);
+
+// Helper: Extruded Chamfered 3D Titanium Smartphone Builder
+function create3DPhoneRig() {
+  const group = new THREE.Group();
+  const pw = 4.3, ph = 8.75, radius = 0.68, depth = 0.34;
+  const shape = new THREE.Shape();
+  const x = -pw / 2, y = -ph / 2;
+  shape.moveTo(x + radius, y);
+  shape.lineTo(x + pw - radius, y);
+  shape.quadraticCurveTo(x + pw, y, x + pw, y + radius);
+  shape.lineTo(x + pw, y + ph - radius);
+  shape.quadraticCurveTo(x + pw, y + ph, x + pw - radius, y + ph);
+  shape.lineTo(x + radius, y + ph);
+  shape.quadraticCurveTo(x, y + ph, x, y + ph - radius);
+  shape.lineTo(x, y + radius);
+  shape.quadraticCurveTo(x, y, x + radius, y);
+
+  const chassisGeo = new THREE.ExtrudeGeometry(shape, {
+    depth,
+    bevelEnabled: true,
+    bevelSegments: 5,
+    steps: 1,
+    bevelSize: 0.065,
+    bevelThickness: 0.065,
+  });
+  chassisGeo.center();
+  const chassisMat = new THREE.MeshStandardMaterial({
+    color: 0x3b3530,
+    metalness: 0.88,
+    roughness: 0.22,
+  });
+  const chassis = new THREE.Mesh(chassisGeo, chassisMat);
+  chassis.castShadow = true;
+  chassis.receiveShadow = true;
+  group.add(chassis);
+
+  // Side Metallic Buttons
+  const btnGeo = new THREE.BoxGeometry(0.06, 0.85, 0.14);
+  const btnMat = new THREE.MeshStandardMaterial({ color: 0xd6cbc2, metalness: 0.92, roughness: 0.18 });
+  const btnR = new THREE.Mesh(btnGeo, btnMat);
+  btnR.position.set(pw / 2 + 0.07, 1.1, 0);
+  group.add(btnR);
+
+  // OLED Screen Canvas & Texture
+  const screenCanvas = document.createElement('canvas');
+  screenCanvas.width = 860;
+  screenCanvas.height = 1750;
+  const screenCtx = screenCanvas.getContext('2d');
+  const screenTex = new THREE.CanvasTexture(screenCanvas);
+  screenTex.colorSpace = THREE.SRGBColorSpace;
+  screenTex.anisotropy = 8;
+
+  // Rounded front OLED plane slightly proud of front bevel
+  const scrW = pw - 0.24, scrH = ph - 0.24, scrR = radius - 0.10;
+  const scrShape = new THREE.Shape();
+  const sx = -scrW / 2, sy = -scrH / 2;
+  scrShape.moveTo(sx + scrR, sy);
+  scrShape.lineTo(sx + scrW - scrR, sy);
+  scrShape.quadraticCurveTo(sx + scrW, sy, sx + scrW, sy + scrR);
+  scrShape.lineTo(sx + scrW, sy + scrH - scrR);
+  scrShape.quadraticCurveTo(sx + scrW, sy + scrH, sx + scrW - scrR, sy + scrH);
+  scrShape.lineTo(sx + scrR, sy + scrH);
+  scrShape.quadraticCurveTo(sx, sy + scrH, sx, sy + scrH - scrR);
+  scrShape.lineTo(sx, sy + scrR);
+  scrShape.quadraticCurveTo(sx, sy, sx + scrR, sy);
+
+  const scrGeo = new THREE.ShapeGeometry(scrShape, 12);
+  // Normalize UVs 0..1 across scrW x scrH
+  const pos = scrGeo.attributes.position;
+  const uvs = new Float32Array(pos.count * 2);
+  for (let i = 0; i < pos.count; i++) {
+    uvs[i * 2] = (pos.getX(i) - sx) / scrW;
+    uvs[i * 2 + 1] = (pos.getY(i) - sy) / scrH;
+  }
+  scrGeo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+
+  const scrMat = new THREE.MeshBasicMaterial({ map: screenTex });
+  const screenMesh = new THREE.Mesh(scrGeo, scrMat);
+  screenMesh.position.z = depth / 2 + 0.068;
+  group.add(screenMesh);
+
+  // Subtle Glass Specular Overlay Plane
+  const glassMat = new THREE.MeshPhysicalMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.11,
+    roughness: 0.05,
+    metalness: 0.1,
+    clearcoat: 1.0,
+  });
+  const glassMesh = new THREE.Mesh(scrGeo, glassMat);
+  glassMesh.position.z = depth / 2 + 0.072;
+  group.add(glassMesh);
+
+  // Detached Z-Floating Popout Card (for Apple-style 3D UI detachment!)
+  const popCanvas = document.createElement('canvas');
+  popCanvas.width = 900;
+  popCanvas.height = 300;
+  const popCtx = popCanvas.getContext('2d');
+  const popTex = new THREE.CanvasTexture(popCanvas);
+  popTex.colorSpace = THREE.SRGBColorSpace;
+  const popGeo = new THREE.PlaneGeometry(4.35, 1.45);
+  const popMat = new THREE.MeshBasicMaterial({ map: popTex, transparent: true });
+  const popMesh = new THREE.Mesh(popGeo, popMat);
+  popMesh.position.set(0, 0.7, depth / 2 + 0.48);
+  group.add(popMesh);
+
+  return { group, screenCanvas, screenCtx, screenTex, popCanvas, popCtx, popTex, popMesh };
+}
+
+// ---- GROUP 1: Shot 06 Macro Phone ----
+const gShot06 = new THREE.Group();
+const macroPhone = create3DPhoneRig();
+gShot06.add(macroPhone.group);
+scene.add(gShot06);
+
+// ---- GROUP 2: Shot 07 & 08 3D Campus Street + 60m Brass/Glass Ring ----
+const gCampus = new THREE.Group();
+scene.add(gCampus);
+
+// Ground & Walkway
+const groundMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(60, 60),
+  new THREE.MeshStandardMaterial({ color: 0x181412, roughness: 0.88, metalness: 0.08 })
+);
+groundMesh.rotation.x = -Math.PI / 2;
+groundMesh.receiveShadow = true;
+gCampus.add(groundMesh);
+
+const sidewalkMesh = new THREE.Mesh(
+  new THREE.BoxGeometry(28, 0.16, 4.6),
+  new THREE.MeshStandardMaterial({ color: 0x2b231e, roughness: 0.78 })
+);
+sidewalkMesh.position.set(0, 0.08, -1.6);
+sidewalkMesh.receiveShadow = true;
+gCampus.add(sidewalkMesh);
+
+// Campus South Gate Archway & Stylized Buildings
+const gateMat = new THREE.MeshStandardMaterial({ color: 0x3b302a, roughness: 0.65 });
+const pillarL = new THREE.Mesh(new THREE.BoxGeometry(1.1, 5.2, 1.1), gateMat);
+pillarL.position.set(-5.8, 2.6, -4.2);
+pillarL.castShadow = true;
+const pillarR = pillarL.clone();
+pillarR.position.set(-1.2, 2.6, -4.2);
+const gateTop = new THREE.Mesh(new THREE.BoxGeometry(6.4, 0.95, 1.35), new THREE.MeshStandardMaterial({ color: 0xe86a27, roughness: 0.42 }));
+gateTop.position.set(-3.5, 5.35, -4.2);
+gCampus.add(pillarL, pillarR, gateTop);
+
+// Background Campus Buildings with Warm Lit Windows
+for (let bi = 0; bi < 4; bi++) {
+  const bh = 5.5 + (bi % 2) * 2.2;
+  const bldg = new THREE.Mesh(
+    new THREE.BoxGeometry(4.2, bh, 3.2),
+    new THREE.MeshStandardMaterial({ color: 0x221c19, roughness: 0.8 })
+  );
+  bldg.position.set(-10 + bi * 6.8, bh / 2, -8.5);
+  gCampus.add(bldg);
+  for (let wy = 0; wy < 3; wy++) {
+    for (let wx = 0; wx < 3; wx++) {
+      if ((bi + wx + wy) % 2 === 0) {
+        const win = new THREE.Mesh(
+          new THREE.PlaneGeometry(0.62, 0.75),
+          new THREE.MeshBasicMaterial({ color: (wx + wy) % 3 === 0 ? 0xffb86c : 0xffe4b5 })
+        );
+        win.position.set(-11.1 + bi * 6.8 + wx * 1.1, 1.6 + wy * 1.5, -6.88);
+        gCampus.add(win);
+      }
+    }
+  }
+}
+
+// Streetlamps & Stylized Trees
+for (let li = -2; li <= 2; li++) {
+  const lx = li * 4.8;
+  const pole = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.06, 0.08, 3.8, 12),
+    new THREE.MeshStandardMaterial({ color: 0x4a4039, metalness: 0.7, roughness: 0.3 })
+  );
+  pole.position.set(lx, 1.9, -3.4);
+  const bulb = new THREE.Mesh(
+    new THREE.SphereGeometry(0.24, 16, 16),
+    new THREE.MeshBasicMaterial({ color: 0xffdba8 })
+  );
+  bulb.position.set(lx, 3.9, -3.4);
+  gCampus.add(pole, bulb);
+
+  // Stylized warm tree crown
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 1.8, 10), gateMat);
+  trunk.position.set(lx + 2.1, 0.9, -3.6);
+  const crown = new THREE.Mesh(
+    new THREE.SphereGeometry(1.05, 18, 18),
+    new THREE.MeshStandardMaterial({ color: 0x2d4436, roughness: 0.85 })
+  );
+  crown.position.set(lx + 2.1, 2.35, -3.6);
+  gCampus.add(trunk, crown);
+}
+
+// 3D Noodle Stall Cart (Hero Target!)
+const cartGroup = new THREE.Group();
+cartGroup.position.set(3.2, 0, -1.35);
+const cartBody = new THREE.Mesh(
+  new THREE.BoxGeometry(2.3, 1.25, 1.25),
+  new THREE.MeshStandardMaterial({ color: 0x36536e, roughness: 0.45, metalness: 0.25 })
+);
+cartBody.position.y = 0.85;
+cartBody.castShadow = true;
+const cartCounter = new THREE.Mesh(
+  new THREE.BoxGeometry(2.45, 0.12, 1.38),
+  new THREE.MeshStandardMaterial({ color: 0xd6d3d1, metalness: 0.85, roughness: 0.2 })
+);
+cartCounter.position.y = 1.52;
+const cartCanopy = new THREE.Mesh(
+  new THREE.BoxGeometry(2.65, 0.32, 1.58),
+  new THREE.MeshStandardMaterial({ color: 0xe86a27, roughness: 0.38 })
+);
+cartCanopy.position.y = 2.55;
+cartCanopy.castShadow = true;
+for (const px of [-1.08, 1.08]) {
+  for (const pz of [-0.52, 0.52]) {
+    const post = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.035, 0.035, 1.05, 8),
+      new THREE.MeshStandardMaterial({ color: 0xe5e7eb, metalness: 0.8, roughness: 0.2 })
+    );
+    post.position.set(px, 2.02, pz);
+    cartGroup.add(post);
+  }
+}
+const stallLamp = new THREE.Mesh(
+  new THREE.SphereGeometry(0.18, 16, 16),
+  new THREE.MeshBasicMaterial({ color: 0xfff0b3 })
+);
+stallLamp.position.set(0, 2.28, 0.42);
+const stallPointLight = new THREE.PointLight(0xff9442, 14, 11, 1.5);
+stallPointLight.position.set(0, 2.2, 0.6);
+cartGroup.add(cartBody, cartCounter, cartCanopy, stallLamp, stallPointLight);
+
+// Pulsing Beacon Rings under Cart
+const beaconRings = [];
+for (let r = 0; r < 2; r++) {
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(1.35, 1.52, 48),
+    new THREE.MeshBasicMaterial({ color: 0xe86a27, side: THREE.DoubleSide, transparent: true, opacity: 0.7 })
+  );
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.18;
+  cartGroup.add(ring);
+  beaconRings.push(ring);
+}
+// Rising 3D Steam Puffs
+const steamPuffs = [];
+for (let si = 0; si < 7; si++) {
+  const puff = new THREE.Mesh(
+    new THREE.SphereGeometry(0.16 + (si % 3) * 0.05, 12, 12),
+    new THREE.MeshBasicMaterial({ color: 0xfff8f0, transparent: true, opacity: 0.35 })
+  );
+  cartGroup.add(puff);
+  steamPuffs.push(puff);
+}
+gCampus.add(cartGroup);
+
+// Glowing Animated Route Ribbon on Walkway
+const routeCurve = new THREE.CatmullRomCurve3([
+  new THREE.Vector3(-8.5, 0.22, 2.8),
+  new THREE.Vector3(-5.2, 0.22, 0.6),
+  new THREE.Vector3(-1.8, 0.22, -0.9),
+  new THREE.Vector3(1.8, 0.22, -1.2),
+]);
+const routeGeo = new THREE.TubeGeometry(routeCurve, 80, 0.11, 10, false);
+const routeMat = new THREE.MeshBasicMaterial({ color: 0xff7a2f });
+const routeMesh = new THREE.Mesh(routeGeo, routeMat);
+gCampus.add(routeMesh);
+
+// Shot 08: Tactile 3D 60:00 Brass & Glass Freshness Shutter Sculpture
+const shutterRig = new THREE.Group();
+shutterRig.position.set(6.8, 2.5, 1.8);
+const brassRing = new THREE.Mesh(
+  new THREE.TorusGeometry(1.55, 0.16, 24, 72),
+  new THREE.MeshStandardMaterial({ color: 0xeab308, metalness: 0.88, roughness: 0.22 })
+);
+shutterRig.add(brassRing);
+
+const tickMeshes = [];
+for (let ti = 0; ti < 24; ti++) {
+  const ang = (ti / 24) * Math.PI * 2;
+  const tick = new THREE.Mesh(
+    new THREE.BoxGeometry(0.07, 0.22, 0.12),
+    new THREE.MeshStandardMaterial({ color: 0x477457, emissive: 0x2d6a4f, emissiveIntensity: 0.6 })
+  );
+  tick.position.set(Math.sin(ang) * 1.24, Math.cos(ang) * 1.24, 0.04);
+  tick.rotation.z = -ang;
+  shutterRig.add(tick);
+  tickMeshes.push(tick);
+}
+// Frosted Glass Auto-Stop Gate inside the Brass Ring
+const shutterGate = new THREE.Mesh(
+  new THREE.CylinderGeometry(1.36, 1.36, 0.14, 48),
+  new THREE.MeshPhysicalMaterial({
+    color: 0xfef3c7,
+    transparent: true,
+    opacity: 0.82,
+    roughness: 0.18,
+    metalness: 0.1,
+    clearcoat: 1.0,
+  })
+);
+shutterGate.rotation.x = Math.PI / 2;
+shutterRig.add(shutterGate);
+gCampus.add(shutterRig);
+
+// ---- GROUP 3: Shot 09 3D Serrated Thermal Paper Receipt ----
+const gReceipt = new THREE.Group();
+scene.add(gReceipt);
+
+const printerSlot = new THREE.Mesh(
+  new THREE.BoxGeometry(5.6, 0.65, 1.2),
+  new THREE.MeshStandardMaterial({ color: 0x29221e, metalness: 0.65, roughness: 0.3 })
+);
+printerSlot.position.set(0, 4.35, 0);
+const printerLip = new THREE.Mesh(
+  new THREE.BoxGeometry(4.8, 0.12, 1.28),
+  new THREE.MeshStandardMaterial({ color: 0xe86a27, roughness: 0.32 })
+);
+printerLip.position.set(0, 4.02, 0.04);
+gReceipt.add(printerSlot, printerLip);
+
+const receiptCanvas = document.createElement('canvas');
+receiptCanvas.width = 1024;
+receiptCanvas.height = 1800;
+const rCtx = receiptCanvas.getContext('2d');
+const receiptTex = new THREE.CanvasTexture(receiptCanvas);
+receiptTex.colorSpace = THREE.SRGBColorSpace;
+receiptTex.anisotropy = 8;
+
+const recGeo = new THREE.PlaneGeometry(4.45, 7.8, 24, 56);
+const recBasePos = recGeo.attributes.position.array.slice();
+const recMat = new THREE.MeshStandardMaterial({
+  map: receiptTex,
+  emissive: 0xffffff,
+  emissiveMap: receiptTex,
+  emissiveIntensity: 0.48,
+  transparent: true,
+  roughness: 0.68,
+  metalness: 0.02,
+  side: THREE.DoubleSide,
+});
+const receiptMesh = new THREE.Mesh(recGeo, recMat);
+receiptMesh.castShadow = true;
+gReceipt.add(receiptMesh);
+
+// ---- GROUP 4: Shot 10 Merchant Console + Shot 11 Dual 3D Phones ----
+const gDual = new THREE.Group();
+const phoneLeft = create3DPhoneRig();
+const phoneRight = create3DPhoneRig();
+gDual.add(phoneLeft.group, phoneRight.group);
+scene.add(gDual);
+
+// ---- GROUP 5: Shot 12 Ordinary Folk 3D Tactile Compliance Sculpture ----
+const gCompliance = new THREE.Group();
+scene.add(gCompliance);
+
+const plinth = new THREE.Mesh(
+  new THREE.BoxGeometry(16.5, 0.7, 8.2),
+  new THREE.MeshStandardMaterial({ color: 0xf3ece1, roughness: 0.75, metalness: 0.04 })
+);
+plinth.position.set(0, -1.25, 0);
+plinth.receiveShadow = true;
+gCompliance.add(plinth);
+
+// Back Open-Access Finder Track (Amber, elevated behind so zero visual overlap)
+const finderTrack = new THREE.Mesh(
+  new THREE.BoxGeometry(12.8, 0.24, 0.95),
+  new THREE.MeshStandardMaterial({ color: 0xfcd34d, roughness: 0.42 })
+);
+finderTrack.position.set(0, -0.35, -3.15);
+finderTrack.receiveShadow = true;
+const finderLantern = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.30, 0.26, 0.56, 20),
+  new THREE.MeshStandardMaterial({ color: 0xf59e0b, emissive: 0xd97706, emissiveIntensity: 0.5, roughness: 0.28 })
+);
+finderLantern.castShadow = true;
+gCompliance.add(finderTrack, finderLantern);
+
+// Front Direct-Pay Bridge & Recessed Zero-Pool Tray with 3D Red Crossbar
+const pitWall = new THREE.Mesh(
+  new THREE.BoxGeometry(4.4, 0.22, 1.85),
+  new THREE.MeshStandardMaterial({ color: 0xe7ddd0, roughness: 0.75 })
+);
+pitWall.position.set(0.2, -0.82, 1.15);
+const crossMat = new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.35 });
+const crossBar1 = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.14, 0.22), crossMat);
+crossBar1.position.set(0.2, -0.66, 1.15);
+crossBar1.rotation.y = 0.48;
+const crossBar2 = crossBar1.clone();
+crossBar2.rotation.y = -0.48;
+gCompliance.add(pitWall, crossBar1, crossBar2);
+
+// Student Left Pedestal & Merchant Right Pocket Pedestal
+const pedStudent = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.95, 1.05, 1.25, 32),
+  new THREE.MeshStandardMaterial({ color: 0xd97706, metalness: 0.22, roughness: 0.36 })
+);
+pedStudent.position.set(-5.2, -0.25, 1.05);
+pedStudent.castShadow = true;
+
+const pedMerchant = new THREE.Mesh(
+  new THREE.CylinderGeometry(1.08, 1.18, 1.25, 32),
+  new THREE.MeshStandardMaterial({ color: 0x2f855a, metalness: 0.22, roughness: 0.34 })
+);
+pedMerchant.position.set(5.4, -0.25, 1.05);
+pedMerchant.castShadow = true;
+gCompliance.add(pedStudent, pedMerchant);
+
+// Frosted Emerald License Verification Arch Gate
+const gateArch = new THREE.Mesh(
+  new THREE.TorusGeometry(0.95, 0.12, 20, 48, Math.PI),
+  new THREE.MeshStandardMaterial({ color: 0x10b981, emissive: 0x059669, emissiveIntensity: 0.45, metalness: 0.5, roughness: 0.2 })
+);
+gateArch.position.set(-2.9, 0.45, 1.05);
+gCompliance.add(gateArch);
+
+// Elevated Crystal-Clear Direct Bridge (Student -> Merchant directly over Pit!)
+const bridgeCurve = new THREE.CatmullRomCurve3([
+  new THREE.Vector3(-5.0, 0.52, 1.05),
+  new THREE.Vector3(-2.9, 0.72, 1.05),
+  new THREE.Vector3(0.2, 1.22, 1.05),
+  new THREE.Vector3(3.2, 0.85, 1.05),
+  new THREE.Vector3(5.3, 0.48, 1.05),
+]);
+const railGeoL = new THREE.TubeGeometry(bridgeCurve, 72, 0.065, 12, false);
+const railMat = new THREE.MeshPhysicalMaterial({
+  color: 0xffffff,
+  metalness: 0.25,
+  roughness: 0.08,
+  transparent: true,
+  opacity: 0.82,
+  clearcoat: 1.0,
+});
+const bridgeRail1 = new THREE.Mesh(railGeoL, railMat);
+bridgeRail1.position.z = -0.22;
+const bridgeRail2 = new THREE.Mesh(railGeoL, railMat);
+bridgeRail2.position.z = 0.22;
+gCompliance.add(bridgeRail1, bridgeRail2);
+
+// Glowing Warm-Orange Payment Marble
+const payMarble = new THREE.Mesh(
+  new THREE.SphereGeometry(0.42, 36, 36),
+  new THREE.MeshPhysicalMaterial({
+    color: 0xff6b1a,
+    emissive: 0xe85d04,
+    emissiveIntensity: 0.55,
+    roughness: 0.08,
+    metalness: 0.15,
+    clearcoat: 1.0,
+  })
+);
+payMarble.castShadow = true;
+gCompliance.add(payMarble);
+
+// ---- GROUP 6: Shot 14 Glowing 3D Brand Lantern Emblem ----
+const gFinale = new THREE.Group();
+scene.add(gFinale);
+const lanternCore = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.95, 0.78, 1.75, 32),
+  new THREE.MeshPhysicalMaterial({
+    color: 0xff7a2f,
+    emissive: 0xe85d04,
+    emissiveIntensity: 0.65,
+    roughness: 0.18,
+    clearcoat: 1.0,
+  })
+);
+const lanternCapTop = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.62, 1.04, 0.26, 32),
+  new THREE.MeshStandardMaterial({ color: 0x3b302a, metalness: 0.85, roughness: 0.22 })
+);
+lanternCapTop.position.y = 0.98;
+const lanternCapBot = new THREE.Mesh(
+  new THREE.ConeGeometry(0.72, 0.78, 32),
+  new THREE.MeshStandardMaterial({ color: 0xeab308, metalness: 0.85, roughness: 0.22 })
+);
+lanternCapBot.rotation.x = Math.PI;
+lanternCapBot.position.y = -1.22;
+const lanternOrbit = new THREE.Mesh(
+  new THREE.TorusGeometry(1.58, 0.045, 16, 64),
+  new THREE.MeshStandardMaterial({ color: 0xfde68a, metalness: 0.9, roughness: 0.15 })
+);
+lanternOrbit.rotation.x = 1.15;
+gFinale.add(lanternCore, lanternCapTop, lanternCapBot, lanternOrbit);
+
+function setOnlyGroup(target) {
+  for (const g of [gShot06, gCampus, gReceipt, gDual, gCompliance, gFinale]) {
+    g.visible = (g === target);
+  }
+}
+
+// ============================================================================
+// DYNAMIC UI TEXTURE PAINTERS (CLEAN MACRO UI — ZERO PARAGRAPHS!)
+// ============================================================================
+function paintMacroMerchantScreen(c, localT) {
+  const sw = 860, sh = 1750;
+  c.fillStyle = '#fcf9f4';
+  c.fillRect(0, 0, sw, sh);
+
+  // Warm header band
+  c.fillStyle = '#fff3e2';
+  c.fillRect(0, 0, sw, 290);
+  c.fillStyle = '#e86a27';
+  roundRectPath(c, 56, 78, 168, 52, 26);
+  c.fill();
+  c.fillStyle = '#ffffff';
+  c.font = '700 26px "Microsoft YaHei UI", sans-serif';
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.fillText('商家工作台', 140, 105);
+
+  c.fillStyle = '#302b26';
+  c.font = '800 58px "Microsoft YaHei UI", sans-serif';
+  c.textAlign = 'left';
+  c.fillText('老周铁板炒面', 56, 205);
+
+  // Giant Switch Card ("今天出摊")
+  const swProgress = springPop((localT - 0.55) / 0.42);
+  roundRectPath(c, 48, 330, sw - 96, 310, 42);
+  c.fillStyle = '#ffffff';
+  c.fill();
+  c.lineWidth = 4;
+  c.strokeStyle = swProgress > 0.4 ? '#477457' : '#e6ddd0';
+  c.stroke();
+
+  c.fillStyle = '#302b26';
+  c.font = '800 54px "Microsoft YaHei UI", sans-serif';
+  c.fillText('今天出摊', 96, 445);
+  c.fillStyle = swProgress > 0.4 ? '#3d7a57' : '#7a7066';
+  c.font = '700 34px "Microsoft YaHei UI", sans-serif';
+  c.fillText(swProgress > 0.4 ? '● 营业中 · 南门步道旁' : '点击确认今晚实际位置', 96, 535);
+
+  // Tactile Pill Toggle
+  const tx = 610, ty = 435, tw = 156, th = 88;
+  roundRectPath(c, tx, ty, tw, th, 44);
+  c.fillStyle = swProgress > 0.35 ? '#477457' : '#d6cfc5';
+  c.fill();
+  const knobX = lerp(tx + 44, tx + tw - 44, clamp(swProgress, 0, 1.08));
+  c.beginPath();
+  c.arc(knobX, ty + 44, 34, 0, Math.PI * 2);
+  c.fillStyle = '#ffffff';
+  c.fill();
+
+  // Mini Map Preview Card (which camera dives into at 5.80s!)
+  roundRectPath(c, 48, 690, sw - 96, 940, 44);
+  c.fillStyle = '#1e1916';
+  c.fill();
+  // Stylized night streets inside phone screen
+  c.strokeStyle = '#382f29';
+  c.lineWidth = 28;
+  c.beginPath();
+  c.moveTo(90, 1420); c.lineTo(760, 880);
+  c.moveTo(220, 740); c.lineTo(680, 1540);
+  c.stroke();
+
+  if (swProgress > 0.3) {
+    c.strokeStyle = '#ff7a2f';
+    c.lineWidth = 14;
+    c.beginPath();
+    c.moveTo(150, 1370);
+    c.quadraticCurveTo(420, 1180, 520, 1020);
+    c.stroke();
+
+    c.beginPath();
+    c.arc(520, 1020, 34 + Math.sin(localT * 10) * 6, 0, Math.PI * 2);
+    c.fillStyle = 'rgba(232,106,39,0.32)';
+    c.fill();
+    c.beginPath();
+    c.arc(520, 1020, 18, 0, Math.PI * 2);
+    c.fillStyle = '#ff7a2f';
+    c.fill();
+  }
+}
+
+function paintDetachedBadge(c, title, sub, accent = '#477457', bg = '#fffdf8') {
+  c.clearRect(0, 0, 900, 300);
+  c.save();
+  c.shadowColor = 'rgba(15,10,6,0.34)';
+  c.shadowBlur = 28;
+  c.shadowOffsetY = 14;
+  roundRectPath(c, 28, 28, 844, 232, 46);
+  c.fillStyle = bg;
+  c.fill();
+  c.restore();
+
+  roundRectPath(c, 28, 28, 844, 232, 46);
+  c.lineWidth = 5;
+  c.strokeStyle = accent;
+  c.stroke();
+
+  c.fillStyle = accent;
+  c.beginPath();
+  c.arc(108, 144, 34, 0, Math.PI * 2);
+  c.fill();
+  c.fillStyle = '#ffffff';
+  c.font = '800 38px "Microsoft YaHei UI", sans-serif';
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.fillText('✓', 108, 146);
+
+  c.textAlign = 'left';
+  c.fillStyle = '#26201b';
+  c.font = '800 46px "Microsoft YaHei UI", sans-serif';
+  c.fillText(title, 168, 118);
+  c.fillStyle = accent;
+  c.font = '700 32px "Microsoft YaHei UI", sans-serif';
+  c.fillText(sub, 168, 186);
+}
+
+function paintReceiptTexture(c, t) {
+  const rw = 1024, rh = 1800;
+  c.clearRect(0, 0, rw, rh);
+
+  // Serrated Thermal Paper Path
+  c.save();
+  c.beginPath();
+  const teeth = 26;
+  const step = rw / teeth;
+  c.moveTo(0, 34);
+  for (let i = 0; i < teeth; i++) {
+    c.lineTo(i * step + step * 0.5, 4);
+    c.lineTo((i + 1) * step, 34);
+  }
+  c.lineTo(rw, rh - 34);
+  for (let i = teeth; i > 0; i--) {
+    c.lineTo(i * step - step * 0.5, rh - 4);
+    c.lineTo((i - 1) * step, rh - 34);
+  }
+  c.closePath();
+  c.fillStyle = '#fffdf7';
+  c.fill();
+
+  // Subtle thermal paper grain lines
+  c.strokeStyle = 'rgba(120,100,80,0.12)';
+  c.lineWidth = 3;
+  c.setLineDash([14, 10]);
+  c.beginPath();
+  c.moveTo(64, 250); c.lineTo(rw - 64, 250);
+  c.moveTo(64, 1520); c.lineTo(rw - 64, 1520);
+  c.stroke();
+  c.setLineDash([]);
+
+  // Receipt Header
+  c.fillStyle = '#302b26';
+  c.font = '900 62px "Microsoft YaHei UI", sans-serif';
+  c.textAlign = 'center';
+  c.fillText('烟火地图 · 预订小票', rw / 2, 138);
+  c.fillStyle = '#e86a27';
+  c.font = '700 34px "Microsoft YaHei UI", sans-serif';
+  c.fillText('老周铁板炒面 · 线上余 18 份', rw / 2, 204);
+
+  const items = [
+    { trig: 12.25, num: '#01', dish: '招牌铁板炒面', tag: '不要香菜', color: '#e86a27', y: 410 },
+    { trig: 13.50, num: '#02', dish: '招牌铁板炒面', tag: '加酸笋 · 微辣', color: '#d9480f', y: 780 },
+    { trig: 14.75, num: '#03', dish: '手打暴打柠檬茶', tag: '少冰 · 免费逐份备注', color: '#3d7a57', y: 1150 },
+  ];
+
+  for (const it of items) {
+    if (t >= it.trig - 0.05) {
+      const p = springPop((t - it.trig) / 0.34);
+      c.save();
+      c.translate(rw / 2, it.y);
+      const sc = lerp(1.65, 1.0, clamp(p, 0, 1.12));
+      c.scale(sc, sc);
+
+      roundRectPath(c, -410, -115, 820, 235, 32);
+      c.fillStyle = '#fff6eb';
+      c.fill();
+      c.lineWidth = 4;
+      c.strokeStyle = it.color;
+      c.stroke();
+
+      c.textAlign = 'left';
+      c.fillStyle = it.color;
+      c.font = '900 42px "Microsoft YaHei UI", sans-serif';
+      c.fillText(it.num, -365, -35);
+
+      c.fillStyle = '#26201b';
+      c.font = '800 50px "Microsoft YaHei UI", sans-serif';
+      c.fillText(it.dish, -245, -33);
+
+      // Stamp Tag
+      roundRectPath(c, -365, 20, 730, 74, 20);
+      c.fillStyle = it.color;
+      c.fill();
+      c.fillStyle = '#ffffff';
+      c.font = '800 38px "Microsoft YaHei UI", sans-serif';
+      c.textAlign = 'center';
+      c.fillText(it.tag, 0, 68);
+      c.restore();
+    }
+  }
+
+  c.fillStyle = '#6f675d';
+  c.font = '700 34px "Microsoft YaHei UI", sans-serif';
+  c.textAlign = 'center';
+  c.fillText('多份同点 · 每份口味独立编号', rw / 2, 1625);
+  c.restore();
+}
+
+function paintMerchantOrderConsole(c, t) {
+  const sw = 860, sh = 1750;
+  c.fillStyle = '#fcf9f4';
+  c.fillRect(0, 0, sw, sh);
+
+  c.fillStyle = '#302b26';
+  c.fillRect(0, 0, sw, 230);
+  c.fillStyle = '#ffb86c';
+  c.font = '700 32px "Microsoft YaHei UI", sans-serif';
+  c.textAlign = 'left';
+  c.fillText('商家接单台 · 待处理 1', 58, 95);
+  c.fillStyle = '#ffffff';
+  c.font = '800 54px "Microsoft YaHei UI", sans-serif';
+  c.fillText('新预订 · 取餐码 #4829', 58, 175);
+
+  // Order items summary card
+  roundRectPath(c, 48, 285, sw - 96, 620, 38);
+  c.fillStyle = '#ffffff';
+  c.fill();
+  c.lineWidth = 3;
+  c.strokeStyle = '#e7dfd3';
+  c.stroke();
+
+  const rows = [
+    ['第1份 铁板炒面', '不要香菜'],
+    ['第2份 铁板炒面', '加酸笋 · 微辣'],
+    ['手打柠檬茶 ×1', '少冰'],
+  ];
+  rows.forEach((r, idx) => {
+    const ry = 385 + idx * 175;
+    c.fillStyle = '#26201b';
+    c.font = '800 44px "Microsoft YaHei UI", sans-serif';
+    c.fillText(r[0], 92, ry);
+    c.fillStyle = '#e86a27';
+    c.font = '700 36px "Microsoft YaHei UI", sans-serif';
+    c.fillText(r[1], 92, ry + 58);
+  });
+
+  // Action Button ("接单开始做" at 17.50s -> "做好了 · 待取餐" at 18.75s)
+  const pressed = t >= 17.50;
+  const ready = t >= 18.75;
+  const btnScale = ready
+    ? lerp(0.9, 1.0, springPop((t - 18.75) / 0.35))
+    : pressed
+      ? lerp(0.92, 1.0, springPop((t - 17.50) / 0.3))
+      : 1.0;
+
+  c.save();
+  c.translate(sw / 2, 1180);
+  c.scale(btnScale, btnScale);
+  roundRectPath(c, -365, -110, 730, 220, 48);
+  c.fillStyle = ready ? '#3d7a57' : (pressed ? '#c2410c' : '#e86a27');
+  c.fill();
+  c.fillStyle = '#ffffff';
+  c.font = '900 58px "Microsoft YaHei UI", sans-serif';
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.fillText(ready ? '✓ 做好了 · 待取餐' : (pressed ? '🔥 猛火制作中...' : '接单开始做'), 0, 4);
+  c.restore();
+
+  c.fillStyle = '#6f675d';
+  c.font = '700 34px "Microsoft YaHei UI", sans-serif';
+  c.textAlign = 'center';
+  c.fillText('预计 6 分钟出餐 · 库存实时扣减', sw / 2, 1460);
+}
+
+function paintPickupScreen(c) {
+  const sw = 860, sh = 1750;
+  const g = c.createLinearGradient(0, 0, 0, sh);
+  g.addColorStop(0, '#fffef9');
+  g.addColorStop(1, '#fff2df');
+  c.fillStyle = g;
+  c.fillRect(0, 0, sw, sh);
+
+  c.fillStyle = '#3d7a57';
+  roundRectPath(c, 58, 86, 260, 68, 34);
+  c.fill();
+  c.fillStyle = '#ffffff';
+  c.font = '800 32px "Microsoft YaHei UI", sans-serif';
+  c.textAlign = 'center';
+  c.fillText('✓ 餐点已做好', 188, 130);
+
+  c.textAlign = 'left';
+  c.fillStyle = '#26201b';
+  c.font = '900 58px "Microsoft YaHei UI", sans-serif';
+  c.fillText('到摊自取凭证', 58, 265);
+
+  roundRectPath(c, 52, 340, sw - 104, 520, 44);
+  c.fillStyle = '#26201b';
+  c.fill();
+  c.fillStyle = '#fbbf24';
+  c.font = '700 36px "Microsoft YaHei UI", sans-serif';
+  c.textAlign = 'center';
+  c.fillText('向摊主出示 4 位取餐码', sw / 2, 445);
+  c.fillStyle = '#ffffff';
+  c.font = '900 180px "Microsoft YaHei UI", sans-serif';
+  c.fillText('4829', sw / 2, 665);
+
+  roundRectPath(c, 52, 920, sw - 104, 340, 36);
+  c.fillStyle = '#ffffff';
+  c.fill();
+  c.lineWidth = 4;
+  c.strokeStyle = '#e8d0ae';
+  c.stroke();
+  c.fillStyle = '#e86a27';
+  c.font = '800 42px "Microsoft YaHei UI", sans-serif';
+  c.fillText('应付 ¥14.00 · 出餐后付', sw / 2, 1045);
+  c.fillStyle = '#57534e';
+  c.font = '700 34px "Microsoft YaHei UI", sans-serif';
+  c.fillText('支持到摊扫码 / 微信直付摊主', sw / 2, 1155);
+}
+
+function paintHandoffScreen(c) {
+  const sw = 860, sh = 1750;
+  c.fillStyle = '#fcf9f4';
+  c.fillRect(0, 0, sw, sh);
+
+  c.fillStyle = '#e86a27';
+  roundRectPath(c, 58, 86, 310, 68, 34);
+  c.fill();
+  c.fillStyle = '#ffffff';
+  c.font = '800 32px "Microsoft YaHei UI", sans-serif';
+  c.textAlign = 'center';
+  c.fillText('校内交接点配送', 213, 130);
+
+  c.textAlign = 'left';
+  c.fillStyle = '#26201b';
+  c.font = '900 58px "Microsoft YaHei UI", sans-serif';
+  c.fillText('东区北门交接点', 58, 265);
+
+  roundRectPath(c, 52, 340, sw - 104, 520, 44);
+  c.fillStyle = '#1e293b';
+  c.fill();
+  // Stylized fixed campus gate handoff diagram (no fake rider!)
+  c.strokeStyle = '#38bdf8';
+  c.lineWidth = 6;
+  c.setLineDash([16, 12]);
+  c.beginPath();
+  c.moveTo(160, 700); c.lineTo(700, 490);
+  c.stroke();
+  c.setLineDash([]);
+  c.fillStyle = '#ff7a2f';
+  c.beginPath(); c.arc(700, 490, 32, 0, Math.PI * 2); c.fill();
+  c.fillStyle = '#ffffff';
+  c.font = '800 44px "Microsoft YaHei UI", sans-serif';
+  c.textAlign = 'center';
+  c.fillText('● 已送达固定交接点', sw / 2, 780);
+
+  roundRectPath(c, 52, 920, sw - 104, 380, 36);
+  c.fillStyle = '#ffffff';
+  c.fill();
+  c.lineWidth = 4;
+  c.strokeStyle = '#cbd5e1';
+  c.stroke();
+  c.fillStyle = '#3d7a57';
+  c.font = '800 42px "Microsoft YaHei UI", sans-serif';
+  c.fillText('✓ 微信预付已核实', sw / 2, 1040);
+  c.fillStyle = '#334155';
+  c.font = '700 34px "Microsoft YaHei UI", sans-serif';
+  c.fillText('不收集宿舍门牌与学号', sw / 2, 1135);
+  c.fillText('零虚构骑手轨迹 · 凭码收餐', sw / 2, 1215);
+}
+
+// ============================================================================
+// INDIVIDUAL SCENE RENDERERS ONTO TARGET 2D CONTEXT `out`
+// ============================================================================
+
+// Giant RSVP Center Knockout Title Helper
+function drawCenterPunchText(out, mainText, subTag, localProgress, accent = '#ff7a2f') {
+  const sc = lerp(1.28, 1.0, easeOutBack(localProgress / 0.28, 1.35));
+  out.save();
+  out.translate(W / 2, H / 2);
+  out.scale(sc, sc);
+
+  if (subTag) {
+    drawPill(out, 0, -135, subTag, 'rgba(18,13,10,0.78)', '#ffd8b5', 24, 24, 10, accent);
+  }
+
+  out.font = '900 168px "Microsoft YaHei UI", "Noto Sans SC", sans-serif';
+  out.textAlign = 'center';
+  out.textBaseline = 'middle';
+  out.shadowColor = 'rgba(0,0,0,0.72)';
+  out.shadowBlur = 36;
+  out.shadowOffsetY = 12;
+  out.lineWidth = 14;
+  out.strokeStyle = 'rgba(18,12,8,0.85)';
+  out.strokeText(mainText, 0, 12);
+  out.fillStyle = '#fffdf9';
+  out.fillText(mainText, 0, 12);
+  out.restore();
+}
+
+async function renderShot01_04(out, t) {
+  if (t < 0.75) {
+    const u = t / 0.75;
+    const bmp = await getClipFrame('c01_wok_fire', 1 + Math.floor(t * 60));
+    drawCover(out, bmp, lerp(1.02, 1.12, u), 0, 0);
+    drawVignette(out, 0.42);
+    drawCenterPunchText(out, '十点下课', '22:10 · 校门口夜宵时刻', u, '#ff7a2f');
+  } else if (t < 1.50) {
+    const u = (t - 0.75) / 0.75;
+    const bmp = await getClipFrame('c02_sauce_toss', 1 + Math.floor((t - 0.75) * 60));
+    drawCover(out, bmp, lerp(1.03, 1.13, u), 0, 0);
+    drawVignette(out, 0.42);
+    drawCenterPunchText(out, '就馋这一口', '铁板猛火 · 热油兹拉', u, '#f59e0b');
+  } else if (t < 2.00) {
+    const u = (t - 1.50) / 0.50;
+    const bmp = await getClipFrame('c03_noodles_lift', 1 + Math.floor((t - 1.50) * 60));
+    drawCover(out, bmp, lerp(1.02, 1.11, u), 0, 0);
+    drawVignette(out, 0.38);
+    drawCenterPunchText(out, '下楼去追！', null, u, '#e86a27');
+  } else {
+    const u = (t - 2.00) / 0.50;
+    const bmp = await getClipFrame('c04_sprint_steps', 1 + Math.floor((t - 2.00) * 60));
+    drawCover(out, bmp, lerp(1.04, 1.18, u), lerp(0, -45, u), 0);
+    drawVignette(out, 0.35);
+    drawCenterPunchText(out, '冲向南门', null, u, '#e86a27');
+  }
+}
+
+async function renderShot05_EmptyGate(out, t) {
+  const localT = t - 2.50;
+  const bmp = await getClipFrame('c05_empty_gate', 1 + Math.floor(localT * 60));
+  drawCover(out, bmp, lerp(1.02, 1.05, clamp(localT / 1.75)), 0, 0);
+  // Subtle dusk cool tint for deadpan comedy contrast
+  out.fillStyle = 'rgba(16, 22, 32, 0.24)';
+  out.fillRect(0, 0, W, H);
+  drawVignette(out, 0.48);
+
+  // Perspective Chalk Dashed Stall Outline on Empty Pavement (starts 2.75s)
+  if (t >= 2.75) {
+    const p = easeOutCubic((t - 2.75) / 0.35);
+    out.save();
+    out.strokeStyle = 'rgba(255,250,240,0.92)';
+    out.lineWidth = 6;
+    out.setLineDash([24, 16]);
+    out.beginPath();
+    out.moveTo(640, 650);
+    out.lineTo(1280, 650);
+    out.lineTo(1390, 900);
+    out.lineTo(530, 900);
+    out.closePath();
+    out.globalAlpha = p;
+    out.stroke();
+    out.setLineDash([]);
+
+    // Floating AR "?" marker
+    out.font = '900 92px "Microsoft YaHei UI", sans-serif';
+    out.fillStyle = '#ffd166';
+    out.textAlign = 'center';
+    out.fillText('？ 空摊位', 960, 785);
+    out.restore();
+  }
+
+  // Tilted Street Stamp at 3.25s ("人呢？又跑空了？")
+  if (t >= 3.22) {
+    const p = springPop((t - 3.22) / 0.32);
+    const sc = lerp(2.15, 1.0, clamp(p, 0, 1.1));
+    out.save();
+    out.translate(W / 2, 370);
+    out.rotate(-0.075);
+    out.scale(sc, sc);
+
+    out.shadowColor = 'rgba(0,0,0,0.55)';
+    out.shadowBlur = 38;
+    out.shadowOffsetY = 16;
+    roundRectPath(out, -470, -108, 940, 216, 34);
+    out.fillStyle = '#fffdf8';
+    out.fill();
+    out.lineWidth = 10;
+    out.strokeStyle = '#e86a27';
+    out.stroke();
+
+    out.fillStyle = '#26201b';
+    out.font = '900 104px "Microsoft YaHei UI", sans-serif';
+    out.textAlign = 'center';
+    out.textBaseline = 'middle';
+    out.fillText('人呢？又跑空了？', 0, 6);
+    out.restore();
+  }
+}
+
+async function renderShot06_MacroPhone(out, t) {
+  const localT = t - 4.25; // 0 .. 1.75s
+  const bmp = await getClipFrame('c06_phone_walk', 1 + Math.floor(localT * 60));
+  drawCover(out, bmp, 1.08, 0, 0);
+  out.fillStyle = 'rgba(18, 13, 10, 0.58)';
+  out.fillRect(0, 0, W, H);
+
+  setOnlyGroup(gShot06);
+  paintMacroMerchantScreen(macroPhone.screenCtx, localT);
+  macroPhone.screenTex.needsUpdate = true;
+
+  const badgeP = clamp((localT - 0.98) / 0.32);
+  macroPhone.popMesh.visible = badgeP > 0.01;
+  if (macroPhone.popMesh.visible) {
+    paintDetachedBadge(macroPhone.popCtx, '南门步道旁 · 刚确认位置', '60 分钟鲜度生效 · 学生端同步点亮', '#477457');
+    macroPhone.popTex.needsUpdate = true;
+    const sp = springPop(badgeP);
+    macroPhone.popMesh.position.set(0.35, -0.15, lerp(0.18, 0.72, sp));
+    macroPhone.popMesh.scale.setScalar(lerp(0.65, 1.0, sp));
+  }
+
+  // Choreographed 3D Phone Flip + Dive Into Screen at 5.72s - 6.00s!
+  const enterP = easeOutBack(clamp(localT / 0.45), 1.15);
+  const diveP = Math.pow(clamp((localT - 1.42) / 0.33), 2.4);
+
+  macroPhone.group.position.set(
+    lerp(4.2, 0.65, enterP) * (1 - diveP),
+    lerp(-1.8, -0.35, enterP) + diveP * 1.4,
+    0
+  );
+  macroPhone.group.rotation.set(
+    lerp(0.45, -0.22, enterP) * (1 - diveP),
+    lerp(-0.95, -0.38, enterP) * (1 - diveP),
+    lerp(0.18, -0.05, enterP) * (1 - diveP)
+  );
+
+  camera.position.set(0, 0.2, lerp(8.4, 2.05, diveP));
+  camera.lookAt(macroPhone.group.position.x * 0.6, macroPhone.group.position.y * 0.5, 0);
+  renderer.render(scene, camera);
+  out.drawImage(glCanvas, 0, 0);
+
+  // Left-side kinetic headline before dive
+  if (diveP < 0.65) {
+    out.save();
+    out.globalAlpha = 1 - diveP * 1.5;
+    drawPill(out, 390, 320, '可信找摊 · 摊主本人确认', 'rgba(232,106,39,0.92)', '#ffffff', 28, 28, 12);
+    out.fillStyle = '#fffdf9';
+    out.font = '900 96px "Microsoft YaHei UI", sans-serif';
+    out.textAlign = 'left';
+    out.shadowColor = 'rgba(0,0,0,0.6)';
+    out.shadowBlur = 24;
+    out.fillText('出摊一拨，', 140, 470);
+    out.fillStyle = '#ffb86c';
+    out.fillText('全校秒亮。', 140, 595);
+    out.restore();
+  }
+}
+
+function renderShot07_08_Campus3D(out, t) {
+  // Deep dusk gradient sky
+  const sky = out.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, '#0f172a');
+  sky.addColorStop(0.55, '#1e1b2e');
+  sky.addColorStop(1, '#1c1512');
+  out.fillStyle = sky;
+  out.fillRect(0, 0, W, H);
+
+  setOnlyGroup(gCampus);
+
+  // Animate pulsing rings & steam puffs
+  beaconRings.forEach((ring, idx) => {
+    const ph = ((t * 1.4 + idx * 0.5) % 1);
+    ring.scale.setScalar(1.0 + ph * 0.9);
+    ring.material.opacity = (1 - ph) * 0.72;
+  });
+  steamPuffs.forEach((puff, idx) => {
+    const ph = ((t * 0.85 + idx * 0.14) % 1);
+    puff.position.set(
+      Math.sin(t * 3 + idx) * 0.25,
+      1.65 + ph * 1.4,
+      Math.cos(t * 2.4 + idx) * 0.18
+    );
+    puff.scale.setScalar(0.7 + ph * 0.9);
+    puff.material.opacity = Math.sin(Math.PI * ph) * 0.36;
+  });
+
+  if (t < 8.75) {
+    // Shot 07: Sweeping 3D Campus Street Fly-In + AR Live Pin
+    const u = (t - 6.00) / 2.75;
+    shutterRig.visible = false;
+    routeGeo.setDrawRange(0, Math.floor(easeOutCubic(clamp(u / 0.55)) * routeGeo.index.count));
+
+    const camX = lerp(-6.8, 0.2, easeInOutCubic(u));
+    const camY = lerp(5.4, 2.65, easeInOutCubic(u));
+    const camZ = lerp(8.5, 4.4, easeInOutCubic(u));
+    camera.position.set(camX, camY, camZ);
+    camera.lookAt(lerp(-1.0, 3.0, easeOutCubic(u)), 1.45, -1.5);
+
+    renderer.render(scene, camera);
+    out.drawImage(glCanvas, 0, 0);
+
+    // Project 3D Cart Anchor into 2D AR Live Callout!
+    const anchor3D = new THREE.Vector3(3.2, 3.05, -1.35);
+    anchor3D.project(camera);
+    const sx = (anchor3D.x * 0.5 + 0.5) * W;
+    const sy = (-anchor3D.y * 0.5 + 0.5) * H;
+    const pop = springPop((t - 6.28) / 0.4);
+
+    if (pop > 0.02) {
+      out.save();
+      out.translate(sx, sy - 95);
+      out.scale(pop, pop);
+
+      // Leader stem
+      out.strokeStyle = '#ff7a2f';
+      out.lineWidth = 4;
+      out.beginPath();
+      out.moveTo(0, 68); out.lineTo(0, 125);
+      out.stroke();
+
+      roundRectPath(out, -290, -76, 580, 148, 34);
+      out.fillStyle = 'rgba(255, 253, 248, 0.96)';
+      out.fill();
+      out.lineWidth = 4;
+      out.strokeStyle = '#e86a27';
+      out.stroke();
+
+      out.fillStyle = '#477457';
+      roundRectPath(out, -262, -52, 142, 44, 22);
+      out.fill();
+      out.fillStyle = '#ffffff';
+      out.font = '800 24px "Microsoft YaHei UI", sans-serif';
+      out.textAlign = 'center';
+      out.fillText('● 出摊中', -191, -22);
+
+      out.textAlign = 'left';
+      out.fillStyle = '#26201b';
+      out.font = '900 38px "Microsoft YaHei UI", sans-serif';
+      out.fillText('老周铁板炒面', -102, -18);
+
+      out.fillStyle = '#e86a27';
+      out.font = '700 27px "Microsoft YaHei UI", sans-serif';
+      out.fillText('南门步道旁 · 12秒前确认 · 余 18 份', -258, 38);
+      out.restore();
+    }
+
+    drawPill(out, 270, 92, '实景级空间定位 · 拒绝僵尸摊位', 'rgba(18,14,11,0.82)', '#ffd8b5', 26, 28, 12, '#e86a27');
+  } else {
+    // Shot 08: 8.75s - 11.50s Tactile 3D 60:00 Brass & Frosted-Glass Shutter
+    const localT = t - 8.75; // 0 .. 2.75s
+    shutterRig.visible = true;
+    const sweepDown = clamp((t - 8.95) / 1.00); // 0 -> 1 at 9.95s
+    const expired = t >= 10.00 && t < 10.75;
+    const restored = t >= 10.75;
+
+    const activeTicks = restored ? 24 : Math.round((1 - sweepDown) * 24);
+    tickMeshes.forEach((tm, idx) => {
+      const on = idx < activeTicks;
+      tm.material.color.setHex(on ? 0x477457 : 0x57534e);
+      tm.material.emissive.setHex(on ? 0x2d6a4f : 0x000000);
+    });
+
+    // Frosted Glass Shutter physically drops on expiry (10.00s), lifts on re-confirm (10.75s)
+    const gateDrop = expired
+      ? springPop((t - 10.00) / 0.25)
+      : restored
+        ? 1.0 - easeOutCubic((t - 10.75) / 0.28)
+        : 0.0;
+    shutterGate.position.y = lerp(2.45, 0.0, clamp(gateDrop, 0, 1.05));
+    shutterGate.material.opacity = 0.86 * clamp(gateDrop * 1.4, 0, 1);
+
+    brassRing.rotation.z = localT * 0.25;
+    camera.position.set(lerp(4.2, 6.2, easeOutCubic(localT / 0.5)), 2.55, 7.6);
+    camera.lookAt(5.2, 2.45, 1.4);
+
+    renderer.render(scene, camera);
+    out.drawImage(glCanvas, 0, 0);
+
+    // Crisp Kinetic Readout Left of 3D Brass Ring with Dark Frosted Contrast Plate
+    const minsLeft = restored ? 60 : Math.max(0, Math.round((1 - sweepDown) * 60));
+    const mmStr = `${String(minsLeft).padStart(2, '0')}:00`;
+
+    out.save();
+    roundRectPath(out, 88, 178, 756, 535, 40);
+    out.fillStyle = 'rgba(14, 11, 9, 0.82)';
+    out.fill();
+    out.lineWidth = 3;
+    out.strokeStyle = expired ? 'rgba(239,68,68,0.65)' : 'rgba(71,116,87,0.72)';
+    out.stroke();
+
+    drawPill(
+      out, 466, 250,
+      expired ? '位置超 60 分钟未续期' : '60 分钟鲜度倒计时机制',
+      expired ? '#b91c1c' : '#3d7a57',
+      '#ffffff', 30, 30, 13
+    );
+    out.fillStyle = '#fffdf9';
+    out.font = '900 156px "Microsoft YaHei UI", sans-serif';
+    out.textAlign = 'center';
+    out.fillText(mmStr, 466, 442);
+
+    out.font = '800 50px "Microsoft YaHei UI", sans-serif';
+    out.fillStyle = expired ? '#fca5a5' : '#86efac';
+    out.fillText(
+      expired ? '闸门落下 · 自动停接新单' : (restored ? '✓ 重新确认 · 秒恢复接单' : '鲜度有效 · 放心线上下单'),
+      466, 565
+    );
+    out.font = '700 32px "Microsoft YaHei UI", sans-serif';
+    out.fillStyle = '#fde68a';
+    out.fillText('线下找摊指引保留 · 不让同学白跑一趟', 466, 645);
+    out.restore();
+  }
+}
+
+async function renderShot09_ThermalReceipt(out, t) {
+  const localT = t - 11.50; // 0 .. 4.50s
+
+  // Warm tactile Pinterest collage background (#f6f0e6 + subtle architectural dot grid)
+  out.fillStyle = '#f5efe4';
+  out.fillRect(0, 0, W, H);
+  out.fillStyle = 'rgba(120, 98, 76, 0.14)';
+  for (let gx = 48; gx < W; gx += 48) {
+    for (let gy = 48; gy < H; gy += 48) {
+      out.fillRect(gx, gy, 3, 3);
+    }
+  }
+
+  // 3 Live Moving Real-Video Collage Windows!
+  const fIdx = 1 + Math.floor(localT * 60);
+  const [bmpNoodles, bmpLemon, bmpBite] = await Promise.all([
+    getClipFrame('c07_collage_noodles', fIdx),
+    getClipFrame('c08_collage_lemon', fIdx),
+    getClipFrame('c09_collage_bite', fIdx),
+  ]);
+
+  const cards = [
+    { bmp: bmpNoodles, x: 310, y: 310, w: 500, h: 320, rot: -0.09, label: '猛火现炒 · 份份独立口味', trig: 0.05 },
+    { bmp: bmpBite,    x: 335, y: 775, w: 480, h: 300, rot:  0.07, label: '小吃加料 · 真实余量校验', trig: 0.35 },
+    { bmp: bmpLemon,   x: 1590, y: 530, w: 520, h: 350, rot: 0.08, label: '手打鲜饮 · 免费逐份备注', trig: 0.20 },
+  ];
+
+  for (const cd of cards) {
+    const cp = springPop((localT - cd.trig) / 0.42);
+    if (cp <= 0.01) continue;
+    out.save();
+    out.translate(cd.x, cd.y + Math.sin(t * 2.5 + cd.x) * 6);
+    out.rotate(cd.rot);
+    out.scale(cp, cp);
+
+    out.shadowColor = 'rgba(30,20,10,0.22)';
+    out.shadowBlur = 32;
+    out.shadowOffsetY = 14;
+    roundRectPath(out, -cd.w / 2 - 16, -cd.h / 2 - 16, cd.w + 32, cd.h + 82, 24);
+    out.fillStyle = '#ffffff';
+    out.fill();
+    out.shadowColor = 'transparent';
+
+    out.save();
+    roundRectPath(out, -cd.w / 2, -cd.h / 2, cd.w, cd.h, 14);
+    out.clip();
+    out.drawImage(cd.bmp, -cd.w / 2, -cd.h / 2, cd.w, cd.h);
+    out.restore();
+
+    out.fillStyle = '#302b26';
+    out.font = '800 26px "Microsoft YaHei UI", sans-serif';
+    out.textAlign = 'center';
+    out.fillText(cd.label, 0, cd.h / 2 + 40);
+    out.restore();
+  }
+
+  // Three.js 3D Fluttering Serrated Thermal Paper Receipt Down Center!
+  setOnlyGroup(gReceipt);
+  paintReceiptTexture(receiptCtxProxy(), t);
+  receiptTex.needsUpdate = true;
+
+  // Vertex wave deformation for tactile paper physics
+  const posAttr = recGeo.attributes.position;
+  for (let i = 0; i < posAttr.count; i++) {
+    const bx = recBasePos[i * 3];
+    const by = recBasePos[i * 3 + 1];
+    const normY = (3.9 - by) / 7.8; // 0 at top slot, 1 at bottom
+    const waveZ = Math.sin(normY * 4.2 - t * 5.2) * 0.24 * normY + Math.cos(bx * 0.8 + t * 3.0) * 0.06;
+    posAttr.setZ(i, waveZ);
+  }
+  posAttr.needsUpdate = true;
+  recGeo.computeVertexNormals();
+
+  const feedP = easeOutCubic(clamp(localT / 0.65));
+  receiptMesh.position.set(0, lerp(3.4, -0.15, feedP), 0.15);
+  receiptMesh.rotation.y = Math.sin(localT * 1.6) * 0.12;
+
+  // Subtle camera punch on each ink stamp (12.25, 13.50, 14.75)
+  let shakeY = 0;
+  for (const st of [12.25, 13.50, 14.75]) {
+    if (t >= st && t < st + 0.18) {
+      shakeY += Math.sin((t - st) * 90) * Math.exp(-(t - st) * 22) * 0.14;
+    }
+  }
+  camera.position.set(0, 0.30 + shakeY, 12.2);
+  camera.lookAt(0, 0.15, 0);
+  renderer.render(scene, camera);
+  out.drawImage(glCanvas, 0, 0);
+}
+
+function receiptCtxProxy() {
+  return rCtx;
+}
+
+async function renderShot10_SplitWokMerchant(out, t) {
+  const localT = t - 16.00; // 0 .. 4.00s
+  const wokBmp = await getClipFrame('c10_wok_split', 1 + Math.floor(localT * 60));
+
+  // Right background: warm dark espresso gradient
+  const rg = out.createLinearGradient(900, 0, W, H);
+  rg.addColorStop(0, '#231914');
+  rg.addColorStop(1, '#120d0a');
+  out.fillStyle = rg;
+  out.fillRect(0, 0, W, H);
+
+  // Left Diagonal Half: Live 4K Roaring Wok Fire Video!
+  const splitXTop = 1030;
+  const splitXBot = 890;
+  out.save();
+  out.beginPath();
+  out.moveTo(0, 0);
+  out.lineTo(splitXTop, 0);
+  out.lineTo(splitXBot, H);
+  out.lineTo(0, H);
+  out.closePath();
+  out.clip();
+  out.drawImage(wokBmp, -60, 0, 1180, H);
+  out.restore();
+
+  // Glowing Diagonal Slash Divider
+  out.save();
+  out.strokeStyle = '#ff7a2f';
+  out.lineWidth = 8;
+  out.beginPath();
+  out.moveTo(splitXTop, 0);
+  out.lineTo(splitXBot, H);
+  out.stroke();
+  out.restore();
+
+  // Right Half: Three.js 3D Angled Merchant Order Console
+  setOnlyGroup(gDual);
+  phoneLeft.group.visible = false;
+  phoneRight.group.visible = true;
+  phoneRight.popMesh.visible = false;
+  paintMerchantOrderConsole(phoneRight.screenCtx, t);
+  phoneRight.screenTex.needsUpdate = true;
+
+  const enterP = springPop(localT / 0.45);
+  phoneRight.group.position.set(2.85, -0.1, 0);
+  phoneRight.group.rotation.set(-0.08, lerp(0.55, -0.28, enterP), 0.03);
+  camera.position.set(0, 0, 10.6);
+  camera.lookAt(0, 0, 0);
+  renderer.render(scene, camera);
+  out.drawImage(glCanvas, 0, 0);
+
+  // Left live kitchen pill + kinetic title
+  drawPill(out, 260, 88, '● 摊主端实时联动 · 猛火现做', 'rgba(232,106,39,0.92)', '#ffffff', 26, 26, 12);
+  out.save();
+  out.fillStyle = '#fffdf9';
+  out.font = '900 76px "Microsoft YaHei UI", sans-serif';
+  out.shadowColor = 'rgba(0,0,0,0.78)';
+  out.shadowBlur = 24;
+  out.fillText('一键接单，锅气立起', 86, 975);
+  out.restore();
+
+  // Serrated Paper Tear Opening Overlay (16.00s - 16.34s)!
+  if (localT < 0.34) {
+    const rp = easeInOutCubic(localT / 0.34);
+    const offset = rp * 1060;
+    for (const dir of [-1, 1]) {
+      out.save();
+      out.translate(dir * offset, 0);
+      out.beginPath();
+      if (dir === -1) {
+        out.moveTo(0, 0);
+        for (let y = 0; y <= H; y += 36) {
+          out.lineTo(W / 2 + (y % 72 === 0 ? 22 : -22), y);
+        }
+        out.lineTo(0, H);
+      } else {
+        out.moveTo(W, 0);
+        for (let y = 0; y <= H; y += 36) {
+          out.lineTo(W / 2 + (y % 72 === 0 ? 22 : -22), y);
+        }
+        out.lineTo(W, H);
+      }
+      out.closePath();
+      out.fillStyle = '#fffdf7';
+      out.shadowColor = 'rgba(0,0,0,0.45)';
+      out.shadowBlur = 36;
+      out.fill();
+      out.restore();
+    }
+  }
+}
+
+function renderShot11_DualPhones(out, t) {
+  const localT = t - 20.00; // 0 .. 4.50s
+  const bg = out.createRadialGradient(W * 0.5, H * 0.45, 80, W * 0.5, H * 0.5, 1100);
+  bg.addColorStop(0, '#2c1e16');
+  bg.addColorStop(1, '#110c09');
+  out.fillStyle = bg;
+  out.fillRect(0, 0, W, H);
+
+  setOnlyGroup(gDual);
+  phoneLeft.group.visible = true;
+  phoneRight.group.visible = true;
+
+  paintPickupScreen(phoneLeft.screenCtx);
+  phoneLeft.screenTex.needsUpdate = true;
+  paintHandoffScreen(phoneRight.screenCtx);
+  phoneRight.screenTex.needsUpdate = true;
+
+  // Detached 3D popout badges at 21.00s (left) & 22.75s (right)
+  const pLeftPop = clamp((t - 21.00) / 0.35);
+  phoneLeft.popMesh.visible = pLeftPop > 0.01;
+  if (phoneLeft.popMesh.visible) {
+    paintDetachedBadge(phoneLeft.popCtx, '取餐码 4829 · 秒核销', '出餐后付 / 到摊扫码直付摊主', '#e86a27');
+    phoneLeft.popTex.needsUpdate = true;
+    const sp = springPop(pLeftPop);
+    phoneLeft.popMesh.position.set(0.15, -0.55, lerp(0.2, 0.72, sp));
+    phoneLeft.popMesh.scale.setScalar(lerp(0.6, 1.02, sp));
+  }
+
+  const pRightPop = clamp((t - 22.75) / 0.35);
+  phoneRight.popMesh.visible = pRightPop > 0.01;
+  if (phoneRight.popMesh.visible) {
+    paintDetachedBadge(phoneRight.popCtx, '东区北门固定交接点', '免填宿舍号 · 零虚假骑手轨迹', '#3d7a57');
+    phoneRight.popTex.needsUpdate = true;
+    const sp = springPop(pRightPop);
+    phoneRight.popMesh.position.set(-0.15, -0.55, lerp(0.2, 0.72, sp));
+    phoneRight.popMesh.scale.setScalar(lerp(0.6, 1.02, sp));
+  }
+
+  const spinP = easeOutBack(clamp(localT / 0.55), 1.2);
+  const focusRight = easeInOutCubic(clamp((t - 22.35) / 0.55));
+
+  phoneLeft.group.position.set(-3.45, -0.32, lerp(0.55, -0.25, focusRight));
+  phoneLeft.group.rotation.set(-0.06, lerp(-Math.PI, 0.28, spinP), -0.02);
+
+  phoneRight.group.position.set(3.45, -0.32, lerp(-0.25, 0.55, focusRight));
+  phoneRight.group.rotation.set(-0.06, lerp(Math.PI, -0.28, spinP), 0.02);
+
+  camera.position.set(lerp(-0.55, 0.55, focusRight), -0.15, 14.6);
+  camera.lookAt(lerp(-0.4, 0.4, focusRight), -0.25, 0);
+  renderer.render(scene, camera);
+  out.drawImage(glCanvas, 0, 0);
+
+  drawPill(out, W / 2, 68, '双轨透明履约 · 自取与校门交接点自由选', 'rgba(16,12,9,0.94)', '#ffd8b5', 28, 34, 13, '#ff7a2f');
+}
+
+function renderShot12_ComplianceSculpture(out, t) {
+  const localT = t - 24.50; // 0 .. 5.50s
+  // Sunlit Ordinary-Folk warm architectural cream studio backdrop
+  const g = out.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#fbf7f0');
+  g.addColorStop(1, '#ebe2d3');
+  out.fillStyle = g;
+  out.fillRect(0, 0, W, H);
+
+  setOnlyGroup(gCompliance);
+
+  // Back open-access lantern glides smoothly along finder track
+  const fU = clamp((localT - 0.3) / 3.4);
+  finderLantern.position.set(lerp(-5.4, 5.4, easeInOutCubic(fU)), 0.05, -3.15);
+
+  // Front Direct-Pay Marble rolls along bridgeCurve from 26.20s to 28.00s!
+  const mU = clamp((t - 26.20) / 1.80);
+  const pt = bridgeCurve.getPointAt(easeInOutCubic(mU));
+  payMarble.position.copy(pt);
+  if (t >= 28.00) {
+    const settle = Math.exp(-(t - 28.00) * 6) * Math.sin((t - 28.00) * 28) * 0.16;
+    payMarble.position.y += settle;
+  }
+
+  // Sweeping sculptural camera
+  camera.position.set(lerp(-1.9, 1.3, easeInOutCubic(localT / 5.2)), 4.75, 10.2);
+  camera.lookAt(0.2, 0.0, -0.35);
+  renderer.render(scene, camera);
+  out.drawImage(glCanvas, 0, 0);
+
+  // Project key 3D coordinates into crisp tactile labels (zero long sentences!)
+  const proj = (x, y, z) => {
+    const v = new THREE.Vector3(x, y, z).project(camera);
+    return [(v.x * 0.5 + 0.5) * W, (-v.y * 0.5 + 0.5) * H];
+  };
+
+  drawPill(out, W / 2, 82, '三端分层治理 · 合规架构一眼看懂', '#26201b', '#fffdf8', 30, 34, 14);
+
+  const [fx, fy] = proj(0, 0.65, -3.15);
+  drawPill(out, fx, fy - 34, '轨道 A｜仅找摊 · 零门槛免费收录', '#fef3c7', '#92400e', 25, 24, 10, '#f59e0b');
+
+  const [gx, gy] = proj(-2.9, 1.55, 1.05);
+  drawPill(out, gx, gy - 22, '持证核验准入', '#d1fae5', '#065f46', 25, 22, 10, '#10b981');
+
+  if (t >= 26.15 && t < 28.10) {
+    const [bx, by] = proj(payMarble.position.x, payMarble.position.y + 0.68, payMarble.position.z);
+    drawPill(out, bx, by - 14, '¥14.00 微信直连餐款', '#ea580c', '#ffffff', 24, 20, 8);
+  }
+
+  const [sx, sy] = proj(-5.2, -1.0, 1.4);
+  drawPill(out, sx, sy + 24, '学生端微信', '#ffffff', '#26201b', 26, 22, 10, '#cbd5e1');
+
+  const [mx, my] = proj(5.4, -1.0, 1.4);
+  const landed = t >= 28.00;
+  drawPill(
+    out, mx, my + 24,
+    landed ? '✓ 直达摊主微信商户号' : '摊主微信商户号',
+    landed ? '#3d7a57' : '#ffffff',
+    landed ? '#ffffff' : '#26201b',
+    28, 26, 12, '#3d7a57'
+  );
+
+  // Crossed-out Zero-Pool Pit Callout right in front center!
+  const [px, py] = proj(0.2, -1.15, 1.85);
+  drawPill(out, px, py + 32, '✕ 平台零资金池 · 彻底杜绝二清', '#fee2e2', '#991b1b', 28, 28, 12, '#ef4444');
+
+  // /ops Governance Shield Pill
+  drawPill(out, W - 270, 82, '🛡️ /ops 独立治理 · 反刷评风控', '#ffffff', '#302b26', 24, 22, 10, '#d6d3d1');
+}
+
+async function renderShot13_SensoryPayoff(out, t) {
+  if (t < 31.00) {
+    const u = t - 30.00;
+    const bmp = await getClipFrame('c11_payoff_sauce', 1 + Math.floor(u * 60));
+    drawCover(out, bmp, lerp(1.02, 1.12, u), 0, 0);
+    drawVignette(out, 0.38);
+    drawCenterPunchText(out, '找得到', '60min 摊主确认真位置', u, '#ff7a2f');
+  } else if (t < 32.00) {
+    const u = t - 31.00;
+    const bmp = await getClipFrame('c12_payoff_wok', 1 + Math.floor(u * 60));
+    drawCover(out, bmp, lerp(1.02, 1.12, u), 0, 0);
+    drawVignette(out, 0.38);
+    drawCenterPunchText(out, '点得准', '逐份免费备注 · 真实余量', u, '#f59e0b');
+  } else if (t < 33.00) {
+    const u = t - 32.00;
+    const bmp = await getClipFrame('c13_payoff_lemon', 1 + Math.floor(u * 60));
+    drawCover(out, bmp, lerp(1.02, 1.12, u), 0, 0);
+    drawVignette(out, 0.35);
+    drawCenterPunchText(out, '管得住', '分层准入 · 微信直连零二清', u, '#3d7a57');
+  } else {
+    const u = t - 33.00;
+    const bmp = await getClipFrame('c14_payoff_noodles', 1 + Math.floor(u * 60));
+    drawCover(out, bmp, lerp(1.02, 1.12, u), 0, 0);
+    drawVignette(out, 0.38);
+    drawCenterPunchText(out, '不跑空！', '到摊自取 · 校门交接点', u, '#e86a27');
+  }
+}
+
+async function renderShot14_BrandFinale(out, t) {
+  const localT = t - 34.00; // 0 .. 4.00s
+  const bmp = await getClipFrame('c15_night_lamp', 1 + Math.floor(localT * 60));
+  drawCover(out, bmp, lerp(1.06, 1.0, easeOutCubic(localT / 4.0)), 0, 0);
+
+  // Rich warm nocturnal glaze
+  const grad = out.createLinearGradient(0, 0, W, H);
+  grad.addColorStop(0, 'rgba(15, 11, 9, 0.86)');
+  grad.addColorStop(0.6, 'rgba(24, 17, 13, 0.76)');
+  grad.addColorStop(1, 'rgba(18, 12, 9, 0.62)');
+  out.fillStyle = grad;
+  out.fillRect(0, 0, W, H);
+
+  setOnlyGroup(gFinale);
+  const pop = springPop(localT / 0.65);
+  gFinale.position.set(-4.1, lerp(-1.2, 0.15, pop), 0);
+  gFinale.rotation.y = localT * 0.55;
+  lanternOrbit.rotation.z = localT * 0.9;
+
+  camera.position.set(0, 0.1, 8.8);
+  camera.lookAt(0, 0.05, 0);
+  renderer.render(scene, camera);
+  out.drawImage(glCanvas, 0, 0);
+
+  // Crisp Brand Typography Lockup on Right
+  const enter = easeOutCubic(clamp((localT - 0.12) / 0.55));
+  out.save();
+  out.globalAlpha = enter;
+  out.translate(lerp(60, 0, enter), 0);
+
+  drawPill(out, 985, 315, '全国大学生电子商务“创新、创意及创业”挑战赛', 'rgba(232,106,39,0.22)', '#fdba74', 25, 28, 11, '#fb923c');
+
+  out.textAlign = 'left';
+  out.fillStyle = '#fffdf9';
+  out.font = '900 148px "Microsoft YaHei UI", "Noto Sans SC", sans-serif';
+  out.fillText('烟火地图', 660, 500);
+
+  out.fillStyle = '#fed7aa';
+  out.font = '700 48px "Microsoft YaHei UI", sans-serif';
+  out.fillText('少跑一次空，留住校门口的热乎气。', 666, 612);
+
+  // 3 Feature Pills
+  const pills = ['60min 鲜度防跑空', '4位码自取 + 固定交接点', '持证分层 · 微信直连零二清'];
+  let px = 666;
+  for (const pl of pills) {
+    out.font = '700 26px "Microsoft YaHei UI", sans-serif';
+    const tw = out.measureText(pl).width + 44;
+    roundRectPath(out, px, 685, tw, 54, 27);
+    out.fillStyle = 'rgba(255,253,248,0.12)';
+    out.fill();
+    out.lineWidth = 2;
+    out.strokeStyle = 'rgba(251,146,60,0.55)';
+    out.stroke();
+    out.fillStyle = '#fffdf9';
+    out.fillText(pl, px + 22, 721);
+    px += tw + 18;
+  }
+
+  out.fillStyle = 'rgba(255,253,248,0.52)';
+  out.font = '500 22px "Microsoft YaHei UI", sans-serif';
+  out.fillText('路演答辩先导片 · 实景动态切片获 Pexels 授权 · 界面与演示数据独立编排，非实时营业承诺', 666, 985);
+  out.restore();
+}
+
+// Dispatch single clean state at time `t` onto `targetCtx`
+async function renderCleanAt(targetCtx, t) {
+  if (t < 2.50) {
+    await renderShot01_04(targetCtx, t);
+  } else if (t < 4.25) {
+    await renderShot05_EmptyGate(targetCtx, t);
+  } else if (t < 6.00) {
+    await renderShot06_MacroPhone(targetCtx, t);
+  } else if (t < 11.50) {
+    renderShot07_08_Campus3D(targetCtx, t);
+  } else if (t < 16.00) {
+    await renderShot09_ThermalReceipt(targetCtx, t);
+  } else if (t < 20.00) {
+    await renderShot10_SplitWokMerchant(targetCtx, t);
+  } else if (t < 24.50) {
+    renderShot11_DualPhones(targetCtx, t);
+  } else if (t < 30.00) {
+    renderShot12_ComplianceSculpture(targetCtx, t);
+  } else if (t < 34.00) {
+    await renderShot13_SensoryPayoff(targetCtx, t);
+  } else {
+    await renderShot14_BrandFinale(targetCtx, t);
+  }
+}
+
+// Edgar Wright Optical Multi-Tap Whip-Pan Transitions!
+const WHIPS = [
+  { center: 2.50, half: 0.09, dirX: -1, dirY: 0 },   // Whip RIGHT into Empty Gate
+  { center: 4.25, half: 0.09, dirX:  1, dirY: 0 },   // Whip LEFT into 3D Macro Phone
+  { center: 11.50, half: 0.10, dirX: 0, dirY: -1 },  // Whip UP into Flying Thermal Receipt
+  { center: 20.00, half: 0.10, dirX: -1, dirY: 0 },  // Whip into Dual 3D Phones
+  { center: 24.50, half: 0.10, dirX: 0, dirY:  1 },  // Whip into Ordinary Folk Sculpture
+  { center: 30.00, half: 0.08, dirX: -1, dirY: 0 },  // Whip into Sensory Climax
+  { center: 34.00, half: 0.11, dirX: 0, dirY: -1 },  // Whip into Warm Brand Finale
+];
+
+window.renderFrame = async function renderFrame(frameIdx) {
+  const t = frameIdx / FPS;
+
+  const activeWhip = WHIPS.find((w) => Math.abs(t - w.center) < w.half);
+  if (!activeWhip) {
+    await renderCleanAt(ctx, t);
+    return masterCanvas.toDataURL('image/jpeg', 0.94);
+  }
+
+  // Render outgoing & incoming frames into bufA & bufB, then composite with 9-tap directional motion smear!
+  const u = easeInOutCubic((t - (activeWhip.center - activeWhip.half)) / (activeWhip.half * 2));
+  const tOut = Math.max(0, activeWhip.center - activeWhip.half - 0.002);
+  const tIn = Math.min(37.98, activeWhip.center + activeWhip.half + 0.002);
+
+  await renderCleanAt(ctxA, tOut);
+  await renderCleanAt(ctxB, tIn);
+
+  ctx.fillStyle = '#0f0c0a';
+  ctx.fillRect(0, 0, W, H);
+
+  const taps = 9;
+  const blurSpan = Math.sin(Math.PI * u) * 150;
+  ctx.save();
+  for (let i = 0; i < taps; i++) {
+    const jitter = ((i / (taps - 1)) - 0.5) * blurSpan;
+    ctx.globalAlpha = 1 / (i + 1 === 1 ? 1 : taps * 0.55);
+    if (i === 0) ctx.globalAlpha = 1.0;
+    else ctx.globalAlpha = 0.18;
+
+    const shiftOutX = activeWhip.dirX * u * W + activeWhip.dirX * jitter;
+    const shiftOutY = activeWhip.dirY * u * H + activeWhip.dirY * jitter;
+    const shiftInX = shiftOutX - activeWhip.dirX * W;
+    const shiftInY = shiftOutY - activeWhip.dirY * H;
+
+    ctx.drawImage(bufA, shiftOutX, shiftOutY);
+    ctx.drawImage(bufB, shiftInX, shiftInY);
+  }
+  ctx.restore();
+
+  return masterCanvas.toDataURL('image/jpeg', 0.94);
+};
+
+window.__SCENE_READY__ = true;
+</script>
+</body>
+</html>

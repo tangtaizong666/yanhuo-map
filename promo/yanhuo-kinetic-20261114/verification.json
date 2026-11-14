@@ -1,0 +1,24 @@
+{
+  "file": "yanhuo-kinetic-38s-1080p60.mp4",
+  "bytes": 35755664,
+  "sha256": "02c7f7a8e30a4442562fcac49dc0a289fe7255be99e0317c1b46a5146da9a7bb",
+  "duration_seconds": 38.0,
+  "width": 1920,
+  "height": 1080,
+  "fps": "60/1",
+  "decoded_video_frames": 2280,
+  "video_codec": "h264",
+  "color_parameters": [
+    "yuv420p",
+    "tv",
+    "bt709",
+    "bt709",
+    "bt709"
+  ],
+  "audio_codec": "aac",
+  "audio_sample_rate": 48000,
+  "audio_channels": 2,
+  "integrated_loudness_lufs": -14.8,
+  "true_peak_dbtp": -0.5,
+  "decode_check": "passed; all 2280 frames at 60fps and 48kHz stereo audio decoded with zero FFmpeg errors"
+}

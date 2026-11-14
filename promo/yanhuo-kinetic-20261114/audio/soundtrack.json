@@ -1,0 +1,43 @@
+{
+  "title": "烟火地图 · 热油甩镜与触感秩序 (Original Synced Foley & 120BPM Funk Groove)",
+  "author": "烟火地图项目原创程序化合成配乐与拟音",
+  "license": "Project Original Procedural Audio (Zero third-party samples or copyrighted recordings)",
+  "sample_rate_hz": 48000,
+  "channels": 2,
+  "duration_seconds": 38.0,
+  "bpm": 120.0,
+  "sync_markers_seconds": {
+    "craving_cuts": [
+      0.0,
+      0.75,
+      1.5,
+      2.0
+    ],
+    "whip_to_empty_gate_silence": 2.5,
+    "chalk_outline_tok": 2.8,
+    "empty_stamp": 3.25,
+    "phone_whip_in": 4.25,
+    "groove_drop_3d_campus": 6.0,
+    "freshness_shutter_clack": 10.0,
+    "thermal_receipt_print": 11.5,
+    "ink_stamps": [
+      12.25,
+      13.5,
+      14.75
+    ],
+    "serrated_paper_rip": 16.0,
+    "pickup_4829_chime": 21.0,
+    "handoff_gate_chime": 22.75,
+    "direct_pay_marble_roll": [
+      26.2,
+      28.0
+    ],
+    "rapid_payoff_hits": [
+      30.0,
+      31.0,
+      32.0,
+      33.0
+    ],
+    "brand_resolution": 34.0
+  }
+}

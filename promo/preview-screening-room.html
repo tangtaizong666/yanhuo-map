@@ -3,161 +3,136 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>烟火地图 · 双版本答辩宣传片审片室 (1080p · 60fps)</title>
+<title>烟火地图 · 三创赛答辩宣传片审片室 (1080p · 60fps)</title>
 <style>
   :root {
-    --orange: #EA580C;
+    --orange: #E86A27;
     --orange-light: #FB923C;
     --cream: #FFFDF9;
-    --bg: #0E0C0A;
-    --card: #191512;
+    --bg: #0D0A08;
+    --card: #181310;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     background: var(--bg);
     color: var(--cream);
-    font-family: "Microsoft YaHei UI", "PingFang SC", sans-serif;
-    padding: 36px 48px 64px;
+    font-family: "Microsoft YaHei UI", "Noto Sans SC", "PingFang SC", sans-serif;
+    padding: 32px 44px 64px;
     line-height: 1.5;
   }
   header {
-    max-width: 1480px;
-    margin: 0 auto 32px;
+    max-width: 1360px;
+    margin: 0 auto 28px;
     display: flex;
     justify-content: space-between;
     align-items: flex-end;
     border-bottom: 1px solid rgba(255,253,249,0.12);
-    padding-bottom: 20px;
+    padding-bottom: 18px;
+    gap: 16px;
+    flex-wrap: wrap;
   }
-  h1 { font-size: 30px; font-weight: 800; }
+  h1 { font-size: 28px; font-weight: 900; letter-spacing: 0.5px; }
   .badge {
     display: inline-block;
-    background: rgba(234,88,12,0.22);
-    border: 1px solid rgba(251,146,60,0.5);
+    background: rgba(232,106,39,0.22);
+    border: 1px solid rgba(251,146,60,0.55);
     color: #FDBA74;
-    padding: 5px 14px;
+    padding: 6px 16px;
     border-radius: 999px;
     font-size: 13px;
     font-weight: 700;
   }
-  .grid {
-    max-width: 1480px;
-    margin: 0 auto;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 32px;
-  }
-  @media (max-width: 1100px) {
-    .grid { grid-template-columns: 1fr; }
-  }
-  .film-card {
-    background: var(--card);
-    border: 1px solid rgba(255,253,249,0.10);
-    border-radius: 22px;
-    padding: 24px;
-    box-shadow: 0 24px 60px rgba(0,0,0,0.45);
+  .hero-card {
+    max-width: 1360px;
+    margin: 0 auto 36px;
+    background: linear-gradient(160deg, #1d1612, #120e0b);
+    border: 1px solid rgba(251,146,60,0.35);
+    border-radius: 24px;
+    padding: 28px;
+    box-shadow: 0 28px 80px rgba(0,0,0,0.62);
   }
   .film-head {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 10px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+    gap: 10px;
   }
-  .film-title { font-size: 22px; font-weight: 800; color: #FFFDF9; }
-  .film-desc { font-size: 14px; color: rgba(255,253,249,0.72); margin-bottom: 16px; }
+  .film-title { font-size: 24px; font-weight: 900; color: #FFFDF9; }
+  .film-desc { font-size: 14px; color: rgba(255,253,249,0.74); margin-bottom: 16px; }
   video {
     width: 100%;
     aspect-ratio: 16 / 9;
-    border-radius: 14px;
+    border-radius: 16px;
     background: #000;
     display: block;
-    margin-bottom: 14px;
+    margin-bottom: 16px;
   }
   .chapters {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
   }
-  button {
+  button.chap {
     background: rgba(255,253,249,0.08);
-    color: #FFFDF9;
-    border: 1px solid rgba(255,253,249,0.16);
+    color: #FED7AA;
+    border: 1px solid rgba(251,146,60,0.32);
     border-radius: 999px;
-    padding: 6px 13px;
-    font-size: 12.5px;
-    font-weight: 600;
+    padding: 7px 14px;
+    font-size: 13px;
+    font-weight: 700;
     cursor: pointer;
-    transition: 0.15s ease;
+    transition: all 0.15s ease;
   }
-  button:hover {
+  button.chap:hover {
     background: var(--orange);
-    border-color: var(--orange-light);
+    color: #fff;
+    border-color: var(--orange);
   }
 </style>
 </head>
 <body>
-  <header>
-    <div>
-      <span class="badge">三创赛路演答辩先导片 · 真 1080p 60fps · 2880 帧</span>
-      <h1 style="margin-top:8px;">烟火地图 · 双创意方案成片对比审片室</h1>
-    </div>
-    <div style="font-size:14px;color:rgba(255,253,249,0.62);">
-      点击播放器可直接开启声音全屏播放 · 下方章节按钮可快速跳看转场细节
-    </div>
-  </header>
-
-  <div class="grid">
-    <section class="film-card">
-      <div class="film-head">
-        <span class="film-title">方案一：《一镜穿烟火》</span>
-        <span class="badge">几何匹配 × 穿屏一镜到底</span>
-      </div>
-      <p class="film-desc">
-        微距烟火 AI 实景 × 3D 空间悬浮 UI · 112 BPM 轻爵士律动 + 逐帧微观拟音（圆碗变雷达环、暖灯拉出变出摊开关、飞票跨端、炉火起燃、10倍拉升三端治理星图）。
-      </p>
-      <video id="v1" controls preload="metadata" poster="yanhuo-matchcut-20261114/poster.jpg" src="yanhuo-matchcut-20261114/yanhuo-matchcut-48s-1080p60.mp4"></video>
-      <div class="chapters">
-        <button onclick="jump('v1', 0)">00s 俯拍热面</button>
-        <button onclick="jump('v1', 2.0)">02s 圆碗变地图</button>
-        <button onclick="jump('v1', 6.0)">06s 拉灯变出摊开关</button>
-        <button onclick="jump('v1', 14.0)">14s 钻针孔与飞票跨端</button>
-        <button onclick="jump('v1', 21.0)">21s 接单起火现炒</button>
-        <button onclick="jump('v1', 25.1)">25s 翻转取餐码与双轨</button>
-        <button onclick="jump('v1', 33.1)">33s 10倍拉升合规星图</button>
-        <button onclick="jump('v1', 42.3)">42s 萤火收束片尾</button>
-      </div>
-    </section>
-
-    <section class="film-card">
-      <div class="film-head">
-        <span class="film-title">方案二：《折叠街角》</span>
-        <span class="badge">立体纸艺微缩沙盘 × 破壁 3D UI</span>
-      </div>
-      <p class="film-desc">
-        手工移轴建筑沙盘美学 × 折纸/风琴面板破壁联动 · 118 BPM 马林巴木琴与室内拨弦（平面蓝图折纸立起、橙棚蓝车双模上手、保温交接亭引线、三层等轴测治理切片）。
-      </p>
-      <video id="v2" controls preload="metadata" poster="yanhuo-diorama-20261114/poster.jpg" src="yanhuo-diorama-20261114/yanhuo-diorama-48s-1080p60.mp4"></video>
-      <div class="chapters">
-        <button onclick="jump('v2', 0)">00s 平面测绘图</button>
-        <button onclick="jump('v2', 1.9)">02s 折纸立起空位沙盘</button>
-        <button onclick="jump('v2', 5.4)">06s 橙棚蓝车与双模面板</button>
-        <button onclick="jump('v2', 14.1)">14s 风琴双翼与胶囊传单</button>
-        <button onclick="jump('v2', 22.4)">22s 木块翻转取餐码</button>
-        <button onclick="jump('v2', 25.0)">25s 微缩保温交接亭</button>
-        <button onclick="jump('v2', 33.3)">33s 等轴测三层治理切片</button>
-        <button onclick="jump('v2', 42.3)">42s 全景沙盘收尾</button>
-      </div>
-    </section>
+<header>
+  <div>
+    <h1>烟火地图 · 三创赛路演答辩先导片审片室</h1>
+    <p style="color:rgba(255,253,249,0.65);font-size:14px;margin-top:4px;">
+      全新商业广告重构版：4K 真动态烟火视频快切 × Edgar Wright 光学甩镜 × Three.js 真 3D 硬件与触感合规雕塑
+    </p>
   </div>
+  <span class="badge">38.000s · 1920×1080 · 真 60fps (2280 帧) · BT.709 · -14.8 LUFS</span>
+</header>
 
-  <script>
-    function jump(id, sec) {
-      const other = id === 'v1' ? document.getElementById('v2') : document.getElementById('v1');
-      other.pause();
-      const v = document.getElementById(id);
-      v.currentTime = sec;
-      v.play();
-    }
-  </script>
+<section class="hero-card">
+  <div class="film-head">
+    <div class="film-title">《热油甩镜与触感秩序》（商业广告融合王牌版）</div>
+    <span class="badge">120 BPM 帧级锁拍 · 零静态图轮播 · 零说明文卡片</span>
+  </div>
+  <p class="film-desc">
+    融合 DoorDash/M&amp;S 微距食欲快切 + 跑空静音冷幽默急停 + Three.js 3D 手机穿屏立体街区 + 三维锯齿热敏小票撕裂分屏 + Ordinary Folk 风格「微信直连零资金池」圆珠直通桥。
+  </p>
+  <video id="vHero" controls playsinline preload="auto" poster="./yanhuo-kinetic-20261114/poster.jpg" src="./yanhuo-kinetic-20261114/yanhuo-kinetic-38s-1080p60.mp4"></video>
+  <div class="chapters">
+    <button class="chap" onclick="jump('vHero', 0)">00.0s 猛火痛点快切</button>
+    <button class="chap" onclick="jump('vHero', 2.5)">02.5s 甩镜急停「跑空了？」</button>
+    <button class="chap" onclick="jump('vHero', 4.3)">04.3s 3D微距开摊穿屏</button>
+    <button class="chap" onclick="jump('vHero', 6.1)">06.1s 立体街区实景锚点</button>
+    <button class="chap" onclick="jump('vHero', 8.8)">08.8s 60min黄铜停单闸门</button>
+    <button class="chap" onclick="jump('vHero', 11.6)">11.6s 3D热敏小票+动态拼贴</button>
+    <button class="chap" onclick="jump('vHero', 16.0)">16.0s 锯齿撕纸分屏现炒</button>
+    <button class="chap" onclick="jump('vHero', 20.1)">20.1s 双3D手机 4829/交接点</button>
+    <button class="chap" onclick="jump('vHero', 24.6)">24.6s 零资金池直连圆珠桥</button>
+    <button class="chap" onclick="jump('vHero', 30.0)">30.0s 四连快切+品牌收束</button>
+  </div>
+</section>
+
+<script>
+function jump(id, sec) {
+  const v = document.getElementById(id);
+  if (!v) return;
+  v.currentTime = sec;
+  v.play();
+}
+</script>
 </body>
 </html>
