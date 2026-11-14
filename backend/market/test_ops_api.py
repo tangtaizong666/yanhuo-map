@@ -997,6 +997,16 @@ class OpsGovernanceApiTests(TestCase):
         )
         paused_demo.save(update_fields=['current_session'])
 
+        null_session_demo = Stall.objects.create(
+            merchant=self.stall.merchant,
+            area=self.stall.area,
+            name='无场次示例摊',
+            category='甜品',
+            is_demo=True,
+            is_visible=True,
+            current_session=None,
+        )
+
         hidden_demo = Stall.objects.create(
             merchant=self.stall.merchant,
             area=self.stall.area,
@@ -1042,16 +1052,18 @@ class OpsGovernanceApiTests(TestCase):
             self.assertEqual(denied.status_code, 403)
             self.assertEqual(denied.data['code'], 'demo_only')
 
-        # 1-click restore reopens visible demo stalls only, leaving real & hidden stalls untouched
+        # 1-click restore reopens visible demo stalls only (including current_session=None), leaving real & hidden untouched
         restored = self.api.post('/api/v1/ops/demo-stalls/restore', {}, format='json')
         self.assertEqual(restored.status_code, 200, restored.data)
         self.assertIn(demo_stall.pk, restored.data['stall_ids'])
         self.assertIn(paused_demo.pk, restored.data['stall_ids'])
+        self.assertIn(null_session_demo.pk, restored.data['stall_ids'])
         self.assertNotIn(hidden_demo.pk, restored.data['stall_ids'])
         self.assertNotIn(real_stall.pk, restored.data['stall_ids'])
 
         demo_stall.refresh_from_db()
         paused_demo.refresh_from_db()
+        null_session_demo.refresh_from_db()
         hidden_demo.refresh_from_db()
         real_stall.refresh_from_db()
         cfg = SiteConfiguration.current()
@@ -1059,6 +1071,7 @@ class OpsGovernanceApiTests(TestCase):
         self.assertTrue(demo_stall.accepting_orders)
         self.assertIsNone(demo_stall.current_session.closes_at)
         self.assertEqual(paused_demo.effective_status(cfg), 'open')
+        self.assertEqual(null_session_demo.effective_status(cfg), 'open')
         self.assertEqual(hidden_demo.effective_status(cfg), 'closed')
         self.assertEqual(real_stall.effective_status(cfg), 'stale')
         self.assertTrue(
@@ -1090,23 +1103,57 @@ class OpsGovernanceApiTests(TestCase):
         self.assertEqual(real_stall.effective_status(cfg), 'stale')
         self.assertTrue(Event.objects.filter(type='stall_stale', stall=real_stall).exists())
 
-        # Short stale_minutes (< 30) bypasses auto-refresh so live roadshow expiry tests still trigger stale
+        # Short stale_minutes (< 30) bypasses both periodic and startup auto-refresh so live expiry demos still trigger stale
         cfg.stale_minutes = 10
         cfg.save()
         demo_stall.current_session.last_confirmed_at = timezone.now() - timedelta(minutes=15)
         demo_stall.current_session.save(update_fields=['last_confirmed_at'])
         call_command('expire_orders', '--keep-demo-fresh')
+        self.assertEqual(recover_startup_demo_stalls(), 0)
         demo_stall.refresh_from_db()
         self.assertEqual(demo_stall.effective_status(cfg), 'stale')
 
-        # Startup recovery reopens demo stalls if 0 demo stalls remain open
+        # Startup recovery clears untouched seed_demo 6h closes_at, preserves merchant-set closes_at,
+        # and never reopens manually closed/paused demo stalls even when 0 demo stalls are open.
         cfg.stale_minutes = 60
         cfg.save()
+        seeded_at = timezone.now() - timedelta(hours=7)
+        demo_stall.current_session = BusinessSession.objects.create(
+            stall=demo_stall,
+            status='open',
+            opened_at=seeded_at,
+            last_confirmed_at=seeded_at,
+            closes_at=seeded_at + timedelta(hours=6),
+        )
+        demo_stall.save(update_fields=['current_session'])
+
+        merchant_set_at = timezone.now() - timedelta(minutes=10)
+        expected_merchant_close = merchant_set_at + timedelta(hours=6)
+        null_session_demo.current_session = BusinessSession.objects.create(
+            stall=null_session_demo,
+            status='open',
+            opened_at=merchant_set_at,
+            last_confirmed_at=merchant_set_at,
+            closes_at=expected_merchant_close,
+        )
+        null_session_demo.save(update_fields=['current_session'])
+        AuditLog.objects.create(actor=self.vendor, action='stall_status', target=str(null_session_demo.pk))
+
+        refreshed = recover_startup_demo_stalls()
+        self.assertGreaterEqual(refreshed, 1)
+        demo_stall.refresh_from_db()
+        null_session_demo.refresh_from_db()
+        paused_demo.refresh_from_db()
+        self.assertEqual(demo_stall.effective_status(cfg), 'open')
+        self.assertIsNone(demo_stall.current_session.closes_at)
+        self.assertEqual(null_session_demo.current_session.closes_at, expected_merchant_close)
+        self.assertEqual(paused_demo.current_session.status, 'paused')
+
+        # Even if all visible demo stalls are manually closed/paused, startup recovery does not override vendor choices
         for s in Stall.objects.filter(is_demo=True, is_visible=True).select_related('current_session'):
             if s.current_session:
                 s.current_session.status = 'closed'
                 s.current_session.save(update_fields=['status'])
-        reopened = recover_startup_demo_stalls()
-        self.assertGreaterEqual(reopened, 2)
+        self.assertEqual(recover_startup_demo_stalls(), 0)
         demo_stall.refresh_from_db()
-        self.assertEqual(demo_stall.effective_status(cfg), 'open')
+        self.assertEqual(demo_stall.effective_status(cfg), 'closed')

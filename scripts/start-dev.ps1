@@ -61,9 +61,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Demo data could not be prepared.' }
     }
     if ($demoActive -and -not $NoSeed) {
-        $refreshDemoArgs = @((Join-Path $backendDir 'manage.py'), 'refresh_demo_stalls', '--startup')
-        if ($newDatabase) { $refreshDemoArgs += '--clear-seeded-closing' }
-        & $pythonExe @refreshDemoArgs
+        & $pythonExe (Join-Path $backendDir 'manage.py') refresh_demo_stalls --startup
         if ($LASTEXITCODE -ne 0) { throw 'Demo stall sessions could not be refreshed.' }
     }
     Push-Location $frontendDir

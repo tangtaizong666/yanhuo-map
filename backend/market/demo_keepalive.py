@@ -12,17 +12,35 @@ from django.db import transaction
 from django.utils import timezone
 
 from .errors import BusinessError
-from .models import BusinessSession, SiteConfiguration, Stall
+from .models import AuditLog, BusinessSession, SiteConfiguration, Stall
 
 MIN_AUTO_REFRESH_STALE_MINUTES = 30
+SEEDED_CLOSING_SECONDS = 6 * 3600
+SEEDED_CLOSING_TOLERANCE_SECONDS = 5
 
 
 def demo_environment_active() -> bool:
     return bool(settings.DEMO_MODE and not settings.PRODUCTION)
 
 
-def _open_demo_stall(stall: Stall, now) -> None:
-    previous = stall.current_session
+def _is_untouched_seeded_closing(
+    stall_id: int,
+    session: BusinessSession,
+    merchant_touched_targets: set[str],
+) -> bool:
+    if session.closes_at is None or session.opened_at is None:
+        return False
+    if str(stall_id) in merchant_touched_targets:
+        return False
+    span = (session.closes_at - session.opened_at).total_seconds()
+    return abs(span - SEEDED_CLOSING_SECONDS) <= SEEDED_CLOSING_TOLERANCE_SECONDS
+
+
+def _open_demo_stall(
+    stall: Stall,
+    previous: BusinessSession | None,
+    now,
+) -> None:
     ended = (
         not previous
         or previous.status == 'closed'
@@ -56,6 +74,7 @@ def _open_demo_stall(stall: Stall, now) -> None:
             session_updates.append('stop_orders_at')
         if session_updates:
             previous.save(update_fields=session_updates)
+        stall.current_session = previous
     if not stall.accepting_orders:
         stall.accepting_orders = True
         stall_updates.append('accepting_orders')
@@ -63,13 +82,7 @@ def _open_demo_stall(stall: Stall, now) -> None:
         stall.save(update_fields=stall_updates)
 
 
-def keep_open_demo_stalls_fresh(config=None, *, now=None) -> int:
-    """Refresh `last_confirmed_at` on already-open demo stalls in dev preview.
-
-    Respects manual `'closed'` / `'paused'` sessions, future `closes_at`
-    schedules, real (`is_demo=False`) stalls, and short `stale_minutes < 30`
-    thresholds used when demonstrating location-expiry auto-stop live.
-    """
+def _refresh_open_demo_sessions(config=None, *, lock_rows: bool = False, now=None) -> int:
     if not demo_environment_active():
         return 0
     cfg = config or SiteConfiguration.current()
@@ -77,71 +90,74 @@ def keep_open_demo_stalls_fresh(config=None, *, now=None) -> int:
         return 0
     now = now or timezone.now()
     refresh_cutoff = now - timedelta(minutes=max(10, cfg.stale_minutes // 2))
+
+    # Lock only `market_stall` rows (never join nullable `current_session` in a
+    # `FOR NO KEY UPDATE` query, which PostgreSQL rejects on outer joins).
+    base_qs = Stall.objects.filter(is_demo=True, is_visible=True).order_by('pk')
+    if lock_rows:
+        base_qs = base_qs.select_for_update(no_key=True)
+    stalls = list(base_qs)
+    if not stalls:
+        return 0
+
+    session_ids = [s.current_session_id for s in stalls if s.current_session_id]
+    if not session_ids:
+        return 0
+    sessions_by_id = BusinessSession.objects.in_bulk(session_ids)
+    merchant_touched_targets = set(
+        AuditLog.objects.filter(
+            action='stall_status',
+            target__in=[str(s.pk) for s in stalls],
+        ).values_list('target', flat=True)
+    )
+
     refreshed = 0
-    for stall in Stall.objects.select_related('current_session').filter(
-        is_demo=True,
-        is_visible=True,
-        current_session__status='open',
-    ):
-        session = stall.current_session
-        if not session:
+    for stall in stalls:
+        session = sessions_by_id.get(stall.current_session_id)
+        if not session or session.status != 'open':
             continue
-        if session.closes_at and session.closes_at <= now:
+        untouched_seeded = _is_untouched_seeded_closing(
+            stall.pk,
+            session,
+            merchant_touched_targets,
+        )
+        if session.closes_at and session.closes_at <= now and not untouched_seeded:
             continue
+
+        updates: dict = {}
+        if untouched_seeded:
+            updates['closes_at'] = None
         if session.last_confirmed_at is None or session.last_confirmed_at < refresh_cutoff:
-            updated = BusinessSession.objects.filter(
+            updates['last_confirmed_at'] = now
+        if updates:
+            refreshed += BusinessSession.objects.filter(
                 pk=session.pk,
                 status='open',
-            ).update(last_confirmed_at=now)
-            refreshed += updated
+            ).update(**updates)
     return refreshed
 
 
-def recover_startup_demo_stalls(*, clear_seeded_closing: bool = False, now=None) -> int:
-    """Ensure local dev startup never boots into an all-closed / all-stale state."""
+def keep_open_demo_stalls_fresh(config=None, *, now=None) -> int:
+    """Refresh `last_confirmed_at` on already-open demo stalls in dev preview.
+
+    Respects manual `'closed'` / `'paused'` sessions, merchant-set `closes_at`
+    or `stop_orders_at` schedules, real (`is_demo=False`) stalls, and short
+    `stale_minutes < 30` thresholds used when demonstrating location expiry.
+    """
+    return _refresh_open_demo_sessions(config, lock_rows=False, now=now)
+
+
+def recover_startup_demo_stalls(*, now=None) -> int:
+    """Refresh expired open demo sessions on `start-dev.ps1` startup.
+
+    Follows the same non-intrusive rules as `keep_open_demo_stalls_fresh`: never
+    reopens stalls manually paused/closed by a vendor and backs off when
+    `stale_minutes < 30`, while clearing untouched `seed_demo` 6-hour defaults.
+    """
     if not demo_environment_active():
         return 0
-    now = now or timezone.now()
-    cfg = SiteConfiguration.current()
-    refresh_cutoff = now - timedelta(minutes=max(10, cfg.stale_minutes // 2))
-    touched_ids: set[int] = set()
     with transaction.atomic():
-        stalls = list(
-            Stall.objects.select_for_update(no_key=True)
-            .select_related('current_session')
-            .filter(is_demo=True, is_visible=True)
-            .order_by('pk')
-        )
-        if not stalls:
-            return 0
-        for stall in stalls:
-            session = stall.current_session
-            if not session or session.status != 'open':
-                continue
-            if session.closes_at and session.closes_at <= now:
-                _open_demo_stall(stall, now)
-                touched_ids.add(stall.pk)
-                continue
-            session_updates = []
-            if session.last_confirmed_at is None or session.last_confirmed_at < refresh_cutoff:
-                session.last_confirmed_at = now
-                session_updates.append('last_confirmed_at')
-            if clear_seeded_closing and session.closes_at is not None:
-                session.closes_at = None
-                session_updates.append('closes_at')
-            if session.stop_orders_at and session.stop_orders_at <= now:
-                session.stop_orders_at = None
-                session_updates.append('stop_orders_at')
-            if session_updates:
-                session.save(update_fields=session_updates)
-                touched_ids.add(stall.pk)
-
-        open_count = sum(1 for stall in stalls if stall.effective_status(cfg) == 'open')
-        if open_count == 0:
-            for stall in stalls:
-                _open_demo_stall(stall, now)
-                touched_ids.add(stall.pk)
-    return len(touched_ids)
+        return _refresh_open_demo_sessions(lock_rows=True, now=now)
 
 
 def restore_demo_stalls(*, now=None) -> dict:
@@ -156,12 +172,13 @@ def restore_demo_stalls(*, now=None) -> dict:
     with transaction.atomic():
         stalls = list(
             Stall.objects.select_for_update(no_key=True)
-            .select_related('current_session')
             .filter(is_demo=True, is_visible=True)
             .order_by('pk')
         )
+        session_ids = [s.current_session_id for s in stalls if s.current_session_id]
+        sessions_by_id = BusinessSession.objects.in_bulk(session_ids) if session_ids else {}
         for stall in stalls:
-            _open_demo_stall(stall, now)
+            _open_demo_stall(stall, sessions_by_id.get(stall.current_session_id), now)
         stall_ids = [stall.pk for stall in stalls]
     return {
         'restored_count': len(stall_ids),
