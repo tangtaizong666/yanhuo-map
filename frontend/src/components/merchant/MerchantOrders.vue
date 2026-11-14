@@ -1028,7 +1028,7 @@ async function performAction(order: any, value: string, explanation = "") {
     const code = (pickupCodes[order.id] || "").trim();
     if (!/^(\d{4}|\d{8})$/.test(code)) {
       notify(
-        `请输入顾客出示的 4 位${isDelivery(order) ? "收餐码" : "取餐码"}`,
+        `请输入顾客出示的 4 位（或 8 位备用）${isDelivery(order) ? "收餐码" : "取餐码"}`,
         "error",
       );
       return;
@@ -1899,11 +1899,13 @@ onUnmounted(() => {
                 class="m-orders-pickup"
                 @submit.prevent="performAction(selectedOrder, 'complete')"
               >
-                <label for="detail-pickup-code"
-                  >核验顾客的 4 位{{
-                    isDelivery(selectedOrder) ? "收餐码" : "取餐码"
-                  }}</label
-                >
+                <span class="m-orders-pickup-head">
+                  <label for="detail-pickup-code"
+                    >核验顾客的 4 位{{
+                      isDelivery(selectedOrder) ? "收餐码" : "取餐码"
+                    }}</label
+                  ><small id="detail-pickup-code-hint">兼容 8 位备用码</small>
+                </span>
                 <div>
                   <input
                     id="detail-pickup-code"
@@ -1913,6 +1915,7 @@ onUnmounted(() => {
                     pattern="[0-9]{4}([0-9]{4})?"
                     maxlength="8"
                     minlength="4"
+                    aria-describedby="detail-pickup-code-hint"
                     :placeholder="
                       isDelivery(selectedOrder) ? '输入收餐码' : '输入取餐码'
                     "
@@ -3968,6 +3971,43 @@ onUnmounted(() => {
 .m-orders-drawer .m-orders-pickup label {
   font-size: 15px;
   color: #654932;
+}
+.m-orders-pickup-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.m-orders-pickup-head small {
+  font-size: 12px;
+  color: #8c7258;
+}
+@media (min-width: 768px) and (max-width: 960px) {
+  .m-primary-stages {
+    gap: 6px;
+  }
+  .m-primary-stages button {
+    min-height: 50px;
+    padding: 8px 6px;
+    gap: 6px;
+  }
+  .m-primary-stages button span {
+    font-size: 15px;
+  }
+  .m-primary-stages button strong {
+    font-size: 18px;
+  }
+  .m-simple-orders .m-orders-card {
+    padding: 16px 18px;
+  }
+  .m-simple-orders .m-simple-primary {
+    min-height: 48px;
+    font-size: 17px !important;
+  }
+  .m-simple-orders .m-orders-detail-link {
+    min-height: 48px;
+  }
 }
 .m-orders-drawer .m-order-more summary {
   font-size: 14px;

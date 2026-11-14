@@ -1842,6 +1842,21 @@
 .m-more-logout { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 48px; border: 1px solid var(--m-border); border-radius: 12px; background: white; color: #785d47; font-size: 15px; }
 .m-reminder-settings { max-width: 820px; margin-top: 24px; padding-top: 22px; border-top: 1px solid var(--m-border); }
 .m-reminder-settings > h2 { margin-bottom: 12px; }
+@media (min-width: 768px) and (max-width: 960px) {
+  .m-sidebar { width: 164px; padding: 20px 12px 16px; }
+  .m-workspace { margin-left: 164px; }
+  .m-brand { font-size: 17px; gap: 8px; margin: 0 2px; }
+  .m-brand > span { width: 36px; height: 38px; border-radius: 11px; }
+  .m-brand small { letter-spacing: 1.5px; font-size: 11px; margin-top: 2px; }
+  .m-sidebar nav { margin-top: 22px; gap: 6px; }
+  .m-sidebar nav a { min-height: 46px; padding: 0 10px; gap: 9px; font-size: 14px; }
+  .m-sidebar nav a.active:before { margin-left: -10px; margin-right: 4px; }
+  .m-sidebar-bottom { padding-top: 18px; }
+  .m-sidebar-bottom > a, .m-sidebar-bottom > button { padding: 0 10px; gap: 8px; }
+  .m-topbar { height: 62px; padding: 0 20px; }
+  .m-content { padding: 18px 20px 28px; }
+  .m-orders-workspace .m-content { padding-top: 8px; }
+}
 @media (max-width: 767px) {
   .m-shell { font-size: 15px; }
   .m-topbar { height: 56px; padding: 0 16px; }

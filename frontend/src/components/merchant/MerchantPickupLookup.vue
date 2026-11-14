@@ -32,7 +32,7 @@ onBeforeUnmount(clear);
 async function lookup() {
   if (busy.value || session.user?.id !== owner) return;
   if (!/^(\d{4}|\d{8})$/.test(code.value.trim())) {
-    error.value = "请输入同学出示的4 位取餐码。";
+    error.value = "请输入同学出示的 4 位（或 8 位备用）取餐码。";
     return;
   }
   if (ambiguous.value && !number.value.trim()) {
@@ -81,7 +81,9 @@ async function lookup() {
   <section class="pickup-lookup" aria-label="取餐码查单">
     <div>
       <h3><KeyRound :size="20" />同学来取餐了</h3>
-      <p>输入取餐码查找本摊已出餐的自取订单。查单不会收款，也不会直接核销。</p>
+      <p id="pickup-lookup-hint">
+        输入取餐码查找本摊已出餐的自取订单（常规 4 位，兼容 8 位备用或历史码）。查单不会收款，也不会直接核销。
+      </p>
     </div>
     <form @submit.prevent="lookup">
       <label
@@ -92,6 +94,7 @@ async function lookup() {
           minlength="4"
           maxlength="8"
           autocomplete="off"
+          aria-describedby="pickup-lookup-hint"
           required
           :disabled="busy"
           placeholder="请同学出示取餐码" /></label
