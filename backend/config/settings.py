@@ -27,6 +27,19 @@ AMAP_KEY = os.getenv('AMAP_KEY', '')
 AMAP_SECURITY_CODE = os.getenv('AMAP_SECURITY_CODE', '')
 AMAP_PROXY = '/api/v1/amap-proxy/_AMapService'
 AMAP_PROXY_DAILY_LIMIT = int(os.getenv('AMAP_PROXY_DAILY_LIMIT', '20000'))
+# Optional server-side multimodal assistant for merchant dish-photo listing drafts.
+DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY', '').strip()
+DEEPSEEK_API_BASE_URL = os.getenv('DEEPSEEK_API_BASE_URL', 'https://api.deepseek.com').strip().rstrip('/')
+DEEPSEEK_VISION_MODEL = os.getenv('DEEPSEEK_VISION_MODEL', 'deepseek-flash').strip()
+AI_PRODUCT_DRAFT_DAILY_LIMIT = int(os.getenv('AI_PRODUCT_DRAFT_DAILY_LIMIT', '500'))
+AI_PRODUCT_DRAFT_TIMEOUT_SECONDS = int(os.getenv('AI_PRODUCT_DRAFT_TIMEOUT_SECONDS', '12'))
+_deepseek_url = urlparse(DEEPSEEK_API_BASE_URL)
+if (_deepseek_url.scheme != 'https' or not _deepseek_url.netloc
+        or _deepseek_url.username or _deepseek_url.password
+        or _deepseek_url.query or _deepseek_url.fragment or not DEEPSEEK_VISION_MODEL):
+    raise ImproperlyConfigured('DEEPSEEK_API_BASE_URL must be an HTTPS endpoint without credentials/query and DEEPSEEK_VISION_MODEL must be set.')
+if AI_PRODUCT_DRAFT_DAILY_LIMIT < 0 or not (1 <= AI_PRODUCT_DRAFT_TIMEOUT_SECONDS <= 15):
+    raise ImproperlyConfigured('AI_PRODUCT_DRAFT limits are out of range.')
 # Payment credentials stay in an operator-owned server file, never in frontend settings.
 WECHAT_PAY_ENABLED = os.getenv('WECHAT_PAY_ENABLED', 'false').lower() == 'true'
 WECHAT_PAY_CONFIG_FILE = os.getenv('WECHAT_PAY_CONFIG_FILE', '')
@@ -118,6 +131,7 @@ REST_FRAMEWORK = {
         'user': '6000/hour',
         'auth': '300/hour' if DEMO_MODE and not PRODUCTION else '30/hour',
         'upload': '600/hour' if DEMO_MODE and not PRODUCTION else '60/hour',
+        'ai_draft': '180/hour' if DEMO_MODE and not PRODUCTION else '30/hour',
     },
     'EXCEPTION_HANDLER': 'market.errors.exception_handler',
 }

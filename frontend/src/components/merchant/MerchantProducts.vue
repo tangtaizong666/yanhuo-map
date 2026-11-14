@@ -2,6 +2,7 @@
 import { ownedImage } from "../../lib/media";
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
 import {
+  Camera,
   Check,
   ChevronDown,
   ImagePlus,
@@ -14,9 +15,11 @@ import {
   X,
 } from "lucide-vue-next";
 import { api, ApiError, money } from "../../lib/api";
+import { prepareDishPhoto } from "../../lib/imagePrepare";
 import { notify } from "../../lib/notify";
 import MerchantRestock from "./MerchantRestock.vue";
 import MerchantInventoryCorrection from "./MerchantInventoryCorrection.vue";
+import MerchantPhotoAssist, { type AssistDraft } from "./MerchantPhotoAssist.vue";
 import { readStorage, writeStorage, removeStorage } from "../../lib/storage";
 import { newRequestKey } from "../../lib/engagement";
 import { useSession } from "../../stores/session";
@@ -66,6 +69,21 @@ const products = computed<Product[]>(() => props.stall?.products || []);
 const categories = computed(() => [
   ...new Set(products.value.map((p) => p.category || "未分类")),
 ]);
+const suggestedPrices = computed(() => {
+  const counts = new Map<string, number>();
+  for (const item of products.value) {
+    if (item.price_cents > 0) {
+      const formatted = Number((item.price_cents / 100).toFixed(2)).toString();
+      counts.set(formatted, (counts.get(formatted) || 0) + 1);
+    }
+  }
+  const fromStall = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 2)
+    .map(([val]) => val);
+  const merged = [...new Set([...fromStall, "6", "8", "10", "12", "15"])];
+  return merged.slice(0, 5);
+});
 function supplyState(product: Product): DisplayAvailability {
   if (props.discoveryOnly && product.display_availability) return product.display_availability;
   return product.sale_paused ? "paused" : product.stock === 0 ? "sold_out" : "available";
@@ -115,6 +133,11 @@ const shown = computed(() =>
   }),
 );
 const modal = ref(false);
+const photoAssistOpen = ref(false);
+const photoAssistError = ref("");
+const extrasForcedOpen = ref(false);
+let photoAssistReturnFocus: HTMLElement | null = null;
+let photoAssistPreviousOverflow = "";
 const discardOpen = ref(false);
 const editSaveUncertain = ref(false);
 const discardPanel = ref<HTMLElement>();
@@ -158,11 +181,129 @@ watch(
     category.value = "all";
     status.value = "all";
     closeEditor(true);
+    closePhotoAssist(false);
   },
 );
+function openPhotoAssist(trigger?: EventTarget | null) {
+  photoAssistError.value = "";
+  photoAssistReturnFocus =
+    trigger instanceof HTMLElement
+      ? trigger
+      : (document.activeElement as HTMLElement);
+  photoAssistPreviousOverflow = document.body.style.overflow;
+  document.body.style.overflow = "hidden";
+  photoAssistOpen.value = true;
+}
+function closePhotoAssist(restoreFocus = true) {
+  if (!photoAssistOpen.value) return;
+  photoAssistOpen.value = false;
+  photoAssistError.value = "";
+  if (!modal.value) document.body.style.overflow = photoAssistPreviousOverflow;
+  if (restoreFocus) nextTick(() => photoAssistReturnFocus?.focus());
+}
+function switchEditorToPhotoAssist() {
+  if (saving.value || uploading.value) return;
+  const trigger = returnFocus;
+  closeEditor(true);
+  openPhotoAssist(trigger);
+}
+function handoffFromPhotoAssist(assistDraft: AssistDraft) {
+  const trigger = photoAssistReturnFocus;
+  closePhotoAssist(false);
+  discardOpen.value = false;
+  editSaveUncertain.value = false;
+  editingId.value = null;
+  Object.assign(form, assistDraft);
+  original = blank();
+  extrasForcedOpen.value = Boolean(assistDraft.image || assistDraft.description);
+  formError.value = "";
+  returnFocus = trigger;
+  previousOverflow = photoAssistPreviousOverflow;
+  document.body.style.overflow = "hidden";
+  modal.value = true;
+  nextTick(() => nameInput.value?.focus());
+}
+function openPendingFromPhotoAssist() {
+  const trigger = photoAssistReturnFocus;
+  closePhotoAssist(false);
+  startEditor(undefined, trigger);
+}
+async function submitPhotoAssistDraft(assistDraft: AssistDraft) {
+  if (saving.value || pendingCreation.value) return;
+  photoAssistError.value = "";
+  try {
+    if (!assistDraft.name.trim()) throw new Error("请填写商品名称。");
+    const values = {
+      name: assistDraft.name.trim(),
+      category: assistDraft.category.trim(),
+      description: assistDraft.description.trim(),
+      image: assistDraft.image.trim(),
+      price_cents: priceCents(assistDraft.price),
+      ...(!props.discoveryOnly ? { stock: stockValue(assistDraft.stock) } : {}),
+      ...(props.discoveryOnly
+        ? { display_availability: assistDraft.display_availability }
+        : {}),
+      is_active: true,
+      taste_options: [],
+    };
+    const record = {
+      body: { ...values, idempotency_key: newRequestKey("product") },
+      draft: JSON.parse(JSON.stringify(assistDraft)),
+    };
+    if (!writeStorage(creationKey, JSON.stringify(record), "session")) {
+      throw new Error(
+        "浏览器无法保存新增重试记录，暂未提交。请允许本站保存数据后重试。",
+      );
+    }
+    pendingCreation.value = record;
+    saving.value = true;
+    const result = await api<Product>(
+      `/merchant/stalls/${props.stall.id}/products`,
+      {
+        method: "POST",
+        body: pendingCreation.value.body,
+      },
+    );
+    if (
+      !result ||
+      !Number.isSafeInteger(result.id) ||
+      result.name !== pendingCreation.value.body.name ||
+      result.price_cents !== pendingCreation.value.body.price_cents
+    ) {
+      throw new Error("新增响应无法核对，请重试确认原结果。");
+    }
+    pendingCreation.value = null;
+    removeStorage(creationKey, "session");
+    notify(
+      props.discoveryOnly
+        ? "菜品实拍展示已上架，线上库存未改变"
+        : values.stock === 0
+          ? "商品已保存，当前 0 份；补货后才可购买"
+          : "菜品已上架为可售，仍以摊位营业与接单条件为准",
+      "success",
+    );
+    emit("refresh");
+    closePhotoAssist(true);
+  } catch (error) {
+    const definitelyRejected =
+      error instanceof ApiError &&
+      (error.data?.submitted === false ||
+        [400, 403, 404, 409, 422].includes(error.status));
+    if (definitelyRejected) {
+      pendingCreation.value = null;
+      removeStorage(creationKey, "session");
+    }
+    photoAssistError.value = pendingCreation.value
+      ? "新增结果尚未确认。请点击确认上一笔新增重试，不会重复建品。"
+      : (error as Error).message;
+  } finally {
+    saving.value = false;
+  }
+}
 function startEditor(product?: Product, trigger?: EventTarget | null) {
   discardOpen.value = false;
   editSaveUncertain.value = false;
+  extrasForcedOpen.value = false;
   editingId.value = product?.id ?? null;
   Object.assign(
     form,
@@ -220,6 +361,8 @@ function discardLocalEdits() {
 }
 onBeforeUnmount(() => {
   if (modal.value) document.body.style.overflow = previousOverflow;
+  else if (photoAssistOpen.value)
+    document.body.style.overflow = photoAssistPreviousOverflow;
 });
 function modalKeys(event: KeyboardEvent) {
   if (event.key === "Escape") {
@@ -280,20 +423,13 @@ async function uploadImage(event: Event) {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
   if (!file) return;
-  if (
-    !["image/jpeg", "image/png", "image/webp"].includes(file.type) ||
-    file.size > 5 * 1024 * 1024
-  ) {
-    formError.value = "请选择不超过 5 MB 的 JPG、PNG 或 WebP 图片。";
-    input.value = "";
-    return;
-  }
   uploading.value = true;
   formError.value = "";
   const selectedStall = props.stall.id;
   try {
+    const prepared = await prepareDishPhoto(file);
     const data = new FormData();
-    data.append("file", file);
+    data.append("file", prepared);
     const result = await api<{ url: string }>(
       `/merchant/stalls/${selectedStall}/image`,
       { method: "POST", body: data },
@@ -483,6 +619,12 @@ function tasteValues(groups: Draft["taste_options"]) {
           :to="`/stalls/${stall.id}`"
           @click="session.setConsumerPreview(true)"
           >预览菜单</RouterLink
+        ><button
+          type="button"
+          class="catalog-photo-btn"
+          @click="openPhotoAssist($event.currentTarget)"
+        >
+          <Camera :size="16" />拍照上架</button
         ><button class="catalog-primary" @click="startEditor(undefined, $event.currentTarget)">
           <Plus :size="18" />添加商品
         </button>
@@ -630,13 +772,22 @@ function tasteValues(groups: Draft["taste_options"]) {
             : discoveryOnly ? "先填菜名、价格与今天的供应状态；照片与介绍可以稍后完善。" : "先填菜名、价格和线上剩余可卖份数；照片与介绍可以稍后完善。"
         }}
       </p>
+      <div v-if="!products.length" class="catalog-empty-actions">
+        <button
+          type="button"
+          class="catalog-photo-btn"
+          @click="openPhotoAssist($event.currentTarget)"
+        >
+          <Camera :size="16" />拍照识图上架
+        </button>
+        <button
+          class="catalog-primary"
+          @click="startEditor(undefined, $event.currentTarget)"
+        >
+          <Plus :size="16" />添加第一件商品
+        </button>
+      </div>
       <button
-        v-if="!products.length"
-        class="catalog-primary"
-        @click="startEditor(undefined, $event.currentTarget)"
-      >
-        <Plus :size="16" />添加第一件商品</button
-      ><button
         v-else
         class="catalog-outline"
         @click="
@@ -649,6 +800,20 @@ function tasteValues(groups: Draft["taste_options"]) {
       </button>
     </div>
   </section>
+  <MerchantPhotoAssist
+    :open="photoAssistOpen"
+    :stall="stall"
+    :discovery-only="discoveryOnly"
+    :categories="categories"
+    :suggested-prices="suggestedPrices"
+    :pending-creation-exists="Boolean(pendingCreation)"
+    :saving="saving"
+    :submit-error="photoAssistError"
+    @close="closePhotoAssist()"
+    @submit-draft="submitPhotoAssistDraft"
+    @handoff-to-editor="handoffFromPhotoAssist"
+    @open-pending-recovery="openPendingFromPhotoAssist"
+  />
   <Teleport to="body"
     ><div
       v-if="modal"
@@ -690,6 +855,19 @@ function tasteValues(groups: Draft["taste_options"]) {
             class="editor-body"
             :disabled="saving || (editingId == null && !!pendingCreation)"
           >
+            <div
+              v-if="editingId == null && !pendingCreation && !form.image"
+              class="editor-photo-shortcut"
+            >
+              <span>有刚做好的实物？拍照可自动填菜名与介绍</span>
+              <button
+                type="button"
+                class="catalog-photo-btn compact"
+                @click="switchEditorToPhotoAssist"
+              >
+                <Camera :size="15" />去拍照上架
+              </button>
+            </div>
             <label class="editor-field"
               >商品名称 <span>*</span
               ><input
@@ -738,7 +916,7 @@ function tasteValues(groups: Draft["taste_options"]) {
             </p>
             <details
               class="editor-extras"
-              :open="Boolean(form.image && !ownedImage(form.image))"
+              :open="extrasForcedOpen || Boolean(form.image && !ownedImage(form.image))"
             >
               <summary>照片、分类与介绍（选填）</summary>
               <div class="editor-photo-row">
@@ -762,7 +940,7 @@ function tasteValues(groups: Draft["taste_options"]) {
                       @change="uploadImage"
                   /></label>
                   <p>
-                    JPG、PNG、WebP，最大 5 MB<br />使用真实照片，让好味道被看见。
+                    JPG、PNG、WebP（手机大图自动压缩）<br />使用真实照片，让好味道被看见。
                   </p>
                   <p
                     v-if="form.image && !ownedImage(form.image)"
@@ -1017,7 +1195,8 @@ function tasteValues(groups: Draft["taste_options"]) {
   margin-top: 7px;
 }
 .catalog-primary,
-.catalog-outline {
+.catalog-outline,
+.catalog-photo-btn {
   display: inline-flex;
   justify-content: center;
   align-items: center;
@@ -1028,6 +1207,38 @@ function tasteValues(groups: Draft["taste_options"]) {
   white-space: nowrap;
   font-weight: 600;
   font-size: 13px;
+}
+.catalog-photo-btn {
+  background: #fff3e6;
+  color: #b54c15;
+  border: 1px solid #ecc6a6;
+}
+.catalog-photo-btn:hover:not(:disabled) {
+  background: #ffe7cf;
+}
+.catalog-photo-btn.compact {
+  padding: 0 12px;
+  font-size: 13px;
+}
+.catalog-empty-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+.editor-photo-shortcut {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  background: #fff7ed;
+  border: 1px solid #edd9c2;
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: #6b5642;
 }
 .catalog-primary {
   background: #ed742f;
@@ -1672,14 +1883,17 @@ function tasteValues(groups: Draft["taste_options"]) {
   }
   .catalog-top-actions {
     flex: none;
+    flex-wrap: nowrap;
     gap: 6px;
   }
   .catalog-top-actions .catalog-outline {
     display: none;
   }
+  .catalog-top-actions .catalog-photo-btn,
   .catalog-top-actions .catalog-primary {
-    padding: 10px 12px;
-    font-size: 14px;
+    padding: 0 10px;
+    font-size: 13px;
+    gap: 4px;
   }
   .catalog-tools {
     margin-top: 14px;

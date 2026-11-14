@@ -1,5 +1,5 @@
 from django.urls import path
-from . import merchant, operations, ops_api, payment_views, views, recovery, counter
+from . import ai_catalogue, merchant, operations, ops_api, payment_views, views, recovery, counter
 from .proxy import amap_proxy
 from . import discovery_api
 
@@ -34,6 +34,7 @@ urlpatterns = [
     path('merchant/stalls/<int:stall_id>/delivery', merchant.delivery),
     path('merchant/stalls/<int:stall_id>/services', merchant.services),
     path('merchant/stalls/<int:stall_id>/products', merchant.products),
+    path('merchant/stalls/<int:stall_id>/ai-product-draft', ai_catalogue.ai_product_draft),
     path('merchant/stalls/<int:stall_id>/image', merchant.upload_image),
     path('merchant/products/<int:product_id>', merchant.product),
     path('merchant/products/<int:product_id>/stock-correction', counter.stock_correction),
