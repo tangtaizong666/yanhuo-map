@@ -55,4 +55,4 @@
 
 ## 试用前准备
 
-真实商家资料、认摊照片、计划时段、库存和免费口味由商家核对后填写。本轮未替商家编造这些数据。自动化演练与真实用户观察分开；见[本轮验证记录](daily-verification-20260929.md)、[真机与上线检查表](launch-device-checklist.md)、[观察任务卡](usability-pilot.md)。
+真实商家资料、认摊照片、计划时段、库存和免费口味由商家核对后填写。本轮未替商家编造这些数据。自动化演练与真实用户观察分开；见[真机与上线检查表](launch-device-checklist.md)、[观察任务卡](usability-pilot.md)。

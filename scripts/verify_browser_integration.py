@@ -172,6 +172,9 @@ def main():
                 if vite:
                     stop_owned(vite, graceful=True)
                 stop_owned(django)
+    keep_artifacts = os.environ.get("GITHUB_ACTIONS") == "true" or os.environ.get("KEEP_INTEGRATION_ARTIFACTS") == "1"
+    if not keep_artifacts:
+        shutil.rmtree(artifacts, ignore_errors=True)
     print("PASS: disposable browser/API integration; servers stopped and temporary database/media removed.", flush=True)
 
 

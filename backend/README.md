@@ -19,7 +19,7 @@ python -m venv .venv
 
 演示账号：`student`、`vendor`、`admin`，密码均为 `demo12345`。仅显式 `seed_demo` 创建；重复执行不会重置已有密码、库存、订单或位置确认时间。示例商户位置、资质均非真实运营数据。开发数据库不会在生产模式自动使用。
 
-显式模拟付款与外卖使用 `SERVICES_SIMULATION_ENABLED=true`，仅允许非生产 `DEMO_MODE` 下的示例摊位；订单、付款和退款保存各自模式快照，模拟不调用真实微信网关。普通商家只需使用店铺设置的服务开关，开发准备、模拟接口及后续真实接入见[模拟体验指南](../docs/simulation-guide.md)，实际验证见[模拟验证记录](../docs/simulation-verification.md)。
+显式模拟付款与外卖使用 `SERVICES_SIMULATION_ENABLED=true`，仅允许非生产 `DEMO_MODE` 下的示例摊位；订单、付款和退款保存各自模式快照，模拟不调用真实微信网关。普通商家只需使用店铺设置的服务开关，开发准备、模拟接口及后续真实接入见[模拟体验指南](../docs/simulation-guide.md)。
 
 平台管理台前端位于 `/ops`（登录页 `/ops/login`），对应治理接口 `/api/v1/ops/*`（要求 `is_staff` 且按模块校验 Django 模型／自定义权限）；底层 Django 维护后台继续保留在 `/admin/`。登录 `admin` 后可审核入驻、核验商户证照档案、启用摊位展示与交易资格、管理校园区域与交接点、核实现场反馈、导出对账单及设置位置过期/接单超时阈值。订单履约转换保持只读，状态变更仅通过商家与学生各自 API 执行，避免跳过库存、付款和核销规则。
 

@@ -44,4 +44,4 @@ Linux 依赖示例：`sudo apt-get install restic openssh-client openssl`。Powe
 
 `.github/workflows/verify.yml` 的部署 job 使用完全相同入口；后端 job 跑全 PostgreSQL 回归；浏览器 job 独立保存首次回归与弱网三次重复运行的日志、截图、trace。新增配置只有在远端实际运行之后，才可标为远端 CI 通过。
 
-最新结果和历史证据统一见 [运行验收证据索引](runtime-evidence-20261003.md)。生产巡检安装见 [巡检与告警](operations-monitor.md)，备份配置见 [备份与恢复](backup-recovery.md)。真实服务器、域名、商户支付、异机备份、告警接收人、Android／iPhone／微信实机及校园现场 48 小时观察分别待验收。
+生产巡检安装见 [巡检与告警](operations-monitor.md)，备份配置见 [备份与恢复](backup-recovery.md)。真实服务器、域名、商户支付、异机备份、告警接收人、Android／iPhone／微信实机及校园现场 48 小时观察分别待验收。

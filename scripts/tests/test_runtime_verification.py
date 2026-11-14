@@ -136,6 +136,13 @@ class RuntimeVerificationSafetyTests(unittest.TestCase):
         self.assertNotIn('file_server', qr_block)
         self.assertIn(r'media/merchants/(?P<stall_id>[0-9]+)/(?P<filename>qr-[A-Za-z0-9._-]+)', urls_py)
 
+    def test_browser_integration_prunes_passing_local_artifacts_unless_ci_or_retained(self):
+        repo_root = Path(__file__).resolve().parents[2]
+        source = (repo_root / 'scripts' / 'verify_browser_integration.py').read_text(encoding='utf-8')
+        self.assertIn('os.environ.get("GITHUB_ACTIONS") == "true"', source)
+        self.assertIn('os.environ.get("KEEP_INTEGRATION_ARTIFACTS") == "1"', source)
+        self.assertIn('shutil.rmtree(artifacts, ignore_errors=True)', source)
+
 
 if __name__ == '__main__':
     unittest.main()
