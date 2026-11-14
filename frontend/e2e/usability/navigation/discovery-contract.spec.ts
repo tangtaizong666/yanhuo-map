@@ -523,3 +523,52 @@ test("direct dish to stall inherits origin and deep subpages expose one-tap home
   await expect(page).toHaveURL(/\/orders\/99$/);
   expect(state.writes).toEqual([]);
 });
+
+test("long session replacements preserve root ancestor and chained unwind clicks settle at home", async ({ page }) => {
+  const state = await fixture(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await expect(page.locator('.stall-title[href="/stalls/71"]')).toBeVisible();
+  const homePos = await page.evaluate(() => Number(history.state?.position ?? 0));
+
+  // 1. Move to depth 1 (/search) and perform 70 in-place query/peer replacements (> 60 cap).
+  const mobileNav = page.getByRole("navigation", { name: "底部导航", exact: true });
+  await mobileNav.getByRole("link", { name: "地图", exact: true }).click();
+  await expect(page).toHaveURL(/\/map$/);
+
+  const searchInput = page.getByRole("textbox", { name: "搜索摊位或美食" });
+  await page.locator('header.site-header a[href="/cart"]').click();
+  await page.getByRole("link", { name: "继续发现好味道", exact: true }).click();
+  await expect(page).toHaveURL(/\/search\?type=dishes$/);
+
+  for (let i = 0; i < 70; i++) {
+    await searchInput.fill(`煎饼${i % 2 === 0 ? "" : "1"}`);
+    await searchInput.press("Enter");
+  }
+  expect(await page.evaluate(() => Number(history.state?.position ?? 0))).toBe(homePos + 1);
+
+  // Enter Stall -> Dish after >70 replacements and verify "回首页" still unwinds to homePos!
+  await searchInput.fill("煎饼");
+  await searchInput.press("Enter");
+  await page.locator('.dish-card[href="/stalls/71/products/711"]').click();
+  await expect(page).toHaveURL(/\/stalls\/71\/products\/711$/);
+  await page.getByRole("link", { name: "回首页", exact: true }).click();
+  await expect(page).toHaveURL(/\/$/);
+  expect(await page.evaluate(() => Number(history.state?.position ?? 0))).toBe(homePos);
+
+  // 2. Rapid chained unwind clicks (返回菜单 + 回首页) settle deterministically at "/" (homePos).
+  await page.locator('.stall-title[href="/stalls/71"]').click();
+  await expect(page).toHaveURL(/\/stalls\/71$/);
+  await page.getByRole("link", { name: "查看鸡蛋煎饼1详情", exact: true }).click();
+  await expect(page).toHaveURL(/\/stalls\/71\/products\/711$/);
+
+  await page.evaluate(() => {
+    const backLink = [...document.querySelectorAll<HTMLAnchorElement>(".dish-breadcrumb a")].find(a => a.textContent?.includes("返回菜单"));
+    const homeLink = [...document.querySelectorAll<HTMLAnchorElement>(".dish-breadcrumb a")].find(a => a.textContent?.includes("回首页"));
+    backLink?.click();
+    homeLink?.click();
+  });
+  await expect(page).toHaveURL(/\/$/);
+  expect(await page.evaluate(() => Number(history.state?.position ?? 0))).toBe(homePos);
+  expect(state.writes).toEqual([]);
+});

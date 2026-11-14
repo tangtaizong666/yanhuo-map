@@ -84,6 +84,14 @@ function filterFingerprint() {
 function routePath(fullPath: string) {
   return fullPath.split(/[?#]/, 1)[0] || "/";
 }
+function safeStampBrowseKey(key: string) {
+  if (history.state?.yanhuoBrowse === key) return;
+  try {
+    history.replaceState({ ...history.state, yanhuoBrowse: key }, "");
+  } catch {
+    /* Safari rate-limits replaceState above 100 calls/30s; in-memory state stays authoritative. */
+  }
+}
 function routeTier(path: string): RouteTier {
   if (path === "/") return "consumer-root";
   if (["/search", "/map", "/cart", "/orders", "/me"].includes(path))
@@ -218,7 +226,8 @@ export function useDetailReturn(fallback: () => string, fallbackLabel: string) {
       )
         return;
       event.preventDefault();
-      if (validOrigin()) router.back();
+      const valid = validOrigin();
+      if (valid) void goDelta(router, valid, -1);
       else void router.push(fallback());
     },
   };
@@ -355,35 +364,101 @@ function hasAncestorContext(curPos: number, currentScope: string) {
   return false;
 }
 
-let activeGo: Promise<NavigationFailure | void | undefined> | null = null;
+let goSeq = 0;
+let activeGo: {
+  seq: number;
+  targetPath: string;
+  targetPos: number;
+  cancel: () => void;
+  promise: Promise<NavigationFailure | void | undefined>;
+} | null = null;
+
+function pruneEntries(currentEntryKey: string, currentPosition: number) {
+  if (entries.size <= 60) return;
+  const protectedKeys = new Set<string>([currentEntryKey]);
+  for (let pos = 0; pos <= currentPosition; pos++) {
+    const key = stackByPosition.get(pos);
+    if (key) protectedKeys.add(key);
+  }
+  for (const candidate of entries.keys()) {
+    if (entries.size <= 60) break;
+    if (protectedKeys.has(candidate)) continue;
+    entries.delete(candidate);
+    for (const [pos, mappedKey] of stackByPosition.entries()) {
+      if (mappedKey === candidate) stackByPosition.delete(pos);
+    }
+  }
+}
+
 function goDelta(
   router: Router,
+  anc: Entry,
   delta: number,
 ): Promise<NavigationFailure | void | undefined> {
-  if (activeGo) return activeGo;
+  if (activeGo) {
+    if (
+      activeGo.targetPath === anc.path &&
+      activeGo.targetPos === anc.position
+    ) {
+      return activeGo.promise;
+    }
+    const prior = activeGo.promise;
+    return prior.then(() => router.push(anc.path));
+  }
+  const seq = ++goSeq;
+  const startScope = scope();
+  let cancelFn = () => {};
   const promise = new Promise<NavigationFailure | void | undefined>(
     (resolve) => {
       let settled = false;
-      const done = (failure?: NavigationFailure | void) => {
-        if (settled) return;
+      const cleanup = () => {
+        if (settled) return false;
         settled = true;
         clearTimeout(timer);
         stopAfter();
         stopError();
-        if (activeGo === promise) activeGo = null;
-        resolve(failure);
+        if (activeGo?.seq === seq) activeGo = null;
+        return true;
       };
-      const stopAfter = router.afterEach((_to, _from, failure) => {
-        done(failure);
+      cancelFn = () => {
+        if (cleanup()) resolve();
+      };
+      const fallbackIfNeeded = () => {
+        if (
+          scope() === startScope &&
+          router.currentRoute.value.fullPath !== anc.path
+        ) {
+          resolve(router.replace(anc.path));
+          return;
+        }
+        resolve();
+      };
+      const stopAfter = router.afterEach((to, _from, failure) => {
+        if (failure) {
+          if (cleanup()) fallbackIfNeeded();
+          return;
+        }
+        const pos = Number(history.state?.position ?? -1);
+        if (to.fullPath === anc.path && (pos === anc.position || pos < 0)) {
+          if (cleanup()) resolve();
+        }
       });
       const stopError = router.onError(() => {
-        done();
+        if (cleanup()) fallbackIfNeeded();
       });
-      const timer = window.setTimeout(() => done(), 400);
+      const timer = window.setTimeout(() => {
+        if (cleanup()) fallbackIfNeeded();
+      }, 2500);
       router.go(delta);
     },
   );
-  activeGo = promise;
+  activeGo = {
+    seq,
+    targetPath: anc.path,
+    targetPos: anc.position,
+    cancel: cancelFn,
+    promise,
+  };
   return promise;
 }
 
@@ -419,6 +494,7 @@ export function installBrowseReturn(router: Router) {
         scope,
         () => {
           cancelRestore?.();
+          activeGo?.cancel();
           pending = null;
           entries.clear();
           stackByPosition.clear();
@@ -456,7 +532,10 @@ export function installBrowseReturn(router: Router) {
       entries.set(current.key, current);
       stackByPosition.set(current.position, current.key);
       currentKey.value = current.key;
-      history.replaceState({ ...history.state, yanhuoBrowse: current.key }, "");
+      safeStampBrowseKey(current.key);
+    }
+    if (!popKey && current && to.path !== from.path) {
+      safeStampBrowseKey(current.key);
     }
     prevEntry = current;
     if (
@@ -485,7 +564,7 @@ export function installBrowseReturn(router: Router) {
     clickedLink = null;
   });
 
-  router.afterEach((to: RouteLocationNormalized, _from, failure) => {
+  router.afterEach((to: RouteLocationNormalized, from, failure) => {
     if (failure) {
       pending = null;
       return;
@@ -511,17 +590,22 @@ export function installBrowseReturn(router: Router) {
       scope: currentScope,
       origin: inheritedOrigin,
     };
-    history.replaceState({ ...history.state, yanhuoBrowse: entry.key }, "");
+    if (wasReplaced && prevEntry && prevEntry.key !== entry.key) {
+      entries.delete(prevEntry.key);
+    }
     currentKey.value = entry.key;
     entries.set(entry.key, entry);
     stackByPosition.set(position, entry.key);
+    if (!existing && (!wasReplaced || to.path !== from.path)) {
+      safeStampBrowseKey(entry.key);
+    }
     if (!existing && !wasReplaced) {
       for (const pos of [...stackByPosition.keys()]) {
         if (pos > position) stackByPosition.delete(pos);
       }
     }
-    // Bound metadata to recent navigation, not the lifetime of an open tab.
-    if (entries.size > 60) entries.delete(entries.keys().next().value!);
+    // Bound metadata to recent navigation while protecting active stack ancestors.
+    pruneEntries(entry.key, position);
     revision.value++;
     if (pending === entry) void restore(entry, router).catch(() => {});
   });
@@ -553,7 +637,7 @@ export function installBrowseReturn(router: Router) {
           anc.position === pos &&
           anc.path === target.fullPath
         ) {
-          return goDelta(router, pos - curPos);
+          return goDelta(router, anc, pos - curPos);
         }
       }
     }
