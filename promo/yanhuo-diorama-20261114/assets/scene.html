@@ -1,0 +1,906 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=1920, height=1080, initial-scale=1.0" />
+<title>烟火地图 · 折叠街角 (60fps Pop-Up Isometric Diorama Engine)</title>
+<style>
+  :root {
+    --orange: #EA580C;
+    --orange-warm: #FB923C;
+    --orange-soft: #FFF1E6;
+    --cream: #FFFDF9;
+    --paper: #F4EFE6;
+    --walnut: #181310;
+    --ink: #1C1917;
+    --ink-sub: #57534E;
+    --green: #16A34A;
+    --green-soft: #DCFCE7;
+    --brass: #D97706;
+  }
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    user-select: none;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  html, body {
+    width: 1920px;
+    height: 1080px;
+    overflow: hidden;
+    background: var(--walnut);
+    font-family: "Microsoft YaHei UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    color: var(--cream);
+  }
+
+  #viewport {
+    position: relative;
+    width: 1920px;
+    height: 1080px;
+    overflow: hidden;
+    perspective: 1500px;
+    background: #14100D;
+  }
+
+  .layer {
+    position: absolute;
+    inset: 0;
+    width: 1920px;
+    height: 1080px;
+    will-change: transform, opacity, filter;
+    pointer-events: none;
+  }
+
+  .bg-cover {
+    width: 1920px;
+    height: 1080px;
+    object-fit: cover;
+    display: block;
+  }
+
+  /* Tactile Craftsman Paper Card */
+  .craft-card {
+    background: var(--cream);
+    color: var(--ink);
+    border-radius: 28px;
+    border: 2px solid rgba(217, 119, 6, 0.24);
+    box-shadow:
+      0 32px 70px rgba(0, 0, 0, 0.55),
+      0 6px 0 #E7DDD0;
+    transform-style: preserve-3d;
+  }
+
+  .kicker-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    padding: 8px 18px;
+    border-radius: 999px;
+    font-size: 19px;
+    font-weight: 800;
+    letter-spacing: 0.03em;
+  }
+
+  /* Scene 1A: Flat Architectural Blueprint */
+  #s1-blueprint {
+    background:
+      radial-gradient(circle at 50% 50%, #F7F2E7 0%, #E6DEC8 100%);
+    color: #292524;
+    transform-origin: 960px 880px;
+  }
+
+  /* Brass-Pin Vertical Callout Flag on Miniature Diorama */
+  .pin-flag {
+    position: absolute;
+    transform-origin: bottom left;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .pin-flag-card {
+    background: rgba(255, 253, 249, 0.96);
+    color: var(--ink);
+    padding: 20px 28px;
+    border-radius: 22px;
+    border-left: 7px solid var(--orange);
+    box-shadow: 0 22px 50px rgba(0, 0, 0, 0.55);
+    max-width: 520px;
+  }
+
+  .pin-stem {
+    width: 4px;
+    height: 92px;
+    background: linear-gradient(180deg, #F59E0B 0%, #B45309 100%);
+    margin-left: 28px;
+    position: relative;
+  }
+
+  .pin-stem::after {
+    content: "";
+    position: absolute;
+    bottom: -9px;
+    left: -7px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #EA580C;
+    border: 3px solid #FFFDF9;
+    box-shadow: 0 0 20px rgba(234, 88, 12, 0.8);
+  }
+
+  /* Scene 2: Pop-up Merchant Easel */
+  #s2-easel-wrap {
+    position: absolute;
+    left: 96px;
+    top: 108px;
+    width: 780px;
+    transform-origin: left center;
+  }
+
+  /* Scene 3: Bi-Fold Accordion Dual Workbench */
+  #s3-accordion-wrap {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 56px;
+    padding: 0 88px;
+    transform-style: preserve-3d;
+  }
+
+  .accordion-wing {
+    width: 820px;
+    padding: 36px 40px;
+  }
+
+  .wood-block {
+    width: 96px;
+    height: 112px;
+    border-radius: 18px;
+    background: linear-gradient(180deg, #292524 0%, #1C1917 100%);
+    color: #FFFDF9;
+    border-bottom: 6px solid #EA580C;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 62px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    box-shadow: 0 14px 28px rgba(0,0,0,0.28);
+  }
+
+  /* Scene 4: Handoff Pavilion Callouts */
+  .pavilion-callout {
+    position: absolute;
+    width: 520px;
+    padding: 24px 28px;
+    background: rgba(255, 253, 249, 0.96);
+    color: var(--ink);
+    border-radius: 24px;
+    box-shadow: 0 26px 56px rgba(0, 0, 0, 0.55);
+    border: 1.5px solid rgba(234, 88, 12, 0.25);
+  }
+
+  /* Scene 5: 3-Tier Isometric Exploded Architectural Stack */
+  #s5-iso-stage {
+    background:
+      radial-gradient(circle at 520px 540px, rgba(234, 88, 12, 0.16) 0%, transparent 56%),
+      linear-gradient(135deg, #191411 0%, #0F0C0A 100%);
+  }
+
+  .iso-slab {
+    position: absolute;
+    left: 175px;
+    width: 580px;
+    height: 360px;
+    border-radius: 32px;
+    transform-style: preserve-3d;
+    padding: 30px 34px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+
+  .spec-row-card {
+    background: rgba(255, 253, 249, 0.06);
+    border: 1.5px solid rgba(251, 146, 60, 0.28);
+    border-radius: 24px;
+    padding: 24px 30px;
+    backdrop-filter: blur(10px);
+  }
+</style>
+</head>
+<body>
+<div id="viewport">
+
+  <!-- ================= SCENE 1: FLAT BLUEPRINT -> POP-UP EMPTY GATE DIORAMA ================= -->
+  <div id="s1-diorama-stage" class="layer" style="opacity:0;">
+    <img id="s1-diorama-img" src="01-diorama-empty.jpg" class="bg-cover" alt="" />
+    <div style="position:absolute;inset:0;background:linear-gradient(180deg, rgba(12,17,28,0.62) 0%, rgba(12,17,28,0.10) 48%, rgba(12,17,28,0.55) 100%);"></div>
+
+    <div id="s1-top-title" style="position:absolute;left:96px;top:72px;">
+      <div class="kicker-badge" style="background:rgba(255,253,249,0.14);border:1px solid rgba(255,253,249,0.3);color:#E2E8F0;">
+        <span>微缩校园街角 · 痛点还原</span>
+      </div>
+      <div style="font-size:50px;font-weight:800;color:#FFFDF9;margin-top:14px;text-shadow:0 10px 28px rgba(0,0,0,0.65);">
+        平面信息跟不上流动的摊车，<span style="color:#FDBA74;">每一次寻味都在盲猜。</span>
+      </div>
+    </div>
+
+    <!-- Brass Pin Callout Flag 1 (Anchored to Empty Dashed Stall Bay ~780, 740) -->
+    <div id="s1-flag-1" class="pin-flag" style="left:670px;top:485px;opacity:0;">
+      <div class="pin-flag-card">
+        <div style="font-size:18px;font-weight:800;color:var(--orange);">现场痛点 01 · 频繁扑空</div>
+        <div style="font-size:26px;font-weight:800;margin-top:4px;">昨晚还在校门旁，今晚只剩空车位</div>
+        <div style="font-size:18px;color:var(--ink-sub);margin-top:6px;">摊主临时换点或收摊无通知，学生冷风白跑一趟</div>
+      </div>
+      <div class="pin-stem"></div>
+    </div>
+
+    <!-- Brass Pin Callout Flag 2 (Anchored to Right Walkway, keeping copper streetlamp unobstructed) -->
+    <div id="s1-flag-2" class="pin-flag" style="left:1280px;top:395px;opacity:0;">
+      <div class="pin-flag-card" style="border-left-color:#64748B;">
+        <div style="font-size:18px;font-weight:800;color:#475569;">现场痛点 02 · 无序等待与治理难</div>
+        <div style="font-size:26px;font-weight:800;margin-top:4px;">扎堆盲排 20 分钟 · 证照准入难区分</div>
+        <div style="font-size:18px;color:var(--ink-sub);margin-top:6px;">口头记忌口易出错，校园周边缺乏温和有序的数字工具</div>
+      </div>
+      <div class="pin-stem"></div>
+    </div>
+  </div>
+
+  <!-- Flat Architectural Blueprint (Folds away at 2.02s!) -->
+  <div id="s1-blueprint" class="layer">
+    <svg width="1920" height="1080" viewBox="0 0 1920 1080" style="position:absolute;inset:0;">
+      <defs>
+        <pattern id="bpGrid" width="48" height="48" patternUnits="userSpaceOnUse">
+          <path d="M 48 0 L 0 0 0 48" fill="none" stroke="rgba(41,37,36,0.09)" stroke-width="1"/>
+        </pattern>
+      </defs>
+      <rect width="1920" height="1080" fill="url(#bpGrid)" />
+      <rect x="64" y="56" width="1792" height="968" fill="none" stroke="#44403C" stroke-width="3"/>
+      <rect x="78" y="70" width="1764" height="940" fill="none" stroke="rgba(68,64,60,0.35)" stroke-width="1.5"/>
+
+      <!-- Architectural Street Plan -->
+      <path d="M 180 760 L 1740 420" stroke="#57534E" stroke-width="56" fill="none" opacity="0.22"/>
+      <path d="M 180 760 L 1740 420" stroke="#292524" stroke-width="3" stroke-dasharray="16 12" fill="none"/>
+      <rect x="340" y="210" width="420" height="220" fill="rgba(68,64,60,0.07)" stroke="#44403C" stroke-width="2.5"/>
+      <text x="550" y="330" fill="#44403C" font-size="26" font-weight="700" text-anchor="middle">CAMPUS SOUTH WALL · 校园红砖围墙</text>
+
+      <!-- Animated Dashed Empty Stall Box -->
+      <rect id="bp-stall-rect" x="760" y="555" width="410" height="160" rx="14" fill="rgba(234,88,12,0.08)" stroke="#EA580C" stroke-width="4" stroke-dasharray="18 12"/>
+      <text x="965" y="630" fill="#EA580C" font-size="30" font-weight="800" text-anchor="middle">? 流动摊位点 · 今晚出摊未知</text>
+      <text x="965" y="672" fill="#57534E" font-size="21" font-weight="700" text-anchor="middle">STATIC MAP CANNOT TRACK MOBILE VENDORS</text>
+    </svg>
+
+    <div style="position:absolute;left:128px;top:118px;">
+      <div style="font-size:20px;font-weight:800;color:#EA580C;letter-spacing:0.14em;">ARCHITECTURAL SURVEY · 传统静态视角</div>
+      <div style="font-size:58px;font-weight:800;color:#1C1917;margin-top:8px;letter-spacing:-0.02em;">
+        当街头烟火是流动的，<span style="color:#EA580C;">死板的平面图毫无办法。</span>
+      </div>
+    </div>
+
+    <div style="position:absolute;right:128px;bottom:108px;font-size:22px;font-weight:800;color:#57534E;">
+      正在折叠立起校园实景沙盘 ↗
+    </div>
+  </div>
+
+  <!-- ================= SCENE 2: GLOWING NOODLE CART DIORAMA + POP-UP EASEL ================= -->
+  <div id="s2-cart-stage" class="layer" style="opacity:0;">
+    <img id="s2-cart-img" src="02-diorama-cart.jpg" class="bg-cover" alt="" />
+    <div style="position:absolute;inset:0;background:linear-gradient(90deg, rgba(16,12,10,0.88) 0%, rgba(16,12,10,0.58) 46%, rgba(16,12,10,0.06) 100%);"></div>
+
+    <!-- Pop-up Craftsman Merchant Easel on Left -->
+    <div id="s2-easel-wrap">
+      <div class="craft-card" style="padding:38px 42px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+          <span class="kicker-badge" style="background:var(--orange-soft);color:var(--orange);">商家工作台 · 按能力自动分流</span>
+          <span style="font-size:18px;font-weight:800;color:var(--green);">● 手机首屏直达</span>
+        </div>
+
+        <div style="font-size:38px;font-weight:800;color:var(--ink);line-height:1.22;">
+          把沙盘点亮：<br/><span style="color:var(--orange);">两类摊主都能 10 秒上手</span>
+        </div>
+
+        <!-- Dual Merchant Tier Comparison -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:22px;">
+          <div style="background:var(--paper);border-radius:18px;padding:18px 20px;border:1.5px solid rgba(28,25,23,0.08);">
+            <div style="font-size:18px;font-weight:800;color:var(--ink-sub);">模式 A · 仅找摊商户</div>
+            <div style="font-size:22px;font-weight:800;color:var(--ink);margin-top:6px;">默认「今天出摊」</div>
+            <div style="font-size:17px;color:var(--ink-sub);margin-top:6px;line-height:1.45;">
+              仅维护「今天有 / 卖完了」，不填复杂库存也能让学生找得到。
+            </div>
+          </div>
+          <div style="background:#FFF8F1;border-radius:18px;padding:18px 20px;border:2px solid #FB923C;">
+            <div style="font-size:18px;font-weight:800;color:var(--orange);">模式 B · 持证交易商户</div>
+            <div style="font-size:22px;font-weight:800;color:var(--ink);margin-top:6px;">默认「接单出餐台」</div>
+            <div style="font-size:17px;color:var(--ink-sub);margin-top:6px;line-height:1.45;">
+              开启线上可卖份数预留、到摊自取与校园固定点配送。
+            </div>
+          </div>
+        </div>
+
+        <!-- Wooden Location Confirmation Stamp -->
+        <div id="s2-stamp-box" style="margin-top:20px;background:var(--green-soft);border:2px solid rgba(22,163,74,0.38);border-radius:20px;padding:18px 24px;display:flex;align-items:center;justify-content:space-between;">
+          <div>
+            <div style="font-size:22px;font-weight:800;color:#14532D;">✓ 已确认今日点位：东门银杏步道</div>
+            <div style="font-size:17px;font-weight:700;color:#166534;margin-top:4px;">认摊特征：橙棚蓝车 · 暖黄挂灯（非实时监控照片）</div>
+          </div>
+          <div style="background:#FFFDF9;padding:10px 16px;border-radius:14px;text-align:center;border:1px solid rgba(22,163,74,0.3);">
+            <div style="font-size:23px;font-weight:800;color:var(--green);">60 min</div>
+            <div style="font-size:14px;font-weight:800;color:#166534;">超时自动停单</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Brass Callout Pin pointing directly at the miniature cart lantern (~1240, 505) -->
+    <div id="s2-cart-tag" style="position:absolute;left:1185px;top:245px;background:rgba(28,25,23,0.9);border:1.5px solid #FB923C;color:#FFFDF9;padding:14px 24px;border-radius:999px;font-size:21px;font-weight:800;box-shadow:0 18px 40px rgba(0,0,0,0.5);">
+      <span style="color:#FB923C;">●</span> 橙棚蓝车 · 刚刚主动确认出摊
+    </div>
+  </div>
+
+  <!-- ================= SCENE 3: BI-FOLD ACCORDION DUAL WORKBENCH & WOODEN BLOCKS ================= -->
+  <div id="s3-workbench-stage" class="layer" style="opacity:0;">
+    <img src="02-diorama-cart.jpg" class="bg-cover" style="filter:blur(16px) brightness(0.38);transform:scale(1.12);" alt="" />
+
+    <div id="s3-accordion-wrap">
+      <!-- Left Wing: Student Selection & Per-Portion Customization -->
+      <div id="wing-left" class="craft-card accordion-wing" style="transform-origin:right center;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
+          <span class="kicker-badge" style="background:var(--orange-soft);color:var(--orange);">学生端 · 选餐与逐份定制</span>
+          <span style="font-size:17px;font-weight:700;color:var(--ink-sub);background:var(--paper);padding:6px 14px;border-radius:999px;">预算筛选 ≤ ¥15 · URL 记忆</span>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:16px;border-bottom:1.5px solid rgba(28,25,23,0.08);">
+          <div style="font-size:32px;font-weight:800;">招牌铁板细炒面</div>
+          <div style="font-size:20px;font-weight:700;color:var(--orange);">线上余量 18 份 · 预估 6–8 分钟</div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:14px;margin:20px 0;">
+          <div id="d-p1" style="background:var(--paper);padding:16px 20px;border-radius:18px;border:2px solid transparent;">
+            <div style="display:flex;justify-content:space-between;font-size:21px;font-weight:800;">
+              <span>第 1 份（本人）</span>
+              <span style="color:var(--orange);">✓ 微辣 · ✓ 加葱（免费）</span>
+            </div>
+            <div style="font-size:17px;color:var(--ink-sub);margin-top:4px;">单份备注：面条炒干香一点</div>
+          </div>
+
+          <div id="d-p2" style="background:var(--paper);padding:16px 20px;border-radius:18px;border:2px solid transparent;">
+            <div style="display:flex;justify-content:space-between;font-size:21px;font-weight:800;">
+              <span>第 2 份（室友）</span>
+              <span style="color:var(--orange);">✓ 不辣 · ✓ 免葱（免费）</span>
+            </div>
+            <div style="font-size:17px;color:var(--ink-sub);margin-top:4px;">单份备注：分开打包带走</div>
+          </div>
+        </div>
+
+        <div id="d-submit" style="background:var(--orange);color:#FFFDF9;height:72px;border-radius:20px;display:flex;align-items:center;justify-content:center;font-size:25px;font-weight:800;box-shadow:0 14px 30px rgba(234,88,12,0.35);">
+          提交自取订单 · 服务端锁库校验 ¥22.0
+        </div>
+      </div>
+
+      <!-- Right Wing: Merchant Kitchen Console & Wooden Code Blocks -->
+      <div id="wing-right" class="craft-card accordion-wing" style="transform-origin:left center;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
+          <span class="kicker-badge" style="background:var(--green-soft);color:var(--green);">商家出餐台 · 核对交餐闭环</span>
+          <span id="d-kitchen-state" style="font-size:18px;font-weight:800;color:var(--orange);">● 待接单 #07</span>
+        </div>
+
+        <div style="background:#FFF8F1;border:1.5px solid #FDBA74;border-radius:20px;padding:18px 22px;margin-bottom:20px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span style="font-size:25px;font-weight:800;">铁板细炒面 × 2 份（应付 ¥22.0）</span>
+            <span id="d-action-pill" style="background:var(--orange);color:#FFFDF9;padding:8px 18px;border-radius:12px;font-size:19px;font-weight:800;">接单开始做</span>
+          </div>
+          <div style="font-size:18px;color:var(--ink-sub);margin-top:8px;">
+            先核对餐点、逐份忌口与付款状态，再独立执行确认收款与取餐码核销
+          </div>
+        </div>
+
+        <div style="text-align:center;">
+          <div style="font-size:18px;font-weight:800;color:var(--ink-sub);margin-bottom:12px;">出餐后生成一次性 4 位取餐码 · 到摊 3 秒核销提走</div>
+          <div style="display:flex;justify-content:center;gap:18px;">
+            <div class="wood-block" id="wb-0">4</div>
+            <div class="wood-block" id="wb-1">8</div>
+            <div class="wood-block" id="wb-2">2</div>
+            <div class="wood-block" id="wb-3">9</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pneumatic Order Capsule sliding Left -> Right -->
+    <div id="pneumatic-capsule" style="position:absolute;left:960px;top:540px;transform:translate(-50%,-50%);background:var(--orange);color:#FFFDF9;padding:16px 32px;border-radius:999px;font-size:23px;font-weight:800;box-shadow:0 20px 50px rgba(234,88,12,0.65);border:3px solid #FFFDF9;opacity:0;z-index:50;">
+      订单快照 #07 · 2 份 →
+    </div>
+  </div>
+
+  <!-- ================= SCENE 4: MINIATURE CAMPUS HANDOFF PAVILION ================= -->
+  <div id="s4-pavilion-stage" class="layer" style="opacity:0;">
+    <img id="s4-pavilion-img" src="03-diorama-pavilion.jpg" class="bg-cover" alt="" />
+    <div style="position:absolute;inset:0;background:radial-gradient(circle at 900px 580px, rgba(15,12,10,0.05) 18%, rgba(15,12,10,0.72) 86%);"></div>
+
+    <div style="position:absolute;left:96px;top:64px;">
+      <div class="kicker-badge" style="background:rgba(234,88,12,0.25);border:1px solid #FB923C;color:#FED7AA;">
+        商家定点配送 · 校园固定保温交接亭
+      </div>
+      <div style="font-size:50px;font-weight:800;color:#FFFDF9;margin-top:12px;text-shadow:0 10px 30px rgba(0,0,0,0.75);">
+        不进宿舍楼、不编假轨迹，<span style="color:#FDBA74;">定点交接更合规。</span>
+      </div>
+    </div>
+
+    <!-- SVG Leader Lines Anchored to Pavilion Lockers (~880, 580) -->
+    <svg width="1920" height="1080" style="position:absolute;inset:0;">
+      <path id="lead-1" d="M 600 470 L 810 535" stroke="#FB923C" stroke-width="3.5" fill="none" stroke-dasharray="8 6"/>
+      <circle cx="810" cy="535" r="8" fill="#EA580C" stroke="#FFFDF9" stroke-width="3"/>
+      <path id="lead-2" d="M 1310 385 L 1015 495" stroke="#FB923C" stroke-width="3.5" fill="none" stroke-dasharray="8 6"/>
+      <circle cx="1015" cy="495" r="8" fill="#EA580C" stroke="#FFFDF9" stroke-width="3"/>
+      <path id="lead-3" d="M 1310 735 L 1020 645" stroke="#4ADE80" stroke-width="3.5" fill="none" stroke-dasharray="8 6"/>
+      <circle cx="1020" cy="645" r="8" fill="#16A34A" stroke="#FFFDF9" stroke-width="3"/>
+    </svg>
+
+    <div id="pav-card-1" class="pavilion-callout" style="left:88px;top:375px;">
+      <div style="font-size:18px;font-weight:800;color:var(--orange);">规则 01 · 预付核实后履约</div>
+      <div style="font-size:26px;font-weight:800;margin-top:4px;">微信预付确认后才派给商家</div>
+      <div style="font-size:18px;color:var(--ink-sub);margin-top:6px;line-height:1.45;">餐费与配送费分列展示；价格或配送费变化须重新确认，绝不静默改价。</div>
+    </div>
+
+    <div id="pav-card-2" class="pavilion-callout" style="right:88px;top:280px;">
+      <div style="font-size:18px;font-weight:800;color:var(--orange);">规则 02 · 最小化隐私采集</div>
+      <div style="font-size:26px;font-weight:800;margin-top:4px;">只到运营启用的校园交接点</div>
+      <div style="font-size:18px;color:var(--ink-sub);margin-top:6px;line-height:1.45;">不收集学号、学生证或宿舍房间号；点位地址与预计区间提交前透明可见。</div>
+    </div>
+
+    <div id="pav-card-3" class="pavilion-callout" style="right:88px;top:635px;border-color:rgba(22,163,74,0.4);">
+      <div style="font-size:18px;font-weight:800;color:var(--green);">规则 03 · 真实交付核销</div>
+      <div style="font-size:26px;font-weight:800;margin-top:4px;">已到交接点 ≠ 自动完成</div>
+      <div style="font-size:18px;color:var(--ink-sub);margin-top:6px;line-height:1.45;">不虚构骑手姓名与地图轨迹；须由学生确认收餐或核销一次性收餐码方完成。</div>
+    </div>
+  </div>
+
+  <!-- ================= SCENE 5: 3-TIER ISOMETRIC EXPLODED GOVERNANCE STACK ================= -->
+  <div id="s5-iso-stage" class="layer" style="opacity:0;">
+    <div style="position:absolute;left:112px;top:68px;">
+      <div style="font-size:20px;font-weight:800;color:#FB923C;letter-spacing:0.15em;">ISOMETRIC GOVERNANCE ARCHITECTURE · 沙盘三层解剖</div>
+      <div style="font-size:50px;font-weight:800;color:#FFFDF9;margin-top:8px;">
+        为什么它能真正落地校园？<span style="color:#FDBA74;">三层权责严格咬合。</span>
+      </div>
+    </div>
+
+    <!-- Left Side: 3 Floating Isometric Slabs in True 3D Perspective -->
+    <div style="position:absolute;left:0;top:0;width:960px;height:1080px;">
+      <!-- Bottom Slab: Livelihood Layer -->
+      <div id="slab-3" class="iso-slab" style="top:565px;background:linear-gradient(135deg, #FFFDF9 0%, #F5EFE6 100%);color:var(--ink);border:3px solid #D6D3D1;box-shadow:0 35px 60px rgba(0,0,0,0.65);">
+        <div style="font-size:20px;font-weight:800;color:#57534E;">LAYER 01 · 民生烟火底座</div>
+        <div style="font-size:34px;font-weight:800;">找摊展示 + 双模履约</div>
+        <div style="font-size:20px;font-weight:700;color:var(--orange);">学生少跑空 · 摊主零技术门槛</div>
+      </div>
+
+      <!-- Middle Slab: Direct Payment & Freshness Engine -->
+      <div id="slab-2" class="iso-slab" style="top:395px;background:linear-gradient(135deg, #14532D 0%, #064E3B 100%);color:#FFFDF9;border:3px solid #4ADE80;box-shadow:0 35px 60px rgba(0,0,0,0.65);">
+        <div style="font-size:20px;font-weight:800;color:#86EFAC;">LAYER 02 · 交易与时效引擎</div>
+        <div style="font-size:34px;font-weight:800;">微信直连 · 零资金池</div>
+        <div style="font-size:20px;font-weight:700;color:#DCFCE7;">自有商户号收款杜绝二清 · 60m 超时停单</div>
+      </div>
+
+      <!-- Top Slab: /ops Governance Console -->
+      <div id="slab-1" class="iso-slab" style="top:225px;background:linear-gradient(135deg, #EA580C 0%, #9A3412 100%);color:#FFFDF9;border:3px solid #FDBA74;box-shadow:0 35px 60px rgba(0,0,0,0.65);">
+        <div style="font-size:20px;font-weight:800;color:#FED7AA;">LAYER 03 · /ops 独立监管层</div>
+        <div style="font-size:34px;font-weight:800;">证照分级与风控审计</div>
+        <div style="font-size:20px;font-weight:700;color:#FFFDF9;">展示与交易准入分离 · 异常刷评锁单</div>
+      </div>
+    </div>
+
+    <!-- Right Side: Detailed Defense Takeaways -->
+    <div style="position:absolute;right:104px;top:220px;width:820px;display:flex;flex-direction:column;gap:24px;">
+      <div id="spec-1" class="spec-row-card">
+        <div style="font-size:20px;font-weight:800;color:#FB923C;">顶层治理 · /ops 独立权限边界</div>
+        <div style="font-size:27px;font-weight:800;color:#FFFDF9;margin-top:6px;">公开展示与在线交易分级授权</div>
+        <div style="font-size:19px;color:rgba(255,253,249,0.78);margin-top:6px;line-height:1.5;">
+          流动摊入驻经初审与核验后分开控制：无证不开放线上付款，证照到期或擅自迁址立即停接新单。
+        </div>
+      </div>
+
+      <div id="spec-2" class="spec-row-card" style="border-color:rgba(74,222,128,0.38);">
+        <div style="font-size:20px;font-weight:800;color:#4ADE80;">中层清算 · 彻底规避平台二清风险</div>
+        <div style="font-size:27px;font-weight:800;color:#FFFDF9;margin-top:6px;">直连商户收款 + 多次退款对账闭环</div>
+        <div style="font-size:19px;color:rgba(255,253,249,0.78);margin-top:6px;line-height:1.5;">
+          每家合规商户绑定独立微信商户号，模拟体验与真实账务快照严格分流，不设平台钱包与资金池。
+        </div>
+      </div>
+
+      <div id="spec-3" class="spec-row-card" style="border-color:rgba(255,253,249,0.28);">
+        <div style="font-size:20px;font-weight:800;color:#FDBA74;">底层民生 · 真实数据不造假</div>
+        <div style="font-size:27px;font-weight:800;color:#FFFDF9;margin-top:6px;">零假销量、零假好评、隐私友好纠错</div>
+        <div style="font-size:19px;color:rgba(255,253,249,0.78);margin-top:6px;line-height:1.5;">
+          自动识别高频刷评与极速完单异常；学生提交位置反馈自动脱敏，不向商家暴露个人联系方式。
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= SCENE 6: PANORAMA DIORAMA FINALE ================= -->
+  <div id="s6-panorama-stage" class="layer" style="opacity:0;">
+    <img id="s6-pano-img" src="04-diorama-finale.jpg" class="bg-cover" alt="" />
+    <div style="position:absolute;inset:0;background:linear-gradient(90deg, rgba(20,14,10,0.92) 0%, rgba(20,14,10,0.68) 46%, rgba(20,14,10,0.04) 100%);"></div>
+
+    <div id="s6-brand-box" style="position:absolute;left:114px;top:0;bottom:0;width:880px;display:flex;flex-direction:column;justify-content:center;gap:26px;">
+      <div style="display:flex;align-items:center;gap:20px;">
+        <div style="width:80px;height:80px;border-radius:22px;background:linear-gradient(135deg, #EA580C 0%, #FB923C 100%);display:flex;align-items:center;justify-content:center;box-shadow:0 18px 40px rgba(234,88,12,0.48);border:2px solid #FED7AA;">
+          <svg width="44" height="44" viewBox="0 0 24 24" fill="none">
+            <path d="M3 6.5L9 4l6 2.5L21 4v13.5L15 20l-6-2.5L3 20V6.5z" stroke="#FFFDF9" stroke-width="2.2" stroke-linejoin="round"/>
+            <circle cx="12" cy="11.5" r="3" fill="#FFFDF9"/>
+          </svg>
+        </div>
+        <div>
+          <div style="font-size:66px;font-weight:800;color:#FFFDF9;letter-spacing:-0.02em;line-height:1.05;">烟火地图</div>
+          <div style="font-size:20px;font-weight:700;color:#FDBA74;letter-spacing:0.16em;margin-top:6px;">YANHUO MAP · 校园周边流动摊贩合规生态沙盘</div>
+        </div>
+      </div>
+
+      <div style="font-size:43px;font-weight:800;line-height:1.3;color:#FFFDF9;">
+        把无序的街头偶遇，<br/><span style="color:#FB923C;">折叠进有温度的合规日常。</span>
+      </div>
+
+      <div style="display:flex;gap:14px;flex-wrap:wrap;">
+        <span class="kicker-badge" style="background:rgba(255,253,249,0.12);border:1px solid rgba(255,253,249,0.24);color:#FFFDF9;">橙棚寻摊防扑空</span>
+        <span class="kicker-badge" style="background:rgba(255,253,249,0.12);border:1px solid rgba(255,253,249,0.24);color:#FFFDF9;">自取核销 & 固定交接亭</span>
+        <span class="kicker-badge" style="background:rgba(234,88,12,0.28);border:1px solid #FB923C;color:#FED7AA;">三端隔离 · 微信直连零二清</span>
+      </div>
+    </div>
+
+    <div style="position:absolute;left:114px;bottom:42px;font-size:17px;color:rgba(255,253,249,0.56);font-weight:500;">
+      三创赛路演答辩先导片（微缩沙盘版） · 沙盘场景由 AI 原创生成（零肖像与商标侵权风险） · 演示界面基于项目真实机制制作
+    </div>
+  </div>
+
+  <!-- Foreground Canvas for Origami Crease Lines, Miniature Dust, Glide Streaks -->
+  <canvas id="diorama-fx" width="1920" height="1080" class="layer" style="z-index:85;"></canvas>
+
+</div>
+
+<script>
+(() => {
+  const clamp = (v, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, v));
+  const lerp = (a, b, u) => a + (b - a) * u;
+  const prog = (t, t0, t1) => clamp((t - t0) / (t1 - t0));
+
+  function easeInOutExpo(x) {
+    if (x <= 0) return 0;
+    if (x >= 1) return 1;
+    return x < 0.5 ? Math.pow(2, 20 * x - 10) / 2 : (2 - Math.pow(2, -20 * x + 10)) / 2;
+  }
+  function easeOutCubic(x) {
+    return 1 - Math.pow(1 - clamp(x), 3);
+  }
+  function easeOutBack(x) {
+    const u = clamp(x);
+    const c1 = 1.70158;
+    const c3 = c1 + 1;
+    return 1 + c3 * Math.pow(u - 1, 3) + c1 * Math.pow(u - 1, 2);
+  }
+
+  const el = (id) => document.getElementById(id);
+  const canvas = el('diorama-fx');
+  const ctx = canvas.getContext('2d');
+
+  const s1Blueprint = el('s1-blueprint');
+  const bpRect = el('bp-stall-rect');
+  const s1Diorama = el('s1-diorama-stage');
+  const s1Img = el('s1-diorama-img');
+  const s1TopTitle = el('s1-top-title');
+  const flag1 = el('s1-flag-1');
+  const flag2 = el('s1-flag-2');
+
+  const s2Cart = el('s2-cart-stage');
+  const s2CartImg = el('s2-cart-img');
+  const s2Easel = el('s2-easel-wrap');
+  const s2Stamp = el('s2-stamp-box');
+  const s2CartTag = el('s2-cart-tag');
+
+  const s3Stage = el('s3-workbench-stage');
+  const wingL = el('wing-left');
+  const wingR = el('wing-right');
+  const dp1 = el('d-p1');
+  const dp2 = el('d-p2');
+  const dSubmit = el('d-submit');
+  const capsule = el('pneumatic-capsule');
+  const dState = el('d-kitchen-state');
+  const dAction = el('d-action-pill');
+  const wbs = [el('wb-0'), el('wb-1'), el('wb-2'), el('wb-3')];
+
+  const s4Pav = el('s4-pavilion-stage');
+  const s4Img = el('s4-pavilion-img');
+  const pav1 = el('pav-card-1');
+  const pav2 = el('pav-card-2');
+  const pav3 = el('pav-card-3');
+  const lead1 = el('lead-1');
+  const lead2 = el('lead-2');
+  const lead3 = el('lead-3');
+
+  const s5Iso = el('s5-iso-stage');
+  const slab1 = el('slab-1');
+  const slab2 = el('slab-2');
+  const slab3 = el('slab-3');
+  const spec1 = el('spec-1');
+  const spec2 = el('spec-2');
+  const spec3 = el('spec-3');
+
+  const s6Pano = el('s6-panorama-stage');
+  const s6Img = el('s6-pano-img');
+  const s6Brand = el('s6-brand-box');
+
+  const hash = (n) => {
+    const s = Math.sin(n * 91.7 + 217.3) * 43758.5453;
+    return s - Math.floor(s);
+  };
+
+  function renderAt(t) {
+    ctx.clearRect(0, 0, 1920, 1080);
+
+    // =========================================================================
+    // 1. BLUEPRINT -> ORIGAMI 3D POP-UP EMPTY GATE [0.00 - 6.02s]
+    // =========================================================================
+    if (t < 6.04) {
+      const foldU = easeInOutExpo(prog(t, 2.00, 2.62));
+      const glideOut = easeInOutExpo(prog(t, 5.45, 6.02));
+
+      if (t < 2.64) {
+        s1Blueprint.style.opacity = String(1 - prog(t, 2.28, 2.62));
+        s1Blueprint.style.transform = `perspective(1500px) rotateX(${lerp(0, 66, foldU)}deg) scale(${lerp(1, 0.88, foldU)})`;
+        bpRect.setAttribute('stroke-dashoffset', String(-t * 48));
+      } else {
+        s1Blueprint.style.opacity = '0';
+      }
+
+      if (t >= 2.02) {
+        s1Diorama.style.opacity = String(clamp(prog(t, 2.02, 2.42) * 1.4) * (1 - prog(t, 5.82, 6.02)));
+        const popRise = easeOutBack(prog(t, 2.05, 2.68));
+        const gx = lerp(0, -1920, glideOut);
+        s1Diorama.style.transformOrigin = '960px 920px';
+        s1Diorama.style.transform = `translate3d(${gx}px, 0, 0) rotateX(${lerp(-42, 0, clamp(popRise))}deg) scale(${lerp(0.92, 1.0, clamp(popRise))})`;
+        s1Img.style.transform = `scale(${lerp(1.08, 1.01, prog(t, 2.1, 5.9))})`;
+
+        const ttU = easeOutCubic(prog(t, 2.45, 2.95));
+        s1TopTitle.style.opacity = String(ttU);
+        s1TopTitle.style.transform = `translateY(${lerp(-24, 0, ttU)}px)`;
+
+        const f1U = easeOutBack(prog(t, 2.88, 3.38));
+        flag1.style.opacity = String(clamp(prog(t, 2.88, 3.15) * 1.6));
+        flag1.style.transform = `scale(${lerp(0.3, 1, f1U)})`;
+
+        const f2U = easeOutBack(prog(t, 3.34, 3.84));
+        flag2.style.opacity = String(clamp(prog(t, 3.34, 3.60) * 1.6));
+        flag2.style.transform = `scale(${lerp(0.3, 1, f2U)})`;
+      } else {
+        s1Diorama.style.opacity = '0';
+      }
+    } else {
+      s1Blueprint.style.opacity = '0';
+      s1Diorama.style.opacity = '0';
+    }
+
+    // =========================================================================
+    // 2. GLOWING NOODLE CART DIORAMA + POP-UP EASEL [5.45 - 14.72s]
+    // =========================================================================
+    if (t >= 5.45 && t < 14.74) {
+      const glideIn = easeInOutExpo(prog(t, 5.45, 6.02));
+      const diveOut = easeInOutExpo(prog(t, 14.18, 14.72));
+      s2Cart.style.opacity = String(glideIn * (1 - prog(t, 14.42, 14.72)));
+      s2Cart.style.transform = `translate3d(${lerp(1920, 0, glideIn)}px, 0, 0) scale(${lerp(1.0, 1.32, diveOut)})`;
+      s2CartImg.style.transform = `scale(${lerp(1.07, 1.0, prog(t, 5.8, 14.2))})`;
+
+      // Origami Easel Unfold
+      const easelU = easeOutBack(prog(t, 6.22, 6.85));
+      s2Easel.style.opacity = String(clamp(prog(t, 6.22, 6.55) * 1.6));
+      s2Easel.style.transform = `perspective(1400px) rotateY(${lerp(-68, 5, easelU)}deg)`;
+
+      // Wooden Location Stamp Slam (7.40s)
+      const stU = easeOutBack(prog(t, 7.38, 7.82));
+      s2Stamp.style.opacity = String(clamp(prog(t, 7.35, 7.58) * 1.8));
+      s2Stamp.style.transform = `scale(${lerp(1.24, 1.0, stU)})`;
+
+      const tagU = easeOutBack(prog(t, 6.50, 7.05));
+      s2CartTag.style.opacity = String(clamp(prog(t, 6.50, 6.80) * 1.5));
+      s2CartTag.style.transform = `translateY(${lerp(24, 0, tagU)}px) scale(${lerp(0.8, 1, tagU)})`;
+    } else {
+      s2Cart.style.opacity = '0';
+    }
+
+    // =========================================================================
+    // 3. BI-FOLD ACCORDION DUAL WORKBENCH & WOODEN BLOCKS [14.18 - 25.56s]
+    // =========================================================================
+    if (t >= 14.18 && t < 25.58) {
+      const unfoldIn = easeOutBack(prog(t, 14.22, 14.80));
+      const glideOut = easeInOutExpo(prog(t, 25.00, 25.56));
+      s3Stage.style.opacity = String(clamp(prog(t, 14.20, 14.55) * 1.6) * (1 - prog(t, 25.35, 25.56)));
+      s3Stage.style.transform = `translate3d(${lerp(0, -1920, glideOut)}px, 0, 0)`;
+
+      // Accordion Hinge Unfold
+      wingL.style.transform = `perspective(1400px) rotateY(${lerp(72, 4, unfoldIn)}deg)`;
+      wingR.style.transform = `perspective(1400px) rotateY(${lerp(-72, -4, unfoldIn)}deg)`;
+
+      // Portion highlights
+      dp1.style.borderColor = t >= 15.48 ? '#FB923C' : 'transparent';
+      dp1.style.transform = `scale(${1 + 0.03 * Math.sin(Math.PI * prog(t, 15.48, 15.78))})`;
+      dp2.style.borderColor = t >= 16.33 ? '#FB923C' : 'transparent';
+      dp2.style.transform = `scale(${1 + 0.03 * Math.sin(Math.PI * prog(t, 16.33, 16.63))})`;
+      dSubmit.style.transform = `scale(${1 - 0.045 * Math.sin(Math.PI * prog(t, 17.38, 17.72))})`;
+
+      // Pneumatic Capsule Glide (18.08 - 18.60s)
+      if (t >= 18.08 && t <= 18.62) {
+        const cU = prog(t, 18.08, 18.60);
+        capsule.style.opacity = String(Math.sin(Math.PI * clamp(cU * 1.1)));
+        const cx = lerp(520, 1400, easeInOutExpo(cU));
+        capsule.style.left = cx + 'px';
+      } else {
+        capsule.style.opacity = '0';
+      }
+
+      // Merchant state evolution
+      if (t < 18.56) {
+        dState.textContent = '● 等待新单同步';
+        dAction.textContent = '待接单';
+        dAction.style.background = '#78716C';
+      } else if (t < 20.10) {
+        dState.textContent = '● 新订单 #07 已实时送达';
+        dAction.textContent = '接单开始做';
+        dAction.style.background = '#EA580C';
+      } else if (t < 22.55) {
+        dState.textContent = '● 铁板现炒备餐制作中';
+        dAction.textContent = '点击「做好了」';
+        dAction.style.background = '#D97706';
+      } else {
+        dState.textContent = '✓ 已出餐 · 等待核销';
+        dAction.textContent = '✓ 已做好 · 待取餐';
+        dAction.style.background = '#16A34A';
+      }
+
+      // Tumbling Wooden Code Blocks (22.65s)
+      const targets = ['4', '8', '2', '9'];
+      for (let i = 0; i < 4; i++) {
+        const bU = easeOutBack(prog(t, 22.65 + i * 0.11, 23.12 + i * 0.11));
+        wbs[i].textContent = t >= 22.65 + i * 0.11 ? targets[i] : '·';
+        wbs[i].style.opacity = String(t >= 22.60 ? clamp(prog(t, 22.62 + i * 0.1, 22.9 + i * 0.1) * 1.6) : 0.32);
+        wbs[i].style.transform = `perspective(600px) rotateX(${lerp(-95, 0, bU)}deg) scale(${lerp(0.75, 1, bU)})`;
+      }
+    } else {
+      s3Stage.style.opacity = '0';
+    }
+
+    // =========================================================================
+    // 4. MINIATURE HANDOFF PAVILION & PRIVACY CALLOUTS [25.00 - 34.02s]
+    // =========================================================================
+    if (t >= 25.00 && t < 34.05) {
+      const glideIn = easeInOutExpo(prog(t, 25.00, 25.56));
+      const liftOut = easeInOutExpo(prog(t, 33.38, 34.00));
+      s4Pav.style.opacity = String(glideIn * (1 - liftOut));
+      s4Pav.style.transform = `translate3d(${lerp(1920, 0, glideIn)}px, ${lerp(0, -420, liftOut)}px, 0) scale(${lerp(1, 0.88, liftOut)})`;
+      s4Img.style.transform = `scale(${lerp(1.08, 1.01, prog(t, 25.2, 33.4))})`;
+
+      const p1U = easeOutBack(prog(t, 26.18, 26.72));
+      pav1.style.opacity = String(clamp(prog(t, 26.18, 26.48) * 1.6));
+      pav1.style.transform = `translateX(${lerp(-40, 0, p1U)}px) scale(${lerp(0.88, 1, p1U)})`;
+      lead1.style.opacity = pav1.style.opacity;
+
+      const p2U = easeOutBack(prog(t, 27.28, 27.82));
+      pav2.style.opacity = String(clamp(prog(t, 27.28, 27.58) * 1.6));
+      pav2.style.transform = `translateX(${lerp(40, 0, p2U)}px) scale(${lerp(0.88, 1, p2U)})`;
+      lead2.style.opacity = pav2.style.opacity;
+
+      const p3U = easeOutBack(prog(t, 28.38, 28.92));
+      pav3.style.opacity = String(clamp(prog(t, 28.38, 28.68) * 1.6));
+      pav3.style.transform = `translateX(${lerp(40, 0, p3U)}px) scale(${lerp(0.88, 1, p3U)})`;
+      lead3.style.opacity = pav3.style.opacity;
+    } else {
+      s4Pav.style.opacity = '0';
+    }
+
+    // =========================================================================
+    // 5. 3-TIER ISOMETRIC EXPLODED GOVERNANCE STACK [33.38 - 43.05s]
+    // =========================================================================
+    if (t >= 33.38 && t < 43.08) {
+      const stackIn = easeInOutExpo(prog(t, 33.38, 34.02));
+      const foldFinale = easeInOutExpo(prog(t, 42.38, 43.04));
+      s5Iso.style.opacity = String(stackIn * (1 - foldFinale));
+
+      // Gentle continuous isometric rotation + exploded vertical separation!
+      const rotZ = lerp(-36, -25, prog(t, 33.5, 42.4));
+      const compress = 1 - foldFinale;
+      const s1Lift = easeOutBack(prog(t, 34.45, 35.05)) * compress;
+      const s2Lift = easeOutBack(prog(t, 35.85, 36.45)) * compress;
+      const s3Lift = easeOutBack(prog(t, 37.25, 37.85)) * compress;
+
+      slab1.style.transform = `perspective(1400px) rotateX(54deg) rotateZ(${rotZ}deg) translateZ(${lerp(0, 95, s1Lift)}px)`;
+      slab2.style.transform = `perspective(1400px) rotateX(54deg) rotateZ(${rotZ}deg) translateZ(${lerp(-20, 10, s2Lift)}px)`;
+      slab3.style.transform = `perspective(1400px) rotateX(54deg) rotateZ(${rotZ}deg) translateZ(${lerp(-40, -75, s3Lift)}px)`;
+
+      spec1.style.opacity = String(clamp(prog(t, 34.48, 34.95) * 1.5));
+      spec1.style.transform = `translateX(${lerp(42, 0, easeOutCubic(prog(t, 34.48, 35.05)))}px)`;
+
+      spec2.style.opacity = String(clamp(prog(t, 35.88, 36.35) * 1.5));
+      spec2.style.transform = `translateX(${lerp(42, 0, easeOutCubic(prog(t, 35.88, 36.45)))}px)`;
+
+      spec3.style.opacity = String(clamp(prog(t, 37.28, 37.75) * 1.5));
+      spec3.style.transform = `translateX(${lerp(42, 0, easeOutCubic(prog(t, 37.28, 37.85)))}px)`;
+    } else {
+      s5Iso.style.opacity = '0';
+    }
+
+    // =========================================================================
+    // 6. PANORAMA MAQUETTE FINALE [42.38 - 48.00s]
+    // =========================================================================
+    if (t >= 42.38) {
+      const pIn = easeOutCubic(prog(t, 42.42, 43.10));
+      s6Pano.style.opacity = String(pIn);
+      s6Img.style.transform = `scale(${lerp(1.07, 1.0, prog(t, 42.4, 48.0))})`;
+      const bIn = easeOutCubic(prog(t, 42.95, 43.75));
+      s6Brand.style.opacity = String(bIn);
+      s6Brand.style.transform = `translateX(${lerp(-40, 0, bIn)}px)`;
+    } else {
+      s6Pano.style.opacity = '0';
+    }
+
+    // =========================================================================
+    // FOREGROUND TACTILE FX (Origami Crease Flash, Glide Streaks, Golden Dust)
+    // =========================================================================
+
+    // Origami Pop-Up Golden Fold Creases (2.02 - 2.62s)
+    if (t >= 2.02 && t <= 2.64) {
+      const u = prog(t, 2.02, 2.64);
+      ctx.save();
+      ctx.strokeStyle = `rgba(251, 146, 60, ${Math.sin(Math.PI * u) * 0.85})`;
+      ctx.lineWidth = 4;
+      for (let k = 1; k <= 3; k++) {
+        const y = lerp(960, 260 * k, easeOutCubic(u));
+        ctx.beginPath();
+        ctx.moveTo(120, y);
+        ctx.lineTo(1800, y);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // Workbench Glide Speed Streaks (5.45-6.02s and 25.00-25.56s)
+    const g1 = Math.sin(Math.PI * prog(t, 5.45, 6.02));
+    const g2 = Math.sin(Math.PI * prog(t, 25.00, 25.56));
+    const gAmt = Math.max(g1, g2);
+    if (gAmt > 0.01) {
+      for (let i = 0; i < 20; i++) {
+        const y = hash(i * 11) * 1080;
+        const w = 240 + hash(i * 7) * 520;
+        const x = ((1 - (t * 4.5 + hash(i * 5)) % 1) * 2300) - 250;
+        const grd = ctx.createLinearGradient(x, y, x + w, y);
+        grd.addColorStop(0, 'rgba(251,146,60,0)');
+        grd.addColorStop(0.5, `rgba(254,215,170,${0.38 * gAmt})`);
+        grd.addColorStop(1, 'rgba(251,146,60,0)');
+        ctx.fillStyle = grd;
+        ctx.fillRect(x, y, w, 3);
+      }
+    }
+
+    // Warm Miniature Firefly Motes on Cart, Pavilion, and Panorama Finale
+    if ((t >= 6.0 && t < 14.2) || (t >= 25.5 && t < 33.4) || t >= 42.8) {
+      for (let i = 0; i < 28; i++) {
+        const ph = (t * 0.28 + hash(i * 13)) % 1;
+        const x = 920 + (hash(i * 3) - 0.35) * 980 + Math.sin(t * 1.8 + i) * 22;
+        const y = 880 - ph * 680;
+        const r = 2 + hash(i * 19) * 3.8;
+        ctx.fillStyle = `rgba(254, 215, 170, ${Math.sin(Math.PI * ph) * 0.55})`;
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  window.renderAt = renderAt;
+  renderAt(0);
+})();
+</script>
+</body>
+</html>

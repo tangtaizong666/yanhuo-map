@@ -1,0 +1,58 @@
+{
+  "project": "烟火地图 · 折叠街角 (Film 2: Origami Blueprint & Pop-Up Isometric Diorama)",
+  "generated_date": "2026-11-14",
+  "copyright_and_portrait_safety": "All 4 miniature diorama backgrounds are 100% original AI-generated architectural & culinary scale-model images with zero human figures, zero portraits, zero third-party logos, and zero readable street signage. Score & Foley SFX are 100% procedurally synthesized via NumPy/SciPy.",
+  "design_inspiration_references": [
+    {
+      "site": "GSAP Showcase",
+      "url": "https://gsap.com/showcase/",
+      "usage": "3D origami fold-up hinges, accordion card physics, and isometric exploded slab motion reference."
+    },
+    {
+      "site": "Recent",
+      "url": "https://recent.design/?ref=godly",
+      "usage": "Craftsman editorial grid, clean architectural leader-line callouts, and warm walnut/cream contrast."
+    },
+    {
+      "site": "Dribbble",
+      "url": "https://dribbble.com/",
+      "usage": "Isometric 3-layer platform governance diagram & tactile card styling inspiration."
+    },
+    {
+      "site": "Pinterest",
+      "url": "https://www.pinterest.com/",
+      "usage": "Tilt-shift miniature food-cart & architectural scale-model lighting reference."
+    }
+  ],
+  "assets": [
+    {
+      "file": "assets/01-diorama-empty.jpg",
+      "origin": "AI-generated original image (built-in image-generator subagent)",
+      "prompt_summary": "Tilt-shift macro photograph of a handcrafted miniature campus brick-gate corner maquette in cool dusk with an unlit copper streetlamp and empty dashed stall bay, zero text or human figures.",
+      "license": "Project-generated original synthetic asset; zero portrait or trademark subjects"
+    },
+    {
+      "file": "assets/02-diorama-cart.jpg",
+      "origin": "AI-generated original image (built-in image-generator subagent)",
+      "prompt_summary": "Isometric tilt-shift macro photograph of a handcrafted miniature sky-blue & terracotta-awning noodle cart maquette glowing with warm amber lantern light beside golden ginkgo leaves, zero text or human figures.",
+      "license": "Project-generated original synthetic asset; zero portrait or trademark subjects"
+    },
+    {
+      "file": "assets/03-diorama-pavilion.jpg",
+      "origin": "AI-generated original image (built-in image-generator subagent)",
+      "prompt_summary": "Isometric tilt-shift macro photograph of a handcrafted miniature cedar-and-terracotta campus insulated food-handoff pavilion with glowing amber compartments and miniature bicycles, zero text or human figures.",
+      "license": "Project-generated original synthetic asset; zero portrait or trademark subjects"
+    },
+    {
+      "file": "assets/04-diorama-finale.jpg",
+      "origin": "AI-generated original image (built-in image-generator subagent)",
+      "prompt_summary": "Wide tilt-shift macro photograph with glowing miniature food cart and campus handoff pavilion connected by a ginkgo cobblestone path on the right half and clean dark walnut bokeh negative space on the left half.",
+      "license": "Project-generated original synthetic asset; zero portrait or trademark subjects"
+    },
+    {
+      "file": "audio/soundtrack.wav",
+      "origin": "tools/create_audio.py (100% procedural Python synthesis)",
+      "license": "Original synthesized 118 BPM Chamber-Marimba / Pizzicato / Kalimba score + origami & wooden maquette Foley"
+    }
+  ]
+}

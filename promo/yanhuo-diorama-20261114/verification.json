@@ -1,0 +1,24 @@
+{
+  "file": "yanhuo-diorama-48s-1080p60.mp4",
+  "bytes": 34152174,
+  "sha256": "351bdf282731ccbecb38692c69751e415c06d345ae2cc376b908793fb225c0f9",
+  "duration_seconds": 48.0,
+  "width": 1920,
+  "height": 1080,
+  "fps": "60/1",
+  "decoded_video_frames": 2880,
+  "video_codec": "h264",
+  "color_parameters": [
+    "yuv420p",
+    "tv",
+    "bt709",
+    "bt709",
+    "bt709"
+  ],
+  "audio_codec": "aac",
+  "audio_sample_rate": 48000,
+  "audio_channels": 2,
+  "integrated_loudness_lufs": -14.86,
+  "true_peak_dbtp": -3.55,
+  "decode_check": "passed; all 2880 frames at 60fps and 48kHz stereo audio decoded with zero FFmpeg errors"
+}

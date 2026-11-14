@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>烟火地图 · 双版本答辩宣传片审片室 (1080p · 60fps)</title>
+<style>
+  :root {
+    --orange: #EA580C;
+    --orange-light: #FB923C;
+    --cream: #FFFDF9;
+    --bg: #0E0C0A;
+    --card: #191512;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--cream);
+    font-family: "Microsoft YaHei UI", "PingFang SC", sans-serif;
+    padding: 36px 48px 64px;
+    line-height: 1.5;
+  }
+  header {
+    max-width: 1480px;
+    margin: 0 auto 32px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    border-bottom: 1px solid rgba(255,253,249,0.12);
+    padding-bottom: 20px;
+  }
+  h1 { font-size: 30px; font-weight: 800; }
+  .badge {
+    display: inline-block;
+    background: rgba(234,88,12,0.22);
+    border: 1px solid rgba(251,146,60,0.5);
+    color: #FDBA74;
+    padding: 5px 14px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 700;
+  }
+  .grid {
+    max-width: 1480px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 32px;
+  }
+  @media (max-width: 1100px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+  .film-card {
+    background: var(--card);
+    border: 1px solid rgba(255,253,249,0.10);
+    border-radius: 22px;
+    padding: 24px;
+    box-shadow: 0 24px 60px rgba(0,0,0,0.45);
+  }
+  .film-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  .film-title { font-size: 22px; font-weight: 800; color: #FFFDF9; }
+  .film-desc { font-size: 14px; color: rgba(255,253,249,0.72); margin-bottom: 16px; }
+  video {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    border-radius: 14px;
+    background: #000;
+    display: block;
+    margin-bottom: 14px;
+  }
+  .chapters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  button {
+    background: rgba(255,253,249,0.08);
+    color: #FFFDF9;
+    border: 1px solid rgba(255,253,249,0.16);
+    border-radius: 999px;
+    padding: 6px 13px;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: 0.15s ease;
+  }
+  button:hover {
+    background: var(--orange);
+    border-color: var(--orange-light);
+  }
+</style>
+</head>
+<body>
+  <header>
+    <div>
+      <span class="badge">三创赛路演答辩先导片 · 真 1080p 60fps · 2880 帧</span>
+      <h1 style="margin-top:8px;">烟火地图 · 双创意方案成片对比审片室</h1>
+    </div>
+    <div style="font-size:14px;color:rgba(255,253,249,0.62);">
+      点击播放器可直接开启声音全屏播放 · 下方章节按钮可快速跳看转场细节
+    </div>
+  </header>
+
+  <div class="grid">
+    <section class="film-card">
+      <div class="film-head">
+        <span class="film-title">方案一：《一镜穿烟火》</span>
+        <span class="badge">几何匹配 × 穿屏一镜到底</span>
+      </div>
+      <p class="film-desc">
+        微距烟火 AI 实景 × 3D 空间悬浮 UI · 112 BPM 轻爵士律动 + 逐帧微观拟音（圆碗变雷达环、暖灯拉出变出摊开关、飞票跨端、炉火起燃、10倍拉升三端治理星图）。
+      </p>
+      <video id="v1" controls preload="metadata" poster="yanhuo-matchcut-20261114/poster.jpg" src="yanhuo-matchcut-20261114/yanhuo-matchcut-48s-1080p60.mp4"></video>
+      <div class="chapters">
+        <button onclick="jump('v1', 0)">00s 俯拍热面</button>
+        <button onclick="jump('v1', 2.0)">02s 圆碗变地图</button>
+        <button onclick="jump('v1', 6.0)">06s 拉灯变出摊开关</button>
+        <button onclick="jump('v1', 14.0)">14s 钻针孔与飞票跨端</button>
+        <button onclick="jump('v1', 21.0)">21s 接单起火现炒</button>
+        <button onclick="jump('v1', 25.1)">25s 翻转取餐码与双轨</button>
+        <button onclick="jump('v1', 33.1)">33s 10倍拉升合规星图</button>
+        <button onclick="jump('v1', 42.3)">42s 萤火收束片尾</button>
+      </div>
+    </section>
+
+    <section class="film-card">
+      <div class="film-head">
+        <span class="film-title">方案二：《折叠街角》</span>
+        <span class="badge">立体纸艺微缩沙盘 × 破壁 3D UI</span>
+      </div>
+      <p class="film-desc">
+        手工移轴建筑沙盘美学 × 折纸/风琴面板破壁联动 · 118 BPM 马林巴木琴与室内拨弦（平面蓝图折纸立起、橙棚蓝车双模上手、保温交接亭引线、三层等轴测治理切片）。
+      </p>
+      <video id="v2" controls preload="metadata" poster="yanhuo-diorama-20261114/poster.jpg" src="yanhuo-diorama-20261114/yanhuo-diorama-48s-1080p60.mp4"></video>
+      <div class="chapters">
+        <button onclick="jump('v2', 0)">00s 平面测绘图</button>
+        <button onclick="jump('v2', 1.9)">02s 折纸立起空位沙盘</button>
+        <button onclick="jump('v2', 5.4)">06s 橙棚蓝车与双模面板</button>
+        <button onclick="jump('v2', 14.1)">14s 风琴双翼与胶囊传单</button>
+        <button onclick="jump('v2', 22.4)">22s 木块翻转取餐码</button>
+        <button onclick="jump('v2', 25.0)">25s 微缩保温交接亭</button>
+        <button onclick="jump('v2', 33.3)">33s 等轴测三层治理切片</button>
+        <button onclick="jump('v2', 42.3)">42s 全景沙盘收尾</button>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    function jump(id, sec) {
+      const other = id === 'v1' ? document.getElementById('v2') : document.getElementById('v1');
+      other.pause();
+      const v = document.getElementById(id);
+      v.currentTime = sec;
+      v.play();
+    }
+  </script>
+</body>
+</html>

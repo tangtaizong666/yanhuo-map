@@ -1,0 +1,120 @@
+{
+  "title": "一镜穿烟火 · Original Jazz-Hop & Tactile Foley Score",
+  "duration_seconds": 48.0,
+  "sample_rate": 48000,
+  "channels": 2,
+  "bpm": 112.0,
+  "style": "112 BPM Warm Neo-Soul / Jazz-Hop + Frame-Accurate Foley SFX",
+  "peak_dbfs": -4.07,
+  "rms_dbfs": -17.2,
+  "cues": [
+    {
+      "time": 2.08,
+      "cue": "bowl-to-map-circle-morph"
+    },
+    {
+      "time": 2.85,
+      "cue": "empty-chat-pill-1"
+    },
+    {
+      "time": 3.25,
+      "cue": "empty-chat-pill-2"
+    },
+    {
+      "time": 4.28,
+      "cue": "whip-pan-street-hook"
+    },
+    {
+      "time": 6.18,
+      "cue": "stall-lamp-ignition-click"
+    },
+    {
+      "time": 8.1,
+      "cue": "lamp-to-toggle-zoomout"
+    },
+    {
+      "time": 8.56,
+      "cue": "merchant-toggle-on"
+    },
+    {
+      "time": 9.62,
+      "cue": "live-green-freshness-badge"
+    },
+    {
+      "time": 14.0,
+      "cue": "pin-portal-dive"
+    },
+    {
+      "time": 15.4,
+      "cue": "item-1-flavor-snap"
+    },
+    {
+      "time": 16.3,
+      "cue": "item-2-flavor-snap"
+    },
+    {
+      "time": 17.4,
+      "cue": "submit-order-press"
+    },
+    {
+      "time": 18.08,
+      "cue": "flying-ticket-whip"
+    },
+    {
+      "time": 18.55,
+      "cue": "merchant-new-order-bell"
+    },
+    {
+      "time": 20.4,
+      "cue": "merchant-accept-cooking"
+    },
+    {
+      "time": 21.18,
+      "cue": "button-ignition-teppanyaki-sizzle"
+    },
+    {
+      "time": 23.8,
+      "cue": "order-ready-snap"
+    },
+    {
+      "time": 25.2,
+      "cue": "3d-card-flip-pickup"
+    },
+    {
+      "time": 25.72,
+      "cue": "split-flap-code-4829"
+    },
+    {
+      "time": 28.4,
+      "cue": "diagonal-dual-track-split"
+    },
+    {
+      "time": 30.1,
+      "cue": "dual-handoff-verified"
+    },
+    {
+      "time": 33.18,
+      "cue": "ecosystem-10x-pullback"
+    },
+    {
+      "time": 34.6,
+      "cue": "pillar-1-tiered-license"
+    },
+    {
+      "time": 36.0,
+      "cue": "pillar-2-direct-wechat-pay"
+    },
+    {
+      "time": 37.4,
+      "cue": "pillar-3-freshness-risk-control"
+    },
+    {
+      "time": 42.38,
+      "cue": "lantern-firefly-coalescence"
+    },
+    {
+      "time": 43.1,
+      "cue": "brand-lockup-shimmer"
+    }
+  ]
+}

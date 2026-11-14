@@ -1,0 +1,1479 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=1920, height=1080, initial-scale=1.0" />
+<title>烟火地图 · 一镜穿烟火 (60fps Spatial Match-Cut Engine)</title>
+<style>
+  :root {
+    --orange: #EA580C;
+    --orange-bright: #FB923C;
+    --orange-soft: #FFF1E6;
+    --cream: #FFFDF9;
+    --cream-2: #FAF5EE;
+    --ink: #1C1917;
+    --ink-muted: #57534E;
+    --green: #16A34A;
+    --green-soft: #DCFCE7;
+    --dark-bg: #12100E;
+    --slate-map: #0F172A;
+  }
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    user-select: none;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  html, body {
+    width: 1920px;
+    height: 1080px;
+    overflow: hidden;
+    background: #0E0C0A;
+    font-family: "Microsoft YaHei UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    color: var(--cream);
+  }
+
+  #viewport {
+    position: relative;
+    width: 1920px;
+    height: 1080px;
+    overflow: hidden;
+    perspective: 1400px;
+    background: #0E0C0A;
+  }
+
+  .layer {
+    position: absolute;
+    inset: 0;
+    width: 1920px;
+    height: 1080px;
+    will-change: transform, opacity, filter;
+    pointer-events: none;
+  }
+
+  .bg-cover {
+    width: 1920px;
+    height: 1080px;
+    object-fit: cover;
+    display: block;
+  }
+
+  /* Pill & Typography Helpers */
+  .tag-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 22px;
+    border-radius: 999px;
+    font-size: 21px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+
+  .dot-pulse {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+
+  /* Scene 1: Bowl & Night Map */
+  #s1-bowl-wrap {
+    transform-origin: 960px 540px;
+  }
+
+  #s1-vignette {
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle at 960px 540px, rgba(14,12,10,0) 24%, rgba(14,12,10,0.68) 88%);
+  }
+
+  #s1-intro-caption {
+    position: absolute;
+    left: 108px;
+    top: 88px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  #s1-map-stage {
+    background: radial-gradient(circle at 960px 540px, #1E293B 0%, #0B1120 72%, #060913 100%);
+    transform-origin: 960px 540px;
+  }
+
+  .chat-bubble {
+    position: absolute;
+    background: rgba(15, 23, 42, 0.88);
+    border: 1.5px solid rgba(148, 163, 184, 0.28);
+    box-shadow: 0 24px 50px rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(14px);
+    padding: 20px 30px;
+    border-radius: 24px;
+    color: #F1F5F9;
+    font-size: 25px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    white-space: nowrap;
+  }
+
+  /* Scene 1C: Bridge Hook Title over Dim Stall */
+  #s2-lamp-bg {
+    transform-origin: 960px 542px;
+  }
+
+  #hook-banner {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 0 120px;
+    background: radial-gradient(circle at 50% 50%, rgba(12,10,9,0.45) 0%, rgba(12,10,9,0.82) 100%);
+  }
+
+  /* Scene 2B: 3D Merchant Outing Card */
+  #s2-merchant-stage {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 116px;
+    transform-style: preserve-3d;
+  }
+
+  .left-editorial {
+    max-width: 650px;
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+  }
+
+  .editorial-kicker {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    align-self: flex-start;
+    background: rgba(234, 88, 12, 0.18);
+    border: 1px solid rgba(251, 146, 60, 0.45);
+    color: #FDBA74;
+    padding: 9px 20px;
+    border-radius: 999px;
+    font-size: 20px;
+    font-weight: 700;
+  }
+
+  .editorial-h1 {
+    font-size: 56px;
+    font-weight: 800;
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+    color: #FFFDF9;
+    text-shadow: 0 10px 30px rgba(0,0,0,0.45);
+  }
+
+  .editorial-sub {
+    font-size: 25px;
+    line-height: 1.55;
+    color: rgba(255, 253, 249, 0.82);
+    font-weight: 500;
+  }
+
+  .ui-card-cream {
+    background: var(--cream);
+    color: var(--ink);
+    border-radius: 34px;
+    box-shadow:
+      0 40px 90px rgba(0, 0, 0, 0.55),
+      0 0 0 1.5px rgba(255, 255, 255, 0.65) inset;
+    padding: 40px 44px;
+    transform-style: preserve-3d;
+  }
+
+  #merchant-outing-card {
+    width: 860px;
+    position: relative;
+  }
+
+  .switch-track {
+    width: 146px;
+    height: 76px;
+    border-radius: 999px;
+    padding: 8px;
+    display: flex;
+    align-items: center;
+    position: relative;
+    box-shadow: inset 0 3px 8px rgba(0,0,0,0.18);
+  }
+
+  .switch-knob {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background: #FFFDF9;
+    box-shadow: 0 6px 18px rgba(234, 88, 12, 0.45);
+  }
+
+  /* Scene 3: Spatial Dual Stage (Student -> Flying Ticket -> Merchant Console) */
+  #s3-world {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 3840px;
+    height: 1080px;
+    display: flex;
+    background:
+      radial-gradient(circle at 960px 540px, rgba(234,88,12,0.13) 0%, transparent 55%),
+      radial-gradient(circle at 2880px 540px, rgba(22,163,74,0.12) 0%, transparent 55%),
+      linear-gradient(135deg, #1A1512 0%, #120F0D 50%, #171310 100%);
+    will-change: transform;
+  }
+
+  .s3-half {
+    width: 1920px;
+    height: 1080px;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 112px;
+  }
+
+  .portion-row {
+    background: var(--cream-2);
+    border: 1.5px solid rgba(28, 25, 23, 0.08);
+    border-radius: 22px;
+    padding: 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .chip-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 16px;
+    border-radius: 999px;
+    background: #FFF1E6;
+    border: 1.5px solid #FDBA74;
+    color: #C2410C;
+    font-size: 19px;
+    font-weight: 700;
+  }
+
+  .primary-btn {
+    background: linear-gradient(135deg, #EA580C 0%, #F97316 100%);
+    color: #FFFDF9;
+    border-radius: 22px;
+    height: 78px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    font-size: 27px;
+    font-weight: 800;
+    box-shadow: 0 18px 36px rgba(234, 88, 12, 0.36);
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* Flying Thermal Ticket */
+  #flying-ticket {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 460px;
+    background: #FFFDF9;
+    color: var(--ink);
+    border-radius: 22px;
+    padding: 26px 30px;
+    border-top: 8px solid var(--orange);
+    box-shadow: 0 30px 70px rgba(234, 88, 12, 0.48);
+    z-index: 40;
+  }
+
+  /* Scene 3B: Wok Fire Action */
+  #s3-fire-stage {
+    background: #0E0B09;
+  }
+
+  #fire-status-pill {
+    position: absolute;
+    right: 96px;
+    top: 84px;
+    background: rgba(20, 16, 14, 0.86);
+    border: 1.5px solid rgba(251, 146, 60, 0.45);
+    backdrop-filter: blur(16px);
+    border-radius: 26px;
+    padding: 22px 34px;
+    box-shadow: 0 24px 60px rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+
+  /* Scene 4: 3D Flip Pickup Code & Diagonal Dual Fulfillment */
+  #s4-stage {
+    background: radial-gradient(circle at 50% 42%, #231B16 0%, #110E0C 80%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    perspective: 1600px;
+  }
+
+  #s4-pickup-card {
+    width: 1120px;
+    padding: 48px 58px;
+    text-align: center;
+    transform-style: preserve-3d;
+  }
+
+  .flap-grid {
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    margin: 30px 0 28px;
+  }
+
+  .flap-digit {
+    width: 148px;
+    height: 184px;
+    background: #1C1917;
+    color: #FFFDF9;
+    border-radius: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 112px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    position: relative;
+    box-shadow: 0 20px 40px rgba(28,25,23,0.28), inset 0 2px 0 rgba(255,255,255,0.14);
+  }
+
+  .flap-digit::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 3px;
+    background: rgba(0, 0, 0, 0.55);
+  }
+
+  /* Diagonal Dual-Track Stage */
+  #s4-dual-stage {
+    position: absolute;
+    inset: 0;
+  }
+
+  .diag-left {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, #FFFDF9 0%, #FFF4E8 100%);
+    color: var(--ink);
+    clip-path: polygon(0 0, 58% 0, 42% 100%, 0 100%);
+    padding: 96px 104px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  .diag-right {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, #1A1614 0%, #0F172A 100%);
+    color: var(--cream);
+    clip-path: polygon(58% 0, 100% 0, 100% 100%, 42% 100%);
+    padding: 96px 104px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: flex-end;
+    text-align: right;
+  }
+
+  /* Scene 5: 3-End Ecosystem Constellation */
+  #s5-eco-stage {
+    background:
+      radial-gradient(circle at 960px 460px, rgba(234, 88, 12, 0.16) 0%, rgba(15, 13, 11, 0) 60%),
+      #0E0C0A;
+  }
+
+  .hub-node {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    background: rgba(255, 253, 249, 0.97);
+    color: var(--ink);
+    border-radius: 26px;
+    padding: 20px 32px;
+    box-shadow: 0 26px 60px rgba(0,0,0,0.55), 0 0 0 3px rgba(234,88,12,0.35);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .pillar-card {
+    background: rgba(28, 25, 23, 0.88);
+    border: 1.5px solid rgba(251, 146, 60, 0.34);
+    border-radius: 26px;
+    padding: 28px 32px;
+    width: 536px;
+    box-shadow: 0 24px 55px rgba(0,0,0,0.5);
+    backdrop-filter: blur(12px);
+  }
+
+  /* Scene 6: Finale */
+  #s6-finale-stage {
+    background: #0B0F17;
+  }
+
+  #s6-brand-panel {
+    position: absolute;
+    left: 118px;
+    top: 0;
+    bottom: 0;
+    width: 1020px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 28px;
+  }
+
+  /* Touch Ripple */
+  .touch-ring {
+    position: absolute;
+    width: 84px;
+    height: 84px;
+    margin-left: -42px;
+    margin-top: -42px;
+    border-radius: 50%;
+    border: 4px solid var(--orange-bright);
+    background: rgba(251, 146, 60, 0.28);
+    pointer-events: none;
+    z-index: 90;
+  }
+</style>
+</head>
+<body>
+<div id="viewport">
+
+  <!-- ================= SCENE 1: BOWL -> NIGHT RADAR MAP ================= -->
+  <div id="s1-map-stage" class="layer" style="opacity:0;">
+    <svg width="1920" height="1080" viewBox="0 0 1920 1080" style="position:absolute;inset:0;opacity:0.52;">
+      <defs>
+        <pattern id="mapGrid" width="80" height="80" patternUnits="userSpaceOnUse">
+          <path d="M 80 0 L 0 0 0 80" fill="none" stroke="rgba(148,163,184,0.10)" stroke-width="1"/>
+        </pattern>
+      </defs>
+      <rect width="1920" height="1080" fill="url(#mapGrid)" />
+      <!-- Stylized Campus Roads & Blocks -->
+      <path d="M -50 380 Q 620 410 960 540 T 1980 620" fill="none" stroke="#334155" stroke-width="34" stroke-linecap="round"/>
+      <path d="M 520 -40 L 760 1120" fill="none" stroke="#1E293B" stroke-width="26"/>
+      <path d="M 960 -40 L 960 1120" fill="none" stroke="#334155" stroke-width="22" stroke-dasharray="14 14"/>
+      <path d="M 1380 -40 L 1220 1120" fill="none" stroke="#1E293B" stroke-width="28"/>
+      <rect x="240" y="150" width="210" height="140" rx="18" fill="rgba(30,41,59,0.7)" stroke="rgba(148,163,184,0.18)"/>
+      <text x="345" y="228" fill="#64748B" font-size="22" font-weight="700" text-anchor="middle">教学楼群</text>
+      <rect x="1390" y="210" width="250" height="150" rx="18" fill="rgba(30,41,59,0.7)" stroke="rgba(148,163,184,0.18)"/>
+      <text x="1515" y="293" fill="#64748B" font-size="22" font-weight="700" text-anchor="middle">东门银杏步道</text>
+      <text x="825" y="645" fill="#94A3B8" font-size="22" font-weight="700">校园南门旧点位</text>
+    </svg>
+
+    <!-- Radar Ring Matching Bowl Rim Center (960, 540) -->
+    <div id="s1-radar-ring" style="position:absolute;left:960px;top:540px;width:440px;height:440px;margin-left:-220px;margin-top:-220px;border-radius:50%;border:3px dashed rgba(148,163,184,0.55);display:flex;align-items:center;justify-content:center;">
+      <div style="background:rgba(15,23,42,0.92);border:1.5px solid rgba(148,163,184,0.4);padding:14px 28px;border-radius:999px;display:flex;align-items:center;gap:12px;box-shadow:0 16px 40px rgba(0,0,0,0.5);">
+        <span class="dot-pulse" style="background:#64748B;"></span>
+        <span style="font-size:23px;font-weight:700;color:#CBD5E1;">昨晚位置 · 今晚空位未出摊</span>
+      </div>
+    </div>
+
+    <div id="chat-pill-1" class="chat-bubble" style="left:210px;top:330px;opacity:0;">
+      <span style="font-size:30px;">💬</span>
+      <span>“昨晚还在南门，今天怎么没影了？”</span>
+    </div>
+    <div id="chat-pill-2" class="chat-bubble" style="right:175px;top:675px;opacity:0;">
+      <span style="font-size:30px;">🥶</span>
+      <span>“顶着冷风白跑一趟，换一家又要排二十分钟…”</span>
+    </div>
+  </div>
+
+  <div id="s1-bowl-wrap" class="layer">
+    <img src="01-bowl-topdown.jpg" class="bg-cover" alt="" />
+    <div id="s1-vignette"></div>
+    <div id="s1-intro-caption">
+      <div class="tag-pill" style="background:rgba(234,88,12,0.22);border:1px solid rgba(251,146,60,0.5);color:#FED7AA;align-self:flex-start;backdrop-filter:blur(10px);">
+        <span class="dot-pulse" style="background:#FB923C;"></span>
+        <span>傍晚 18:30 · 下课后的惦记</span>
+      </div>
+      <div style="font-size:48px;font-weight:800;letter-spacing:-0.02em;text-shadow:0 8px 28px rgba(0,0,0,0.7);">
+        惦记那一口热炒面，<br/><span style="color:#FDBA74;">最怕走到路口却扑了空。</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= SCENE 2: TWILIGHT LAMP -> MERCHANT TOGGLE ================= -->
+  <div id="s2-stage" class="layer" style="opacity:0;">
+    <div id="s2-lamp-bg" class="layer">
+      <img src="02-stall-lamp.jpg" class="bg-cover" alt="" />
+    </div>
+
+    <!-- Hook Banner before Lamp Click (4.65s - 6.18s) -->
+    <div id="hook-banner" style="opacity:0;">
+      <div style="font-size:23px;font-weight:700;color:#FDBA74;letter-spacing:0.14em;margin-bottom:20px;">
+        CAMPUS STREET FOOD · REAL-TIME TRUST
+      </div>
+      <div id="hook-main-title" style="font-size:74px;font-weight:800;letter-spacing:-0.025em;line-height:1.18;color:#FFFDF9;">
+        想吃一口热乎的，<span style="color:#FB923C;">凭什么靠撞运气？</span>
+      </div>
+      <div style="margin-top:24px;font-size:27px;color:rgba(255,253,249,0.76);font-weight:500;">
+        位置靠猜 · 寒风傻排 · 准入无据 —— 用一套丝滑机制彻底重塑
+      </div>
+    </div>
+
+    <!-- Warm Lamp Ignition Halo at (960, 542) -->
+    <div id="lamp-halo" style="position:absolute;left:960px;top:542px;width:320px;height:320px;margin-left:-160px;margin-top:-160px;border-radius:50%;background:radial-gradient(circle, rgba(255,237,213,0.95) 0%, rgba(251,146,60,0.65) 36%, rgba(234,88,12,0) 72%);opacity:0;"></div>
+
+    <!-- 3D Merchant Workbench Outing Card -->
+    <div id="s2-merchant-stage" class="layer" style="opacity:0;">
+      <div class="left-editorial" id="s2-editorial">
+        <div class="editorial-kicker">商家工作台 · 零门槛上手</div>
+        <div class="editorial-h1">像拉亮摊灯一样简单，<br/><span style="color:#FB923C;">一键发布今日出摊。</span></div>
+        <div class="editorial-sub">
+          无需填写繁琐技术参数。出摊展示与线上接单独立控制，位置超过 <strong>60 分钟未确认自动停单</strong>，学生不跑冤枉路。
+        </div>
+      </div>
+
+      <div id="merchant-outing-card" class="ui-card-cream">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:28px;border-bottom:1.5px solid rgba(28,25,23,0.08);">
+          <div>
+            <div style="font-size:19px;font-weight:700;color:var(--orange);letter-spacing:0.04em;">MERCHANT WORKBENCH · 今天出摊</div>
+            <div style="font-size:36px;font-weight:800;margin-top:6px;color:var(--ink);">老陈铁板细炒面</div>
+          </div>
+          <div id="merchant-switch" class="switch-track" style="background:var(--orange);">
+            <div id="merchant-knob" class="switch-knob"></div>
+          </div>
+        </div>
+
+        <div id="s2-loc-box" style="margin-top:26px;background:var(--cream-2);border-radius:24px;padding:24px 28px;border:1.5px solid rgba(28,25,23,0.07);">
+          <div style="display:flex;align-items:center;justify-content:space-between;">
+            <span style="font-size:20px;font-weight:700;color:var(--ink-muted);">今日确认出摊点位</span>
+            <span style="font-size:19px;font-weight:700;color:var(--orange);background:var(--orange-soft);padding:5px 14px;border-radius:999px;">认摊：橙棚暖灯 · 铁板现炒</span>
+          </div>
+          <div style="font-size:30px;font-weight:800;margin-top:12px;color:var(--ink);display:flex;align-items:center;gap:12px;">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none"><path d="M12 2C7.86 2 4.5 5.36 4.5 9.5c0 5.4 7.5 12.5 7.5 12.5s7.5-7.1 7.5-12.5C19.5 5.36 16.14 2 12 2z" fill="#EA580C"/><circle cx="12" cy="9.5" r="3" fill="#FFFDF9"/></svg>
+            <span>示例校园 · 东门银杏步道旁</span>
+          </div>
+        </div>
+
+        <div id="s2-fresh-box" style="margin-top:22px;display:flex;align-items:center;justify-content:space-between;background:var(--green-soft);border:1.5px solid rgba(22,163,74,0.3);border-radius:22px;padding:20px 26px;">
+          <div style="display:flex;align-items:center;gap:14px;">
+            <span class="dot-pulse" style="background:var(--green);box-shadow:0 0 0 6px rgba(22,163,74,0.2);"></span>
+            <div>
+              <div style="font-size:23px;font-weight:800;color:#14532D;">出摊中 · 商家刚刚主动确认位置</div>
+              <div style="font-size:18px;font-weight:600;color:#166534;margin-top:3px;">暂歇或收摊不顺带伪造确认时间 · 真实可信</div>
+            </div>
+          </div>
+          <div style="background:#FFFDF9;border-radius:16px;padding:10px 18px;text-align:center;border:1px solid rgba(22,163,74,0.25);">
+            <div style="font-size:24px;font-weight:800;color:var(--green);font-variant-numeric:tabular-nums;">59:48</div>
+            <div style="font-size:14px;font-weight:700;color:#166534;">60m 动态保鲜</div>
+          </div>
+        </div>
+
+        <!-- Portal Pin Trigger at Bottom Right for Transition 4 -->
+        <div id="s2-pin-portal" style="position:absolute;right:44px;bottom:-30px;background:var(--orange);color:#FFFDF9;padding:14px 26px;border-radius:999px;font-size:21px;font-weight:800;box-shadow:0 16px 34px rgba(234,88,12,0.45);display:flex;align-items:center;gap:10px;">
+          <span style="width:28px;height:28px;border-radius:50%;background:#FFFDF9;color:var(--orange);display:inline-flex;align-items:center;justify-content:center;font-weight:900;">↗</span>
+          <span>学生端同步可见 · 立即选餐</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= SCENE 3: STUDENT CUSTOMIZE -> FLYING TICKET -> MERCHANT & FIRE ================= -->
+  <div id="s3-stage" class="layer" style="opacity:0;">
+    <div id="s3-world">
+      <!-- Left 1920px: Student Customization -->
+      <div class="s3-half">
+        <div class="left-editorial">
+          <div class="editorial-kicker">学生端 · 逐份口味定制</div>
+          <div class="editorial-h1">路上提前选好口味，<br/><span style="color:#FB923C;">每一份忌口都清清楚楚。</span></div>
+          <div class="editorial-sub">
+            同一道餐点支持按份编号选择免费口味与独立备注；真实显示线上剩余可卖份数与商家预计备餐时长。
+          </div>
+        </div>
+
+        <div id="student-order-card" class="ui-card-cream" style="width:870px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:22px;">
+            <div>
+              <div style="display:flex;align-items:center;gap:12px;">
+                <span style="background:var(--green-soft);color:var(--green);padding:5px 14px;border-radius:999px;font-size:18px;font-weight:800;">● 可在线点单</span>
+                <span style="font-size:19px;font-weight:700;color:var(--ink-muted);">预计备餐 6–8 分钟 · 线上剩余 18 份</span>
+              </div>
+              <div style="font-size:36px;font-weight:800;margin-top:10px;color:var(--ink);">招牌铁板细炒面</div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-size:40px;font-weight:800;color:var(--orange);">¥11.0</div>
+              <div style="font-size:17px;color:var(--ink-muted);font-weight:600;">免费口味不加价</div>
+            </div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:16px;margin-bottom:26px;">
+            <div id="portion-1" class="portion-row">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span style="font-size:23px;font-weight:800;color:var(--ink);">第 1 份 · 自己吃</span>
+                <div style="display:flex;gap:10px;">
+                  <span class="chip-check">✓ 微辣</span>
+                  <span class="chip-check">✓ 多加葱花</span>
+                </div>
+              </div>
+              <div style="font-size:19px;color:var(--ink-muted);font-weight:600;">独立备注：面条稍微炒干香一点，谢谢老板</div>
+            </div>
+
+            <div id="portion-2" class="portion-row">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span style="font-size:23px;font-weight:800;color:var(--ink);">第 2 份 · 室友带回</span>
+                <div style="display:flex;gap:10px;">
+                  <span class="chip-check">✓ 不辣</span>
+                  <span class="chip-check">✓ 免葱免蒜</span>
+                </div>
+              </div>
+              <div style="font-size:19px;color:var(--ink-muted);font-weight:600;">独立备注：分开打包，到摊自取</div>
+            </div>
+          </div>
+
+          <div id="student-submit-btn" class="primary-btn">
+            <span>提交到摊自取订单 · 2 份合计 ¥22.0</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right 1920px: Merchant Order Console -->
+      <div class="s3-half">
+        <div id="merchant-console-card" class="ui-card-cream" style="width:900px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;">
+            <div style="display:flex;gap:14px;">
+              <div style="background:var(--orange);color:#FFFDF9;padding:10px 24px;border-radius:999px;font-size:21px;font-weight:800;">新订单 1</div>
+              <div style="background:var(--cream-2);color:var(--ink-muted);padding:10px 24px;border-radius:999px;font-size:21px;font-weight:700;">制作中 2</div>
+              <div style="background:var(--cream-2);color:var(--ink-muted);padding:10px 24px;border-radius:999px;font-size:21px;font-weight:700;">待取餐 1</div>
+            </div>
+            <div style="font-size:19px;font-weight:700;color:var(--green);display:flex;align-items:center;gap:8px;">
+              <span>🔔</span><span>新单声音提醒已开启</span>
+            </div>
+          </div>
+
+          <div id="merchant-incoming-slot" style="background:#FFF8F1;border:2px solid #FDBA74;border-radius:26px;padding:26px 30px;margin-bottom:24px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+              <div style="display:flex;align-items:center;gap:12px;">
+                <span style="background:var(--orange);color:#FFFDF9;padding:6px 16px;border-radius:12px;font-size:21px;font-weight:800;">到摊自取 #07</span>
+                <span style="font-size:26px;font-weight:800;color:var(--ink);">招牌铁板细炒面 × 2 份</span>
+              </div>
+              <span style="font-size:20px;font-weight:700;color:#C2410C;">接单剩余 04:52</span>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+              <div style="background:#FFFDF9;padding:16px 20px;border-radius:16px;border:1px solid rgba(234,88,12,0.18);">
+                <div style="font-size:21px;font-weight:800;color:var(--ink);">第 1 份：微辣 · 多加葱花</div>
+                <div style="font-size:18px;color:var(--ink-muted);margin-top:4px;">备注：炒干香一点</div>
+              </div>
+              <div style="background:#FFFDF9;padding:16px 20px;border-radius:16px;border:1px solid rgba(234,88,12,0.18);">
+                <div style="font-size:21px;font-weight:800;color:var(--ink);">第 2 份：不辣 · 免葱免蒜</div>
+                <div style="font-size:18px;color:var(--ink-muted);margin-top:4px;">备注：分开打包</div>
+              </div>
+            </div>
+          </div>
+
+          <div id="merchant-accept-btn" class="primary-btn">
+            <span>🔥 接单开始做（预计 7 分钟出餐）</span>
+          </div>
+        </div>
+
+        <div class="left-editorial" style="max-width:610px;">
+          <div class="editorial-kicker">接单工作台 · 忙时不出错</div>
+          <div class="editorial-h1">首屏直达接单台，<br/><span style="color:#FB923C;">大字看清每一份要求。</span></div>
+          <div class="editorial-sub">
+            新订单、制作中、待取餐三栏清晰分流；采用「接单开始做」与「做好了」直白口语按钮，忙时不叠弹窗墙。
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Flying Thermal Order Ticket across S3 whip-pan -->
+    <div id="flying-ticket" style="opacity:0;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-size:19px;font-weight:800;color:var(--orange);">实时同步订单快照</span>
+        <span style="font-size:22px;font-weight:800;">¥22.0</span>
+      </div>
+      <div style="font-size:28px;font-weight:800;margin-top:8px;">招牌铁板细炒面 × 2</div>
+      <div style="font-size:18px;color:var(--ink-muted);margin-top:6px;">#1 微辣加葱 · #2 不辣免葱 · 库存已锁定</div>
+    </div>
+
+    <!-- Teppanyaki Wok Fire Stage -->
+    <div id="s3-fire-stage" class="layer" style="opacity:0;">
+      <img id="s3-fire-img" src="03-teppanyaki-flames.jpg" class="bg-cover" alt="" />
+      <div style="position:absolute;inset:0;background:linear-gradient(180deg, rgba(14,11,9,0.52) 0%, rgba(14,11,9,0.08) 45%, rgba(14,11,9,0.72) 100%);"></div>
+
+      <div id="fire-status-pill">
+        <div id="fire-badge-icon" style="width:58px;height:58px;border-radius:18px;background:var(--orange);display:flex;align-items:center;justify-content:center;font-size:30px;font-weight:900;color:#FFFDF9;">🔥</div>
+        <div>
+          <div id="fire-status-title" style="font-size:29px;font-weight:800;color:#FFFDF9;">铁板猛火现炒中 · 订单 #07</div>
+          <div id="fire-status-sub" style="font-size:20px;color:#FED7AA;font-weight:600;margin-top:4px;">按序备餐不漏忌口 · 出餐后立即更新学生取餐凭证</div>
+        </div>
+      </div>
+
+      <div style="position:absolute;left:108px;bottom:86px;">
+        <div style="font-size:54px;font-weight:800;color:#FFFDF9;text-shadow:0 10px 30px rgba(0,0,0,0.75);">
+          把排长队吹冷风的时间，<span style="color:#FDBA74;">留给锅气最盛的一刻。</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= SCENE 4: 3D FLIP PICKUP PASS & DIAGONAL DUAL-TRACK ================= -->
+  <div id="s4-stage" class="layer" style="opacity:0;">
+    <div id="s4-pickup-card" class="ui-card-cream">
+      <div style="display:inline-flex;align-items:center;gap:10px;background:var(--green-soft);color:var(--green);padding:9px 24px;border-radius:999px;font-size:22px;font-weight:800;">
+        <span>✓ 商家已点「做好了」 · 待取餐首屏集中展示</span>
+      </div>
+      <div style="font-size:34px;font-weight:800;color:var(--ink);margin-top:16px;">
+        老陈铁板细炒面（东门银杏步道旁） · 应付 ¥22.0
+      </div>
+
+      <div class="flap-grid">
+        <div class="flap-digit" id="digit-0">4</div>
+        <div class="flap-digit" id="digit-1">8</div>
+        <div class="flap-digit" id="digit-2">2</div>
+        <div class="flap-digit" id="digit-3">9</div>
+      </div>
+
+      <div style="font-size:23px;font-weight:700;color:var(--ink-muted);">
+        一次性 4 位取餐码 · 支持 <span style="color:var(--ink);font-weight:800;">到摊当面付款</span> 或 <span style="color:var(--orange);font-weight:800;">出餐后微信直连付款</span>
+      </div>
+    </div>
+
+    <!-- Diagonal Dual-Track Fulfillment Split -->
+    <div id="s4-dual-stage" style="opacity:0;">
+      <div class="diag-left" id="diag-left-pane">
+        <div style="max-width:740px;">
+          <div class="tag-pill" style="background:var(--orange-soft);color:var(--orange);margin-bottom:20px;">
+            履约方式 A · 到摊自取
+          </div>
+          <div style="font-size:52px;font-weight:800;line-height:1.18;color:var(--ink);">
+            报出 <span style="color:var(--orange);">4829</span>，<br/>核对收款、3 秒提走。
+          </div>
+          <div style="margin-top:24px;background:#FFFDF9;border-radius:24px;padding:24px 28px;border:1.5px solid rgba(28,25,23,0.10);box-shadow:0 18px 40px rgba(28,25,23,0.08);">
+            <div style="font-size:22px;font-weight:800;color:var(--ink);">商家端先核对金额，再独立执行：</div>
+            <div style="display:flex;gap:14px;margin-top:14px;">
+              <span style="background:var(--green-soft);color:var(--green);padding:10px 20px;border-radius:14px;font-size:20px;font-weight:800;">1. 确认收款 ¥22.0 ✓</span>
+              <span style="background:var(--orange);color:#FFFDF9;padding:10px 20px;border-radius:14px;font-size:20px;font-weight:800;">2. 取餐码核销完成 ✓</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="diag-right" id="diag-right-pane">
+        <div style="max-width:740px;">
+          <div class="tag-pill" style="background:rgba(22,163,74,0.22);border:1px solid rgba(74,222,128,0.4);color:#86EFAC;margin-bottom:20px;">
+            履约方式 B · 商家定点配送
+          </div>
+          <div style="font-size:52px;font-weight:800;line-height:1.18;color:#FFFDF9;">
+            直送<span style="color:#FDBA74;">校园固定交接点</span>，<br/>隐私安全、节点透明。
+          </div>
+          <div style="margin-top:24px;background:rgba(30,41,59,0.85);border-radius:24px;padding:24px 28px;border:1.5px solid rgba(148,163,184,0.25);text-align:left;">
+            <div style="font-size:22px;font-weight:800;color:#FFFDF9;">📍 东区宿舍保温交接站 · 微信预付后接单</div>
+            <div style="font-size:19px;color:#CBD5E1;margin-top:10px;line-height:1.5;">
+              • 不收集学号与宿舍房间号，不编造虚拟骑手轨迹<br/>
+              • 到达交接点后，凭<strong>学生确认或一次性收餐码</strong>完成交付
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Glowing Diagonal Divider Line -->
+      <svg id="diag-line-svg" width="1920" height="1080" style="position:absolute;inset:0;pointer-events:none;">
+        <line x1="1113" y1="0" x2="806" y2="1080" stroke="#EA580C" stroke-width="6" />
+      </svg>
+    </div>
+  </div>
+
+  <!-- ================= SCENE 5: 3-END GOVERNANCE CONSTELLATION ================= -->
+  <div id="s5-eco-stage" class="layer" style="opacity:0;">
+    <svg width="1920" height="1080" viewBox="0 0 1920 1080" style="position:absolute;inset:0;">
+      <defs>
+        <pattern id="ecoGrid" width="64" height="64" patternUnits="userSpaceOnUse">
+          <path d="M 64 0 L 0 0 0 64" fill="none" stroke="rgba(251,146,60,0.08)" stroke-width="1"/>
+        </pattern>
+      </defs>
+      <rect width="1920" height="1080" fill="url(#ecoGrid)" />
+      <!-- Constellation Triangle Conduits -->
+      <line x1="960" y1="275" x2="470" y2="535" stroke="rgba(251,146,60,0.55)" stroke-width="3.5" stroke-dasharray="10 8"/>
+      <line x1="960" y1="275" x2="1450" y2="535" stroke="rgba(22,163,74,0.6)" stroke-width="3.5" stroke-dasharray="10 8"/>
+      <line x1="470" y1="535" x2="1450" y2="535" stroke="rgba(255,253,249,0.28)" stroke-width="3"/>
+    </svg>
+
+    <div style="position:absolute;top:64px;left:0;right:0;text-align:center;">
+      <div style="font-size:20px;font-weight:800;color:#FB923C;letter-spacing:0.16em;">THREE-TIER ISOLATED ARCHITECTURE · 合规治理护城河</div>
+      <div style="font-size:52px;font-weight:800;color:#FFFDF9;margin-top:8px;letter-spacing:-0.02em;">
+        既有街头烟火温度，<span style="color:#FDBA74;">更守平台治理与资金底线</span>
+      </div>
+    </div>
+
+    <!-- 3 Ecosystem Nodes -->
+    <div id="hub-ops" class="hub-node" style="left:960px;top:275px;border:2px solid #EA580C;">
+      <span style="width:48px;height:48px;border-radius:14px;background:#EA580C;color:#FFFDF9;display:flex;align-items:center;justify-content:center;">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none"><path d="M12 2L4 5.5v6.1c0 5.1 3.4 9.8 8 10.9 4.6-1.1 8-5.8 8-10.9V5.5L12 2z" fill="#FFFDF9"/><path d="M10.5 14.6l-2.6-2.6 1.4-1.4 1.2 1.2 3.6-3.6 1.4 1.4-5 5z" fill="#EA580C"/></svg>
+      </span>
+      <div>
+        <div style="font-size:24px;font-weight:800;">/ops 独立平台管理台</div>
+        <div style="font-size:16px;color:var(--ink-muted);font-weight:700;">专属鉴权隔离 · 准入与全站审计</div>
+      </div>
+    </div>
+
+    <div id="hub-stu" class="hub-node" style="left:470px;top:535px;">
+      <span style="width:46px;height:46px;border-radius:14px;background:#FFF1E6;color:#EA580C;display:flex;align-items:center;justify-content:center;">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9.5" stroke="#EA580C" stroke-width="2.2"/><polygon points="15.8,8.2 13.3,13.3 8.2,15.8 10.7,10.7" fill="#EA580C"/></svg>
+      </span>
+      <div>
+        <div style="font-size:23px;font-weight:800;">学生寻味与履约端</div>
+        <div style="font-size:16px;color:var(--ink-muted);font-weight:700;">真实出摊 · 自取与交接点</div>
+      </div>
+    </div>
+
+    <div id="hub-mer" class="hub-node" style="left:1450px;top:535px;">
+      <span style="width:46px;height:46px;border-radius:14px;background:var(--green-soft);color:var(--green);display:flex;align-items:center;justify-content:center;">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none"><path d="M4 6h16l-1.6 5.2a2.5 2.5 0 01-2.4 1.8H8a2.5 2.5 0 01-2.4-1.8L4 6z" fill="#16A34A"/><rect x="6" y="14.5" width="12" height="5.5" rx="1.5" fill="#16A34A"/></svg>
+      </span>
+      <div>
+        <div style="font-size:23px;font-weight:800;">商户分级工作台</div>
+        <div style="font-size:16px;color:var(--ink-muted);font-weight:700;">仅找摊模式 ↔ 持证接单模式</div>
+      </div>
+    </div>
+
+    <!-- 3 Pillar Cards at Bottom -->
+    <div style="position:absolute;left:96px;right:96px;bottom:74px;display:flex;justify-content:space-between;gap:32px;">
+      <div id="pillar-1" class="pillar-card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+          <span style="font-size:20px;font-weight:800;color:#FB923C;">01 · 准入与展示分离</span>
+          <span style="background:rgba(234,88,12,0.22);color:#FDBA74;padding:4px 12px;border-radius:999px;font-size:16px;font-weight:700;">证照分级核验</span>
+        </div>
+        <div style="font-size:27px;font-weight:800;color:#FFFDF9;margin-bottom:10px;">流动找摊 vs 持证交易隔离</div>
+        <div style="font-size:19px;line-height:1.55;color:rgba(255,253,249,0.76);">
+          普通流动摊仅开放位置展示；核验许可证有效后方开启在线点单，到期或迁址自动停新单。
+        </div>
+      </div>
+
+      <div id="pillar-2" class="pillar-card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+          <span style="font-size:20px;font-weight:800;color:#4ADE80;">02 · 资金合规安全</span>
+          <span style="background:rgba(22,163,74,0.22);color:#86EFAC;padding:4px 12px;border-radius:999px;font-size:16px;font-weight:700;">零资金池</span>
+        </div>
+        <div style="font-size:27px;font-weight:800;color:#FFFDF9;margin-bottom:10px;">微信直连商户 · 杜绝二清</div>
+        <div style="font-size:19px;line-height:1.55;color:rgba(255,253,249,0.76);">
+          各独立经营主体绑定自有微信商户号，餐款直达摊主账户、原路退回，平台绝不归集挪用资金。
+        </div>
+      </div>
+
+      <div id="pillar-3" class="pillar-card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+          <span style="font-size:20px;font-weight:800;color:#FDBA74;">03 · 动态可信治理</span>
+          <span style="background:rgba(251,146,60,0.22);color:#FED7AA;padding:4px 12px;border-radius:999px;font-size:16px;font-weight:700;">闭环风控</span>
+        </div>
+        <div style="font-size:27px;font-weight:800;color:#FFFDF9;margin-bottom:10px;">超时停单与反刷评风控</div>
+        <div style="font-size:19px;line-height:1.55;color:rgba(255,253,249,0.76);">
+          60 分钟未确认位置自动停单；自动拦截高频刷评与极速异常单，位置纠错严格保护学生隐私。
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= SCENE 6: TWILIGHT LANTERN FINALE ================= -->
+  <div id="s6-finale-stage" class="layer" style="opacity:0;">
+    <img id="s6-bg-img" src="04-lantern-finale.jpg" class="bg-cover" alt="" />
+    <div style="position:absolute;inset:0;background:linear-gradient(90deg, rgba(9,13,22,0.92) 0%, rgba(9,13,22,0.76) 52%, rgba(9,13,22,0.12) 100%);"></div>
+
+    <div id="s6-brand-panel">
+      <div style="display:flex;align-items:center;gap:22px;">
+        <div style="width:82px;height:82px;border-radius:24px;background:linear-gradient(135deg, #EA580C 0%, #FB923C 100%);display:flex;align-items:center;justify-content:center;box-shadow:0 20px 45px rgba(234,88,12,0.5);">
+          <svg width="46" height="46" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2C7.58 2 4 5.58 4 10c0 5.25 8 12 8 12s8-6.75 8-12c0-4.42-3.58-8-8-8z" fill="#FFFDF9"/>
+            <circle cx="12" cy="10" r="3.4" fill="#EA580C"/>
+          </svg>
+        </div>
+        <div>
+          <div style="font-size:68px;font-weight:800;letter-spacing:-0.02em;color:#FFFDF9;line-height:1.05;">烟火地图</div>
+          <div style="font-size:21px;font-weight:700;color:#FDBA74;letter-spacing:0.18em;margin-top:6px;">YANHUO MAP · 校园周边流动摊贩合规数字化方案</div>
+        </div>
+      </div>
+
+      <div style="font-size:44px;font-weight:800;line-height:1.3;color:#FFFDF9;margin-top:8px;">
+        留住城市的街头烟火，<br/><span style="color:#FB923C;">让每一次出发都不再扑空。</span>
+      </div>
+
+      <div style="display:flex;gap:16px;margin-top:6px;">
+        <span class="tag-pill" style="background:rgba(255,253,249,0.12);border:1px solid rgba(255,253,249,0.24);color:#FFFDF9;">
+          <span class="dot-pulse" style="background:#FB923C;"></span><span>60分钟动态寻摊</span>
+        </span>
+        <span class="tag-pill" style="background:rgba(255,253,249,0.12);border:1px solid rgba(255,253,249,0.24);color:#FFFDF9;">
+          <span class="dot-pulse" style="background:#4ADE80;"></span><span>到摊秒提 & 定点交接</span>
+        </span>
+        <span class="tag-pill" style="background:rgba(234,88,12,0.28);border:1px solid rgba(251,146,60,0.5);color:#FED7AA;">
+          <span class="dot-pulse" style="background:#FED7AA;"></span><span>证照分级 · 直连零二清</span>
+        </span>
+      </div>
+    </div>
+
+    <div style="position:absolute;left:118px;bottom:44px;font-size:17px;color:rgba(255,253,249,0.56);font-weight:500;letter-spacing:0.02em;">
+      三创赛路演答辩先导片 · 实景画面由 AI 原创生成（不含真实人物肖像与第三方商户标识） · 演示界面与真实生产数据严格隔离
+    </div>
+  </div>
+
+  <!-- Global Foreground Canvas for Seamless Portals, Steam, Sparks, Firefly Orbs & Motion Streaks -->
+  <canvas id="fx-canvas" width="1920" height="1080" class="layer" style="z-index:80;"></canvas>
+  <div id="touch-indicator" class="touch-ring" style="opacity:0;"></div>
+
+</div>
+
+<script>
+(() => {
+  const clamp = (v, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, v));
+  const lerp = (a, b, u) => a + (b - a) * u;
+  const prog = (t, t0, t1) => clamp((t - t0) / (t1 - t0));
+
+  function easeInOutExpo(x) {
+    if (x <= 0) return 0;
+    if (x >= 1) return 1;
+    return x < 0.5 ? Math.pow(2, 20 * x - 10) / 2 : (2 - Math.pow(2, -20 * x + 10)) / 2;
+  }
+  function easeOutCubic(x) {
+    return 1 - Math.pow(1 - clamp(x), 3);
+  }
+  function easeInCubic(x) {
+    return Math.pow(clamp(x), 3);
+  }
+  function easeOutBack(x) {
+    const u = clamp(x);
+    const c1 = 1.70158;
+    const c3 = c1 + 1;
+    return 1 + c3 * Math.pow(u - 1, 3) + c1 * Math.pow(u - 1, 2);
+  }
+
+  const el = (id) => document.getElementById(id);
+  const canvas = el('fx-canvas');
+  const ctx = canvas.getContext('2d');
+
+  // Grab DOM nodes once
+  const s1Bowl = el('s1-bowl-wrap');
+  const s1IntroCap = el('s1-intro-caption');
+  const s1Map = el('s1-map-stage');
+  const s1Radar = el('s1-radar-ring');
+  const chat1 = el('chat-pill-1');
+  const chat2 = el('chat-pill-2');
+
+  const s2Stage = el('s2-stage');
+  const s2LampBg = el('s2-lamp-bg');
+  const hookBanner = el('hook-banner');
+  const hookMainTitle = el('hook-main-title');
+  const lampHalo = el('lamp-halo');
+  const s2MerchantStage = el('s2-merchant-stage');
+  const s2Editorial = el('s2-editorial');
+  const merchantCard = el('merchant-outing-card');
+  const merchantSwitch = el('merchant-switch');
+  const merchantKnob = el('merchant-knob');
+  const s2LocBox = el('s2-loc-box');
+  const s2FreshBox = el('s2-fresh-box');
+  const s2PinPortal = el('s2-pin-portal');
+
+  const s3Stage = el('s3-stage');
+  const s3World = el('s3-world');
+  const stuCard = el('student-order-card');
+  const p1 = el('portion-1');
+  const p2 = el('portion-2');
+  const stuSubmit = el('student-submit-btn');
+  const flyingTicket = el('flying-ticket');
+  const merCard = el('merchant-console-card');
+  const merSlot = el('merchant-incoming-slot');
+  const merAccept = el('merchant-accept-btn');
+  const s3FireStage = el('s3-fire-stage');
+  const s3FireImg = el('s3-fire-img');
+  const fireBadgeIcon = el('fire-badge-icon');
+  const fireTitle = el('fire-status-title');
+  const fireSub = el('fire-status-sub');
+
+  const s4Stage = el('s4-stage');
+  const s4PickupCard = el('s4-pickup-card');
+  const digits = [el('digit-0'), el('digit-1'), el('digit-2'), el('digit-3')];
+  const s4Dual = el('s4-dual-stage');
+  const diagLeft = el('diag-left-pane');
+  const diagRight = el('diag-right-pane');
+  const diagLine = el('diag-line-svg');
+
+  const s5Eco = el('s5-eco-stage');
+  const hubOps = el('hub-ops');
+  const hubStu = el('hub-stu');
+  const hubMer = el('hub-mer');
+  const pillar1 = el('pillar-1');
+  const pillar2 = el('pillar-2');
+  const pillar3 = el('pillar-3');
+
+  const s6Finale = el('s6-finale-stage');
+  const s6Bg = el('s6-bg-img');
+  const s6Panel = el('s6-brand-panel');
+  const touchRing = el('touch-indicator');
+
+  function showTouch(t, tStart, x, y) {
+    const u = prog(t, tStart, tStart + 0.42);
+    if (u <= 0 || u >= 1) return false;
+    touchRing.style.opacity = String(Math.sin(Math.PI * u));
+    touchRing.style.left = x + 'px';
+    touchRing.style.top = y + 'px';
+    touchRing.style.transform = `scale(${lerp(0.45, 1.55, easeOutCubic(u))})`;
+    return true;
+  }
+
+  // Deterministic pseudo-random helper
+  const hash = (n) => {
+    const s = Math.sin(n * 127.1 + 311.7) * 43758.5453123;
+    return s - Math.floor(s);
+  };
+
+  function renderAt(t) {
+    ctx.clearRect(0, 0, 1920, 1080);
+    touchRing.style.opacity = '0';
+
+    // =========================================================================
+    // 1. SCENE 1: BOWL -> CIRCLE MORPH -> NIGHT MAP -> WHIP-PAN [0.00 - 6.20s]
+    // =========================================================================
+    if (t < 4.75) {
+      const morphU = easeInOutExpo(prog(t, 2.08, 2.64));
+      const whipU = easeInOutExpo(prog(t, 4.28, 4.72));
+
+      // Bowl layer (0.00 - 2.64s)
+      if (t < 2.66) {
+        s1Bowl.style.opacity = String(1 - morphU);
+        const rot = lerp(0, 11, prog(t, 0, 2.08)) + morphU * 48;
+        const sc = lerp(1.03, 1.11, prog(t, 0, 2.08)) * lerp(1, 2.85, morphU);
+        s1Bowl.style.transform = `translate3d(0,0,0) scale(${sc}) rotate(${rot}deg)`;
+        const capU = easeOutCubic(prog(t, 0.15, 0.75)) * (1 - prog(t, 1.85, 2.18));
+        s1IntroCap.style.opacity = String(capU);
+        s1IntroCap.style.transform = `translateY(${lerp(24, 0, easeOutCubic(prog(t, 0.15, 0.75)))}px)`;
+      } else {
+        s1Bowl.style.opacity = '0';
+      }
+
+      // Map stage (morphs in from inside the circular bowl rim!)
+      if (t >= 2.05) {
+        s1Map.style.opacity = String(morphU * (1 - whipU));
+        const mapScale = lerp(0.46, 1.0, morphU);
+        const whipX = lerp(0, -1980, whipU);
+        s1Map.style.transform = `translate3d(${whipX}px, 0, 0) scale(${mapScale}) skewX(${-10 * Math.sin(Math.PI * whipU)}deg)`;
+
+        const pulse = 1 + 0.04 * Math.sin(t * 7.5);
+        s1Radar.style.transform = `scale(${pulse})`;
+
+        const c1 = easeOutBack(prog(t, 2.85, 3.30));
+        chat1.style.opacity = String(clamp(prog(t, 2.85, 3.10) * 1.4));
+        chat1.style.transform = `scale(${lerp(0.65, 1, c1)}) translateY(${lerp(24, 0, c1)}px)`;
+
+        const c2 = easeOutBack(prog(t, 3.25, 3.70));
+        chat2.style.opacity = String(clamp(prog(t, 3.25, 3.50) * 1.4));
+        chat2.style.transform = `scale(${lerp(0.65, 1, c2)}) translateY(${lerp(24, 0, c2)}px)`;
+      } else {
+        s1Map.style.opacity = '0';
+      }
+    } else {
+      s1Bowl.style.opacity = '0';
+      s1Map.style.opacity = '0';
+    }
+
+    // =========================================================================
+    // 2. SCENE 2: HOOK -> LAMP CLICK -> ZOOM-OUT TO TOGGLE [4.28 - 14.58s]
+    // =========================================================================
+    if (t >= 4.28 && t < 14.58) {
+      const enterWhip = easeInOutExpo(prog(t, 4.28, 4.72));
+      const portalExit = easeInCubic(prog(t, 14.00, 14.56));
+      s2Stage.style.opacity = String(enterWhip * (1 - prog(t, 14.32, 14.56)));
+      s2Stage.style.transform = `translate3d(${lerp(1920, 0, enterWhip)}px, 0, 0) scale(${lerp(1, 7.5, portalExit)})`;
+      s2Stage.style.transformOrigin = '1560px 855px';
+
+      // Lamp ignition at 6.18s!
+      const litU = easeOutCubic(prog(t, 6.18, 6.45));
+      const pullToCardU = easeInOutExpo(prog(t, 8.10, 8.66));
+
+      // Before 6.18s: dim silhouette behind bold hook title
+      const bri = lerp(0.18, 1.08, litU) * lerp(1.0, 0.36, pullToCardU);
+      const blurPx = lerp(0, 14, pullToCardU);
+      const bgScale = lerp(1.16, 1.03, prog(t, 6.18, 8.66));
+      s2LampBg.style.filter = `brightness(${bri}) saturate(${lerp(0.25, 1.14, litU)}) blur(${blurPx}px)`;
+      s2LampBg.style.transform = `scale(${bgScale})`;
+
+      // Hook banner (4.60 - 6.18s)
+      const hookIn = easeOutCubic(prog(t, 4.62, 5.05));
+      const hookOut = prog(t, 6.05, 6.24);
+      hookBanner.style.opacity = String(hookIn * (1 - hookOut));
+      hookMainTitle.style.transform = `translateY(${lerp(36, 0, hookIn)}px) scale(${lerp(0.95, 1.02, prog(t, 4.62, 6.18))})`;
+
+      // Glowing tungsten bulb halo morphing into toggle switch knob!
+      if (t >= 6.18 && t < 8.75) {
+        const haloAlpha = litU * (1 - prog(t, 8.50, 8.72));
+        lampHalo.style.opacity = String(haloAlpha * 0.9);
+        // Move halo from bulb center (960, 542) to switch knob destination (~1692, 275)
+        const hx = lerp(960, 1692, pullToCardU);
+        const hy = lerp(542, 275, pullToCardU);
+        const hs = lerp(1.15, 0.32, pullToCardU);
+        lampHalo.style.left = hx + 'px';
+        lampHalo.style.top = hy + 'px';
+        lampHalo.style.transform = `scale(${hs})`;
+      } else {
+        lampHalo.style.opacity = '0';
+      }
+
+      // 3D Merchant Card (8.18s - 14.56s)
+      if (t >= 8.15) {
+        const cardU = easeOutBack(prog(t, 8.20, 8.78));
+        s2MerchantStage.style.opacity = String(clamp(prog(t, 8.18, 8.52) * 1.5));
+        const driftY = lerp(-8, 3, prog(t, 8.5, 14.0));
+        merchantCard.style.transform = `perspective(1400px) rotateY(${driftY}deg) rotateX(3deg) scale(${lerp(0.84, 1, cardU)})`;
+
+        // Toggle knob slides left->right (8.25 - 8.62s)
+        const swU = easeOutBack(prog(t, 8.25, 8.65));
+        merchantSwitch.style.background = swU > 0.35 ? '#EA580C' : '#CBD5E1';
+        merchantKnob.style.transform = `translateX(${lerp(0, 70, clamp(swU, 0, 1.06))}px)`;
+
+        const edU = easeOutCubic(prog(t, 8.45, 9.05));
+        s2Editorial.style.opacity = String(edU);
+        s2Editorial.style.transform = `translateX(${lerp(-40, 0, edU)}px)`;
+
+        const locU = easeOutBack(prog(t, 8.32, 8.78));
+        s2LocBox.style.opacity = String(clamp(prog(t, 8.26, 8.58) * 1.5));
+        s2LocBox.style.transform = `translateY(${lerp(20, 0, locU)}px)`;
+
+        const frU = easeOutBack(prog(t, 8.52, 8.98));
+        s2FreshBox.style.opacity = String(clamp(prog(t, 8.46, 8.78) * 1.5));
+        s2FreshBox.style.transform = `translateY(${lerp(20, 0, frU)}px)`;
+
+        const pinU = easeOutBack(prog(t, 11.20, 11.75));
+        s2PinPortal.style.opacity = String(clamp(prog(t, 11.20, 11.50) * 1.5));
+        s2PinPortal.style.transform = `scale(${lerp(0.7, 1, pinU)})`;
+
+        showTouch(t, 13.86, 1595, 852);
+      } else {
+        s2MerchantStage.style.opacity = '0';
+      }
+    } else {
+      s2Stage.style.opacity = '0';
+    }
+
+    // =========================================================================
+    // 3. SCENE 3: STUDENT -> FLYING TICKET -> MERCHANT -> WOK FIRE [14.05 - 25.68s]
+    // =========================================================================
+    if (t >= 14.05 && t < 25.70) {
+      const enterPortal = easeOutCubic(prog(t, 14.12, 14.62));
+      const flipOutU = easeInOutExpo(prog(t, 25.20, 25.68));
+      s3Stage.style.opacity = String(enterPortal * (flipOutU < 0.5 ? 1 : 0));
+      s3Stage.style.transform = flipOutU > 0
+        ? `perspective(1600px) rotateY(${lerp(0, 90, clamp(flipOutU * 2))}deg)`
+        : `scale(${lerp(0.86, 1.0, enterPortal)})`;
+
+      // Spatial Whip-Pan across 3840px stage (18.08s - 18.58s)
+      const panU = easeInOutExpo(prog(t, 18.08, 18.58));
+      s3World.style.transform = `translate3d(${lerp(0, -1920, panU)}px, 0, 0) skewX(${-9 * Math.sin(Math.PI * panU)}deg)`;
+
+      // Student card interactions
+      stuCard.style.transform = `perspective(1300px) rotateY(-5deg) rotateX(2deg)`;
+      const p1U = easeOutBack(prog(t, 15.35, 15.80));
+      p1.style.opacity = String(clamp(prog(t, 15.10, 15.55) * 1.4 + 0.25));
+      p1.style.transform = `scale(${lerp(0.94, 1.0, p1U)})`;
+      p1.style.borderColor = t >= 15.38 ? '#FB923C' : 'rgba(28,25,23,0.08)';
+
+      const p2U = easeOutBack(prog(t, 16.25, 16.70));
+      p2.style.opacity = String(clamp(prog(t, 16.00, 16.45) * 1.4 + 0.25));
+      p2.style.transform = `scale(${lerp(0.94, 1.0, p2U)})`;
+      p2.style.borderColor = t >= 16.28 ? '#FB923C' : 'rgba(28,25,23,0.08)';
+
+      const pressStu = Math.sin(Math.PI * prog(t, 17.38, 17.72));
+      stuSubmit.style.transform = `scale(${1 - 0.04 * pressStu})`;
+      showTouch(t, 17.36, 1370, 835);
+
+      // Flying 3D Thermal Ticket during Whip-Pan (18.00 - 18.62s)
+      if (t >= 18.00 && t <= 18.66) {
+        const fU = prog(t, 18.00, 18.64);
+        flyingTicket.style.opacity = String(Math.sin(Math.PI * clamp(fU * 1.15)));
+        const tx = lerp(1080, 320, easeInOutExpo(fU));
+        const ty = lerp(740, 380, easeOutCubic(fU)) - 75 * Math.sin(Math.PI * fU);
+        const rot = lerp(-6, 4, fU);
+        flyingTicket.style.transform = `translate3d(${tx}px, ${ty}px, 0) rotate(${rot}deg) scale(${1 + 0.14 * Math.sin(Math.PI * fU)})`;
+      } else {
+        flyingTicket.style.opacity = '0';
+      }
+
+      // Merchant Console Slot & Accept Button
+      merCard.style.transform = `perspective(1300px) rotateY(5deg) rotateX(2deg)`;
+      const slotBounce = easeOutBack(prog(t, 18.52, 19.00));
+      merSlot.style.transform = `scale(${lerp(0.90, 1.0, slotBounce)})`;
+      const pressMer = Math.sin(Math.PI * prog(t, 20.38, 20.74));
+      merAccept.style.transform = `scale(${1 - 0.045 * pressMer})`;
+      showTouch(t, 20.36, 560, 815);
+
+      // Teppanyaki Flame Ignition (21.18s -> 25.68s)
+      if (t >= 21.16) {
+        const ignU = easeOutCubic(prog(t, 21.16, 21.60));
+        s3FireStage.style.opacity = String(ignU);
+        // Smooth dynamic circle-iris reveal from Merchant button position!
+        const radiusPct = lerp(8, 150, easeInOutExpo(prog(t, 21.16, 21.64)));
+        s3FireStage.style.clipPath = radiusPct < 145 ? `circle(${radiusPct}% at 32% 76%)` : 'none';
+        const firePush = lerp(1.14, 1.02, prog(t, 21.18, 25.20));
+        s3FireImg.style.transform = `scale(${firePush}) translate3d(${lerp(-18, 14, prog(t, 21.2, 25.2))}px, 0, 0)`;
+
+        if (t >= 23.78) {
+          fireBadgeIcon.style.background = '#16A34A';
+          fireBadgeIcon.textContent = '✓';
+          fireTitle.textContent = '商家点击「做好了」 · 待取餐已就绪';
+          fireSub.textContent = '自动生成 4 位一次性取餐码 · 首屏通知学生即刻取餐';
+        } else {
+          fireBadgeIcon.style.background = '#EA580C';
+          fireBadgeIcon.textContent = '🔥';
+          fireTitle.textContent = '铁板猛火现炒中 · 订单 #07';
+          fireSub.textContent = '按序备餐不漏忌口 · 出餐后立即更新学生取餐凭证';
+        }
+      } else {
+        s3FireStage.style.opacity = '0';
+      }
+    } else {
+      s3Stage.style.opacity = '0';
+    }
+
+    // =========================================================================
+    // 4. SCENE 4: 3D FLIP PICKUP PASS & DIAGONAL DUAL-TRACK [25.20 - 33.86s]
+    // =========================================================================
+    if (t >= 25.20 && t < 33.88) {
+      const flipInU = easeInOutExpo(prog(t, 25.20, 25.68));
+      const zoomToEco = easeInOutExpo(prog(t, 33.18, 33.86));
+
+      s4Stage.style.opacity = String((flipInU >= 0.5 ? 1 : 0) * (1 - prog(t, 33.55, 33.86)));
+      const stageScale = lerp(1.0, 0.26, zoomToEco);
+      s4Stage.style.transform = `scale(${stageScale})`;
+
+      // 3D Flip in for Pickup Card
+      const rotY = lerp(-90, 0, clamp((flipInU - 0.5) * 2));
+      const splitU = easeInOutExpo(prog(t, 28.40, 28.92));
+      s4PickupCard.style.opacity = String(1 - prog(t, 28.55, 28.88));
+      s4PickupCard.style.transform = `rotateY(${rotY}deg) scale(${lerp(1, 0.9, splitU)})`;
+
+      // Mechanical Split-Flap digits locking into 4 - 8 - 2 - 9
+      const targetDigits = ['4', '8', '2', '9'];
+      const lockTimes = [25.92, 26.12, 26.32, 26.52];
+      for (let i = 0; i < 4; i++) {
+        if (t < lockTimes[i]) {
+          const spinVal = Math.floor((t * 28 + i * 3)) % 10;
+          digits[i].textContent = String(spinVal);
+          digits[i].style.background = '#292524';
+        } else {
+          digits[i].textContent = targetDigits[i];
+          digits[i].style.background = '#1C1917';
+          const pop = Math.sin(Math.PI * prog(t, lockTimes[i], lockTimes[i] + 0.20));
+          digits[i].style.transform = `scale(${1 + 0.08 * pop})`;
+        }
+      }
+
+      // Diagonal Dual-Track Split (28.40s - 33.86s)
+      if (t >= 28.38) {
+        s4Dual.style.opacity = '1';
+        diagLeft.style.transform = `translate3d(${lerp(-1200, 0, splitU)}px, ${lerp(-200, 0, splitU)}px, 0)`;
+        diagRight.style.transform = `translate3d(${lerp(1200, 0, splitU)}px, ${lerp(200, 0, splitU)}px, 0)`;
+        diagLine.style.opacity = String(prog(t, 28.60, 28.95));
+      } else {
+        s4Dual.style.opacity = '0';
+      }
+    } else {
+      s4Stage.style.opacity = '0';
+    }
+
+    // =========================================================================
+    // 5. SCENE 5: 10x PULLBACK -> 3-END GOVERNANCE CONSTELLATION [33.18 - 43.08s]
+    // =========================================================================
+    if (t >= 33.18 && t < 43.10) {
+      const ecoIn = easeInOutExpo(prog(t, 33.18, 33.88));
+      const ecoOut = easeInOutExpo(prog(t, 42.38, 43.06));
+      s5Eco.style.opacity = String(ecoIn * (1 - ecoOut));
+      s5Eco.style.transform = `scale(${lerp(1.45, 1.0, ecoIn) * lerp(1.0, 0.92, ecoOut)})`;
+
+      const n1 = easeOutBack(prog(t, 33.55, 34.10));
+      hubOps.style.transform = `translate(-50%, -50%) scale(${n1})`;
+      hubStu.style.transform = `translate(-50%, -50%) scale(${easeOutBack(prog(t, 33.70, 34.25))})`;
+      hubMer.style.transform = `translate(-50%, -50%) scale(${easeOutBack(prog(t, 33.85, 34.40))})`;
+
+      const k1 = easeOutBack(prog(t, 34.58, 35.12));
+      pillar1.style.opacity = String(clamp(prog(t, 34.58, 34.90) * 1.5));
+      pillar1.style.transform = `translateY(${lerp(46, 0, k1)}px)`;
+
+      const k2 = easeOutBack(prog(t, 35.98, 36.52));
+      pillar2.style.opacity = String(clamp(prog(t, 35.98, 36.30) * 1.5));
+      pillar2.style.transform = `translateY(${lerp(46, 0, k2)}px)`;
+
+      const k3 = easeOutBack(prog(t, 37.38, 37.92));
+      pillar3.style.opacity = String(clamp(prog(t, 37.38, 37.70) * 1.5));
+      pillar3.style.transform = `translateY(${lerp(46, 0, k3)}px)`;
+    } else {
+      s5Eco.style.opacity = '0';
+    }
+
+    // =========================================================================
+    // 6. SCENE 6: GOLDEN FIREFLY COALESCENCE -> BRAND FINALE [42.38 - 48.00s]
+    // =========================================================================
+    if (t >= 42.38) {
+      const finIn = easeOutCubic(prog(t, 42.45, 43.15));
+      s6Finale.style.opacity = String(finIn);
+      s6Bg.style.transform = `scale(${lerp(1.08, 1.0, prog(t, 42.45, 48.0))})`;
+      const pIn = easeOutCubic(prog(t, 43.00, 43.80));
+      s6Panel.style.opacity = String(pIn);
+      s6Panel.style.transform = `translateX(${lerp(-44, 0, pIn)}px)`;
+    } else {
+      s6Finale.style.opacity = '0';
+    }
+
+    // =========================================================================
+    // DETERMINISTIC FOREGROUND CANVAS FX (Steam, Portals, Sparks, Data Pulses)
+    // =========================================================================
+
+    // A. Bowl & Stall Warm Steam Wisps
+    if (t < 2.4 || (t >= 6.2 && t < 8.4) || t >= 42.8) {
+      const cx0 = t < 2.4 ? 960 : (t < 9 ? 980 : 1490);
+      const cy0 = t < 2.4 ? 540 : (t < 9 ? 700 : 590);
+      const alphaMul = t < 2.4 ? (1 - prog(t, 1.9, 2.35)) : (t < 9 ? prog(t, 6.2, 6.8) * (1 - prog(t, 8.0, 8.4)) : prog(t, 42.8, 43.6));
+      for (let i = 0; i < 18; i++) {
+        const phase = (t * 0.45 + hash(i) * 4.0) % 1;
+        const x = cx0 + (hash(i + 20) - 0.5) * 260 + Math.sin(t * 2.1 + i) * 26;
+        const y = cy0 - phase * 220;
+        const r = lerp(24, 78, phase);
+        const a = Math.sin(Math.PI * phase) * 0.13 * alphaMul;
+        const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+        g.addColorStop(0, `rgba(255,248,240,${a})`);
+        g.addColorStop(1, 'rgba(255,248,240,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // B. Transition #1 Glowing Circle Morph Ring (2.08 - 2.66s)
+    if (t >= 2.08 && t <= 2.70) {
+      const u = prog(t, 2.08, 2.66);
+      const rad = lerp(475, 220, easeInOutExpo(u));
+      ctx.save();
+      ctx.strokeStyle = `rgba(251, 146, 60, ${Math.sin(Math.PI * u) * 0.92})`;
+      ctx.lineWidth = lerp(16, 4, u);
+      ctx.shadowColor = '#EA580C';
+      ctx.shadowBlur = 35;
+      ctx.beginPath();
+      ctx.arc(960, 540, rad, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // C. Whip-Pan Horizontal Speed Streaks (4.28-4.72s and 18.08-18.58s)
+    const whip1 = Math.sin(Math.PI * prog(t, 4.28, 4.72));
+    const whip2 = Math.sin(Math.PI * prog(t, 18.08, 18.58));
+    const whipAmt = Math.max(whip1, whip2);
+    if (whipAmt > 0.01) {
+      ctx.save();
+      for (let i = 0; i < 22; i++) {
+        const y = hash(i * 7) * 1080;
+        const w = 260 + hash(i * 13) * 580;
+        const x = ((1 - (t * 4.2 + hash(i * 3)) % 1) * 2400) - 300;
+        const grad = ctx.createLinearGradient(x, y, x + w, y);
+        grad.addColorStop(0, 'rgba(251,146,60,0)');
+        grad.addColorStop(0.5, `rgba(251,146,60,${0.36 * whipAmt})`);
+        grad.addColorStop(1, 'rgba(255,253,249,0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(x, y, w, 3 + hash(i) * 4);
+      }
+      ctx.restore();
+    }
+
+    // D. Transition #4 Portal Dive Ring (14.00 - 14.58s)
+    if (t >= 14.00 && t <= 14.58) {
+      const u = prog(t, 14.00, 14.58);
+      const r = lerp(24, 1500, easeInCubic(u));
+      const cx = lerp(1595, 960, u);
+      const cy = lerp(852, 540, u);
+      ctx.save();
+      ctx.strokeStyle = `rgba(251,146,60,${Math.sin(Math.PI * u)})`;
+      ctx.lineWidth = lerp(8, 48, u);
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // E. Wok Fire Rising Glowing Embers (21.20 - 25.20s)
+    if (t >= 21.20 && t < 25.25) {
+      const aBase = Math.min(1, (t - 21.20) * 3) * (1 - prog(t, 24.95, 25.25));
+      for (let i = 0; i < 48; i++) {
+        const ph = (t * (0.55 + hash(i) * 0.65) + hash(i + 50)) % 1;
+        const x = 320 + hash(i + 9) * 1280 + Math.sin(t * 5 + i) * 35;
+        const y = 1060 - ph * 880;
+        const sz = 2.2 + hash(i + 31) * 4.5;
+        ctx.fillStyle = `rgba(255, ${155 + Math.floor(hash(i) * 85)}, 60, ${Math.sin(Math.PI * ph) * 0.85 * aBase})`;
+        ctx.beginPath();
+        ctx.arc(x, y, sz, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // F. Scene 5 Constellation Animated Data Packets (33.80 - 42.40s)
+    if (t >= 33.80 && t < 42.45) {
+      const a = prog(t, 33.80, 34.30) * (1 - prog(t, 42.10, 42.45));
+      const links = [
+        [960, 275, 470, 535, '#FB923C'],
+        [960, 275, 1450, 535, '#4ADE80'],
+        [470, 535, 1450, 535, '#FFFDF9'],
+      ];
+      links.forEach(([x1, y1, x2, y2, col], idx) => {
+        for (let k = 0; k < 3; k++) {
+          const u = (t * 0.62 + k / 3 + idx * 0.17) % 1;
+          const px = lerp(x1, x2, u);
+          const py = lerp(y1, y2, u);
+          ctx.fillStyle = col;
+          ctx.globalAlpha = a * Math.sin(Math.PI * u);
+          ctx.beginPath();
+          ctx.arc(px, py, 6, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      });
+      ctx.globalAlpha = 1;
+    }
+
+    // G. Transition #9 Firefly Lantern Coalescence (42.35 - 43.25s)
+    if (t >= 42.35 && t <= 43.30) {
+      const u = easeInOutExpo(prog(t, 42.35, 43.25));
+      for (let i = 0; i < 36; i++) {
+        const sx = 240 + hash(i * 5) * 1440;
+        const sy = 240 + hash(i * 11) * 640;
+        const tx = 1485 + (hash(i * 17) - 0.5) * 90;
+        const ty = 435 + (hash(i * 23) - 0.5) * 70;
+        const x = lerp(sx, tx, u);
+        const y = lerp(sy, ty, u) - Math.sin(Math.PI * u) * (60 + hash(i) * 90);
+        const r = lerp(5, 12, Math.sin(Math.PI * u));
+        const g = ctx.createRadialGradient(x, y, 0, x, y, r * 2.5);
+        g.addColorStop(0, `rgba(255,237,213,${Math.sin(Math.PI * u)})`);
+        g.addColorStop(1, 'rgba(234,88,12,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(x, y, r * 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  window.renderAt = renderAt;
+  // Render frame 0 initially
+  renderAt(0);
+})();
+</script>
+</body>
+</html>
