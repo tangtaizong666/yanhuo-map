@@ -440,3 +440,102 @@ class MerchantWorkspaceTests(TestCase):
         self.assertEqual(counted_block.status_code, 409, counted_block.data)
         self.assertEqual(counted_block.data['code'], 'product_has_history')
         self.assertTrue(Product.objects.filter(pk=counted.pk).exists())
+
+    def test_patch_and_stock_correction_return_404_not_500_when_product_deleted_before_stall_lock(self):
+        from .views import merchant_stall as real_merchant_stall
+        first = Product.objects.create(stall=self.stall, name='并发删除A', price_cents=700, stock=2)
+        second = Product.objects.create(stall=self.stall, name='并发删除B', price_cents=700, stock=2)
+
+        def delete_first_during_lock(stall_id, user, permission='market.view_stall', locked=False):
+            stall = real_merchant_stall(stall_id, user, permission=permission, locked=locked)
+            if locked:
+                Product.objects.filter(pk=first.pk).delete()
+            return stall
+
+        with patch('market.merchant.merchant_stall', side_effect=delete_first_during_lock):
+            patch_res = self.client.patch(
+                f'/api/v1/merchant/products/{first.pk}', {'price_cents': 850}, format='json'
+            )
+        self.assertEqual(patch_res.status_code, 404)
+
+        def delete_second_during_lock(stall_id, user, permission='market.view_stall', locked=False):
+            stall = real_merchant_stall(stall_id, user, permission=permission, locked=locked)
+            if locked:
+                Product.objects.filter(pk=second.pk).delete()
+            return stall
+
+        with patch('market.counter.merchant_stall', side_effect=delete_second_during_lock):
+            corr_res = self.client.post(
+                f'/api/v1/merchant/products/{second.pk}/stock-correction',
+                {'stock': 1, 'expected_stock_version': 0, 'reason': '并发盘点', 'idempotency_key': 'race-corr-key'},
+                format='json',
+            )
+        self.assertEqual(corr_res.status_code, 404)
+
+
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event as ThreadEvent
+from unittest import skipUnless
+from django.db import close_old_connections, connection, connections
+from django.test import TransactionTestCase
+
+
+@skipUnless(connection.vendor == 'postgresql', 'Requires real PostgreSQL row-lock waits')
+class ProductDeleteConcurrencyTests(TransactionTestCase):
+    def test_concurrent_delete_and_patch_serialize_on_stall_lock_without_500(self):
+        _, _, vendor, stall, _ = fixtures()
+        target = Product.objects.create(stall=stall, name='PG并发待删菜品', price_cents=900, stock=3, is_active=False)
+        delete_locked_stall = ThreadEvent()
+        patch_read_original = ThreadEvent()
+        release_delete = ThreadEvent()
+        from .views import merchant_stall as real_merchant_stall
+
+        def hooked_merchant_stall(stall_id, user, permission='market.view_stall', locked=False):
+            s = real_merchant_stall(stall_id, user, permission=permission, locked=locked)
+            if locked and permission == 'market.delete_product':
+                delete_locked_stall.set()
+                if not release_delete.wait(timeout=15):
+                    raise RuntimeError('Timed out waiting for concurrent PATCH to reach Stall lock')
+            return s
+
+        real_get_object = __import__('market.merchant', fromlist=['get_object_or_404']).get_object_or_404
+
+        def hooked_get_object(klass, *args, **kwargs):
+            obj = real_get_object(klass, *args, **kwargs)
+            if klass is Product and delete_locked_stall.is_set():
+                patch_read_original.set()
+            return obj
+
+        def run_delete():
+            close_old_connections()
+            try:
+                client = APIClient()
+                client.force_authenticate(vendor)
+                return client.delete(f'/api/v1/merchant/products/{target.pk}')
+            finally:
+                connections.close_all()
+
+        def run_patch():
+            close_old_connections()
+            try:
+                client = APIClient()
+                client.force_authenticate(vendor)
+                return client.patch(f'/api/v1/merchant/products/{target.pk}', {'price_cents': 1100}, format='json')
+            finally:
+                connections.close_all()
+
+        with patch('market.merchant.merchant_stall', side_effect=hooked_merchant_stall), patch(
+            'market.merchant.get_object_or_404', side_effect=hooked_get_object
+        ):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                del_future = pool.submit(run_delete)
+                self.assertTrue(delete_locked_stall.wait(timeout=10))
+                patch_future = pool.submit(run_patch)
+                self.assertTrue(patch_read_original.wait(timeout=10))
+                release_delete.set()
+                del_res = del_future.result(timeout=15)
+                patch_res = patch_future.result(timeout=15)
+
+        self.assertEqual(del_res.status_code, 204)
+        self.assertEqual(patch_res.status_code, 404)
+        self.assertFalse(Product.objects.filter(pk=target.pk).exists())

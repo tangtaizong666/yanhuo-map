@@ -267,10 +267,13 @@ class ProductAdmin(AuditedAdmin):
     def save_model(self, request, obj, form, change):
         if not change: return super().save_model(request, obj, form, change)
         with transaction.atomic():
+            from django.http import Http404
             from .views import merchant_stall
-            merchant_stall(obj.stall_id, request.user, locked=True, permission='market.change_product')
+            stall = merchant_stall(obj.stall_id, request.user, locked=True, permission='market.change_product')
             desired = {name: getattr(obj, name) for name in form.changed_data if name not in ('stock', 'stock_version')}
-            current = Product.objects.select_for_update().get(pk=obj.pk)
+            current = Product.objects.select_for_update().filter(pk=obj.pk, stall=stall).first()
+            if current is None:
+                raise Http404
             for name, value in desired.items(): setattr(current, name, value)
             if desired: current.save(update_fields=list(desired))
             obj.refresh_from_db()

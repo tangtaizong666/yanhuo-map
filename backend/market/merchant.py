@@ -330,7 +330,9 @@ def product(request, product_id):
     with transaction.atomic():
         original = get_object_or_404(Product, pk=product_id)
         stall = merchant_stall(original.stall_id, request.user, locked=True, permission='market.change_product')
-        item = Product.objects.select_for_update().get(pk=product_id)
+        item = Product.objects.select_for_update().filter(pk=product_id, stall=stall).first()
+        if item is None:
+            raise Http404
         if 'image' in form.validated_data and form.validated_data['image'] != item.image:
             _validate_stall_public_media(stall, form.validated_data['image'])
         for key, value in form.validated_data.items():

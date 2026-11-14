@@ -630,3 +630,117 @@ test("deleting an ordered product from the editor explains history retention and
   expect(state.patches).toEqual([{ id: 982, body: { is_active: false } }]);
   expect(state.unexpected).toEqual([]);
 });
+
+
+test("delete 404 verifies authoritative stall menu before confirming or preserving state on permission loss", async ({
+  page,
+}) => {
+  const state = await fixture(page);
+  state.products[1].is_active = false;
+  state.products[2].is_active = false;
+  let stallRevoked = false;
+  await page.addInitScript(() => {
+    for (const id of [983, 984]) {
+      sessionStorage.setItem(
+        `merchant-stock-correction:981:981:${id}`,
+        JSON.stringify({
+          stock: 2,
+          expected_stock_version: 3,
+          reason: "待核对盘点",
+          idempotency_key: `keep-on-permission-loss-${id}`,
+        }),
+      );
+    }
+  });
+  await page.route("**/api/v1/merchant/products/*", async (route) => {
+    if (route.request().method() === "DELETE") {
+      return route.fulfill({ status: 404, json: { detail: "未找到。" } });
+    }
+    return route.fallback();
+  });
+  await page.route("**/api/v1/merchant/stalls", async (route) => {
+    if (stallRevoked) {
+      return route.fulfill({
+        json: [
+          {
+            id: 999,
+            name: "二号饭摊",
+            products: [],
+            reviews: [],
+            image: "",
+            area_name: "北门",
+            address: "北门绿棚",
+            latitude: 30,
+            longitude: 120,
+            status: "open",
+            session_status: "open",
+            prep_minutes: 10,
+            accepting_orders: true,
+            transaction_enabled: true,
+            is_visible: true,
+            can_order: false,
+            contact_phone: "",
+            services: { mode: "live" },
+            last_confirmed_at: new Date().toISOString(),
+            closes_at: new Date(Date.now() + 7200000).toISOString(),
+          },
+        ],
+      });
+    }
+    return route.fallback();
+  });
+
+  await page.goto("/merchant/products");
+  // 1) delete_product permission missing while stall 981 is still viewable: product 984 remains in menu.
+  const rice = card(page, "招牌蛋炒饭");
+  await rice
+    .getByRole("button", { name: "删除商品：招牌蛋炒饭", exact: true })
+    .click();
+  const confirmDialog = page.getByRole("alertdialog", {
+    name: "删除「招牌蛋炒饭」？",
+    exact: true,
+  });
+  await confirmDialog.getByRole("button", { name: "确认删除", exact: true }).click();
+  await expect(confirmDialog.getByRole("alert")).toContainText(
+    "未能删除该商品（可能当前账号无删除权限），商品仍在菜单中。",
+  );
+  expect(
+    await page.evaluate(() =>
+      sessionStorage.getItem("merchant-stock-correction:981:981:984"),
+    ),
+  ).not.toBeNull();
+
+  // 2) Concurrent/prior delete already removed product 984 from authorized stall 981.
+  const riceIdx = state.products.findIndex((p) => p.id === 984);
+  state.products.splice(riceIdx, 1);
+  await confirmDialog.getByRole("button", { name: "确认删除", exact: true }).click();
+  await expect(confirmDialog).toHaveCount(0);
+  await expect(card(page, "招牌蛋炒饭")).toHaveCount(0);
+  expect(
+    await page.evaluate(() =>
+      sessionStorage.getItem("merchant-stock-correction:981:981:984"),
+    ),
+  ).toBeNull();
+
+  // 3) Full stall 981 ownership revoked when deleting product 983: preserve sessionStorage and warn.
+  const soup = card(page, "红豆汤");
+  await soup
+    .getByRole("button", { name: "删除商品：红豆汤", exact: true })
+    .click();
+  const soupConfirm = page.getByRole("alertdialog", {
+    name: "删除「红豆汤」？",
+    exact: true,
+  });
+  stallRevoked = true;
+  await soupConfirm.getByRole("button", { name: "确认删除", exact: true }).click();
+  await expect(
+    page.getByText("当前账号已无该摊位操作权限，无法确认删除结果。"),
+  ).toBeVisible();
+  await expect(soupConfirm).toHaveCount(0);
+  expect(
+    await page.evaluate(() =>
+      sessionStorage.getItem("merchant-stock-correction:981:981:983"),
+    ),
+  ).not.toBeNull();
+  expect(state.unexpected).toEqual([]);
+});

@@ -154,6 +154,7 @@ let returnFocus: HTMLElement | null = null;
 let previousOverflow = "";
 type DeleteCandidate = {
   id: number;
+  stall_id?: number;
   name: string;
   is_active: boolean;
 };
@@ -206,10 +207,17 @@ watch(products, (list) => {
   if (
     deleteUncertain.value &&
     deleteTarget.value &&
+    props.stall?.id === deleteTarget.value.stall_id &&
+    Array.isArray(props.stall?.products) &&
     !list.some((item) => item.id === deleteTarget.value!.id)
   ) {
     const removedName = deleteTarget.value.name;
     const removedId = deleteTarget.value.id;
+    const removedStallId = deleteTarget.value.stall_id ?? props.stall.id;
+    removeStorage(
+      `merchant-stock-correction:${session.user?.id}:${removedStallId}:${removedId}`,
+      "session",
+    );
     const fromEdit = deleteFromEditor.value || editingId.value === removedId;
     closeDeleteConfirm(true, !fromEdit);
     if (fromEdit && modal.value) closeEditor(true);
@@ -417,6 +425,7 @@ function openDeleteConfirm(
     return;
   deleteTarget.value = {
     id: product.id,
+    stall_id: props.stall?.id,
     name: product.name,
     is_active: product.is_active,
   };
@@ -502,16 +511,47 @@ async function confirmDeleteProduct() {
     emit("refresh");
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) {
-      removeStorage(
-        `merchant-stock-correction:${session.user?.id}:${props.stall.id}:${target.id}`,
-        "session",
-      );
-      const fromEdit = deleteFromEditor.value || editingId.value === target.id;
-      closeDeleteConfirm(true, !fromEdit);
-      if (fromEdit && modal.value) closeEditor(true);
-      notify(`已核对菜单，「${target.name}」已不在列表中`, "success");
-      emit("refresh");
-      return;
+      const targetStallId = target.stall_id ?? props.stall?.id;
+      try {
+        const latestStalls = await api<any[]>("/merchant/stalls");
+        const currentStall = Array.isArray(latestStalls)
+          ? latestStalls.find((item) => item?.id === targetStallId)
+          : null;
+        if (currentStall && Array.isArray(currentStall.products)) {
+          const stillExists = currentStall.products.some(
+            (item: any) => item?.id === target.id,
+          );
+          if (!stillExists) {
+            removeStorage(
+              `merchant-stock-correction:${session.user?.id}:${targetStallId}:${target.id}`,
+              "session",
+            );
+            const fromEdit =
+              deleteFromEditor.value || editingId.value === target.id;
+            closeDeleteConfirm(true, !fromEdit);
+            if (fromEdit && modal.value) closeEditor(true);
+            notify(`已核对菜单，「${target.name}」已不在列表中`, "success");
+            emit("refresh");
+            return;
+          }
+          deleteUncertain.value = false;
+          deleteError.value =
+            "未能删除该商品（可能当前账号无删除权限），商品仍在菜单中。";
+          emit("refresh");
+          return;
+        }
+        deleteUncertain.value = false;
+        deleteError.value = "当前账号已无该摊位操作权限，无法确认删除结果。";
+        notify("当前账号已无该摊位操作权限，无法确认删除结果。", "error");
+        emit("refresh");
+        return;
+      } catch {
+        deleteUncertain.value = true;
+        deleteError.value =
+          "无法确认删除结果，请检查网络或刷新菜单核对当前状态。";
+        emit("refresh");
+        return;
+      }
     }
     if (
       error instanceof ApiError &&

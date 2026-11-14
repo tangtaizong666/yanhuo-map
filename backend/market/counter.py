@@ -5,6 +5,7 @@ import secrets
 
 from django.core.cache import cache
 from django.db import transaction
+from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.views.decorators.debug import sensitive_post_parameters
@@ -39,8 +40,10 @@ def correct_stock(product_id, actor, values):
         sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     with transaction.atomic():
         original = get_object_or_404(Product, pk=product_id)
-        merchant_stall(original.stall_id, actor, locked=True, permission='market.change_product')
-        product = Product.objects.select_for_update().get(pk=product_id)
+        stall = merchant_stall(original.stall_id, actor, locked=True, permission='market.change_product')
+        product = Product.objects.select_for_update().filter(pk=product_id, stall=stall).first()
+        if product is None:
+            raise Http404
         previous = StockCorrection.objects.filter(product=product, idempotency_key=data['idempotency_key']).first()
         if previous:
             if previous.request_hash != digest:
