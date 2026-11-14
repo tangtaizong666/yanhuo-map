@@ -763,7 +763,14 @@ class OpsGovernanceApiTests(TestCase):
             self.assertTrue(hide_res.data['review']['is_hidden'])
             self.assertEqual(hide_res.data['review']['moderation_status'], 'hidden')
 
-        # 4. Honest 1-star complaint is cleared (kept public, removed from flagged queue!)
+        # 4. Honest 1-star complaint is cleared (mandatory reason required; kept public, removed from flagged queue!)
+        missing_clear_reason = self.api.patch(
+            f'/api/v1/ops/reviews/{low_review.pk}',
+            {'action': 'clear', 'moderation_reason': '   '},
+            format='json',
+        )
+        self.assertEqual(missing_clear_reason.status_code, 400)
+
         clear_res = self.api.patch(
             f'/api/v1/ops/reviews/{low_review.pk}',
             {'action': 'clear', 'moderation_reason': '核对履约耗时属实，属正常体验差评予以保留'},
@@ -789,6 +796,107 @@ class OpsGovernanceApiTests(TestCase):
         self.assertEqual(ov['reviews_total'], 5)
         self.assertEqual(ov['reviews_hidden'], 3)
         self.assertEqual(ov['reviews_flagged'], 0)
+
+        # 5b. Post-clearance merchant reply lifecycle:
+        # Polite reply on cleared 1-star review stays unflagged; abusive new reply re-flags it!
+        self.auth(self.vendor)
+        polite_reply = self.api.post(
+            f'/api/v1/merchant/reviews/{low_review.pk}/reply',
+            {'content': '非常抱歉今天高峰期出餐慢了，我们明天增加人手改进！'},
+            format='json',
+        )
+        self.assertEqual(polite_reply.status_code, 200, polite_reply.data)
+
+        self.auth(self.admin_user)
+        self.assertEqual(self.api.get('/api/v1/ops/overview').data['summary']['reviews_flagged'], 0)
+
+        self.auth(self.vendor)
+        abusive_reply = self.api.post(
+            f'/api/v1/merchant/reviews/{low_review.pk}/reply',
+            {'content': '嫌慢就滚出夜市别来买'},
+            format='json',
+        )
+        self.assertEqual(abusive_reply.status_code, 200, abusive_reply.data)
+
+        self.auth(self.admin_user)
+        self.assertEqual(self.api.get('/api/v1/ops/overview').data['summary']['reviews_flagged'], 1)
+        reflaged_list = self.api.get('/api/v1/ops/reviews?status=flagged').data
+        self.assertEqual([r['id'] for r in reflaged_list['results']], [low_review.pk])
+
+        clean_second_reply = self.api.patch(
+            f'/api/v1/ops/reviews/{low_review.pk}',
+            {'action': 'clear_reply', 'moderation_reason': '已复核评价后商家追加不当辱骂回复，清理回复保留原评'},
+            format='json',
+        )
+        self.assertEqual(clean_second_reply.status_code, 200, clean_second_reply.data)
+        self.assertFalse(clean_second_reply.data['review']['is_hidden'])
+        self.assertEqual(clean_second_reply.data['review']['moderation_status'], 'cleared')
+        self.assertFalse(clean_second_reply.data['review']['is_flagged'])
+        self.assertEqual(self.api.get('/api/v1/ops/overview').data['summary']['reviews_flagged'], 0)
+        reply_log = AuditLog.objects.filter(
+            action='ops_review_reply_cleared', target=f'market.Review:{low_review.pk}'
+        ).latest('id')
+        self.assertEqual(len(reply_log.details.get('reply_sha256', '')), 64)
+        self.assertGreater(reply_log.details.get('reply_length', 0), 0)
+
+        # 5c. Ensure status=flagged does not drop older flagged items behind >300 normal unreviewed reviews
+        ref_now = timezone.now()
+        self.product.stock = 50
+        self.product.save(update_fields=['stock'])
+        old_flagged_order = self._completed_order(
+            low_user, created_offset_seconds=86400 * 5 + 360, completed_offset_seconds=86400 * 5
+        )
+        old_flagged = Review.objects.create(
+            order=old_flagged_order,
+            user=low_user,
+            stall=self.stall,
+            rating=1,
+            content='五天前等了很久才拿到',
+        )
+        Review.objects.filter(pk=old_flagged.pk).update(created_at=ref_now - timedelta(days=5))
+        bulk_users = [User(username=f'bulk_stu_{i}') for i in range(305)]
+        User.objects.bulk_create(bulk_users)
+        bulk_users = list(User.objects.filter(username__startswith='bulk_stu_').order_by('id'))
+        bulk_orders = [
+            Order(
+                number=f'BULKREV{idx:04d}',
+                user=u,
+                stall=self.stall,
+                stall_name=self.stall.name,
+                mode='live',
+                status='completed',
+                payment_method='offline',
+                payment_status='paid',
+                total_cents=700,
+                pickup_code=f'{1000 + idx}',
+                pickup_address='测试取餐点',
+                pickup_latitude=30.5,
+                pickup_longitude=114.3,
+                expires_at=ref_now + timedelta(minutes=15),
+                created_at=ref_now - timedelta(minutes=8),
+                completed_at=ref_now,
+                idempotency_key=f'bulk-idem-{idx}',
+                request_hash=f'bulk-hash-{idx}',
+            )
+            for idx, u in enumerate(bulk_users)
+        ]
+        Order.objects.bulk_create(bulk_orders)
+        bulk_orders = list(Order.objects.filter(user__username__startswith='bulk_stu_').order_by('id'))
+        Review.objects.bulk_create(
+            [
+                Review(order=o, user=o.user, stall=self.stall, rating=5, content='味道不错挺香的')
+                for o in bulk_orders
+            ]
+        )
+        deep_flagged = self.api.get('/api/v1/ops/reviews?status=flagged').data
+        self.assertEqual(deep_flagged['counts']['flagged'], 1)
+        self.assertEqual([r['id'] for r in deep_flagged['results']], [old_flagged.pk])
+        # Clean up bulk rows so steps 6-8 test exact stall aggregates cleanly
+        Review.objects.filter(pk=old_flagged.pk).delete()
+        old_flagged_order.delete()
+        Review.objects.filter(user__username__startswith='bulk_stu_').delete()
+        Order.objects.filter(user__username__startswith='bulk_stu_').delete()
+        User.objects.filter(username__startswith='bulk_stu_').delete()
 
         # 6. Verify public stall rating & count exclude hidden brush reviews ((4 + 1) / 2 = 2.5)
         public_detail = self.api.get(f'/api/v1/stalls/{self.stall.pk}').data

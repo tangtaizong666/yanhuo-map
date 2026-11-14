@@ -7,6 +7,7 @@ inspect orders, run provider-verified financial resolution, export
 reconciliation CSVs, verify onboarding/licences/feedback, and manage campus
 areas, delivery handoff points, and global thresholds.
 """
+import hashlib
 import math
 import uuid
 from datetime import timedelta
@@ -16,7 +17,7 @@ from django.contrib.auth import authenticate, get_user_model, login
 from django.core import signing
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Exists, IntegerField, OuterRef, Q, Subquery
+from django.db.models import Count, Exists, F, IntegerField, OuterRef, Q, Subquery
 from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -405,11 +406,54 @@ def _annotate_reviews(queryset, now=None):
     )
 
 
+def _flagged_candidate_q() -> Q:
+    return Q(is_hidden=False) & (
+        Q(moderation_status='unreviewed')
+        | Q(
+            moderation_status='cleared',
+            replied_at__isnull=False,
+            moderated_at__isnull=True,
+        )
+        | Q(
+            moderation_status='cleared',
+            replied_at__isnull=False,
+            replied_at__gt=F('moderated_at'),
+        )
+    )
+
+
+def _is_review_flagged(
+    *,
+    is_hidden: bool,
+    moderation_status: str,
+    moderated_at,
+    replied_at,
+    merchant_reply: str,
+    flags: list,
+) -> bool:
+    if is_hidden:
+        return False
+    if moderation_status == 'unreviewed':
+        return bool(flags)
+    if (
+        moderation_status == 'cleared'
+        and replied_at is not None
+        and (moderated_at is None or replied_at > moderated_at)
+        and _has_suspicious_review_text(merchant_reply)
+    ):
+        return True
+    return False
+
+
 def _count_flagged_reviews(now=None) -> int:
     candidates = _annotate_reviews(
-        Review.objects.filter(is_hidden=False, moderation_status='unreviewed'),
+        Review.objects.filter(_flagged_candidate_q()),
         now=now,
     ).values_list(
+        'is_hidden',
+        'moderation_status',
+        'moderated_at',
+        'replied_at',
         'rating',
         'content',
         'merchant_reply',
@@ -420,15 +464,34 @@ def _count_flagged_reviews(now=None) -> int:
     )
     return sum(
         1
-        for rating, content, reply_text, created_at, completed_at, c7, ctotal in candidates
-        if _review_risk_flags(
-            rating=rating,
-            content=content,
+        for (
+            is_hidden,
+            mod_status,
+            mod_at,
+            rep_at,
+            rating,
+            content,
+            reply_text,
+            created_at,
+            completed_at,
+            c7,
+            ctotal,
+        ) in candidates.iterator(chunk_size=500)
+        if _is_review_flagged(
+            is_hidden=is_hidden,
+            moderation_status=mod_status,
+            moderated_at=mod_at,
+            replied_at=rep_at,
             merchant_reply=reply_text,
-            order_created_at=created_at,
-            order_completed_at=completed_at,
-            pair_7d_count=c7,
-            pair_total_count=ctotal,
+            flags=_review_risk_flags(
+                rating=rating,
+                content=content,
+                merchant_reply=reply_text,
+                order_created_at=created_at,
+                order_completed_at=completed_at,
+                pair_7d_count=c7,
+                pair_total_count=ctotal,
+            ),
         )
     )
 
@@ -1609,7 +1672,14 @@ def _serialize_ops_review(row: Review):
         'pair_7d_count': pair_7d,
         'pair_total_count': pair_total,
         'risk_flags': flags,
-        'is_flagged': (not row.is_hidden) and row.moderation_status == 'unreviewed' and bool(flags),
+        'is_flagged': _is_review_flagged(
+            is_hidden=row.is_hidden,
+            moderation_status=row.moderation_status,
+            moderated_at=row.moderated_at,
+            replied_at=row.replied_at,
+            merchant_reply=row.merchant_reply,
+            flags=flags,
+        ),
     }
 
 
@@ -1668,14 +1738,14 @@ def reviews_list(request):
     elif status_filter == 'cleared':
         base = base.filter(is_hidden=False, moderation_status='cleared')
     elif status_filter == 'flagged':
-        base = base.filter(is_hidden=False, moderation_status='unreviewed')
+        base = base.filter(_flagged_candidate_q())
     elif status_filter != 'all':
         raise BusinessError('评价治理筛选状态无效。', 'invalid_status', status=400)
 
     annotated = _annotate_reviews(base, now=now).order_by('-created_at', '-pk')
     if status_filter == 'flagged':
         serialized = []
-        for row in annotated[:300]:
+        for row in annotated.iterator(chunk_size=500):
             item = _serialize_ops_review(row)
             if item['is_flagged']:
                 serialized.append(item)
@@ -1765,15 +1835,18 @@ def review_detail_view(request, review_id):
                 reason=reason,
             )
         elif action == 'clear':
+            if not reason:
+                raise serializers.ValidationError(
+                    {'moderation_reason': ['人工复核保留评价必须填写核实依据。']}
+                )
             if row.is_hidden:
                 raise BusinessError(
                     '已屏蔽评价请使用「恢复公开」操作并填写复核依据。',
                     'review_currently_hidden',
                     status=400,
                 )
-            effective_reason = reason or '人工复核正常，保留公开展示'
             row.moderation_status = 'cleared'
-            row.moderation_reason = effective_reason
+            row.moderation_reason = reason
             row.moderated_at = now
             row.moderated_by = request.user
             row.save(
@@ -1791,7 +1864,7 @@ def review_detail_view(request, review_id):
                 decision='clear',
                 stall_id=row.stall_id,
                 order_id=str(row.order_id),
-                reason=effective_reason,
+                reason=reason,
             )
         elif action == 'clear_reply':
             if not reason:
@@ -1804,6 +1877,9 @@ def review_detail_view(request, review_id):
                     'no_merchant_reply',
                     status=400,
                 )
+            removed_reply = row.merchant_reply
+            reply_sha256 = hashlib.sha256(removed_reply.encode('utf-8')).hexdigest()
+            reply_length = len(removed_reply)
             row.merchant_reply = ''
             row.replied_at = None
             row.moderation_reason = reason
@@ -1824,6 +1900,8 @@ def review_detail_view(request, review_id):
                 f'market.Review:{row.pk}',
                 stall_id=row.stall_id,
                 order_id=str(row.order_id),
+                reply_sha256=reply_sha256,
+                reply_length=reply_length,
                 reason=reason,
             )
 

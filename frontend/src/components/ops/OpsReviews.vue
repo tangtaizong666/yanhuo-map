@@ -79,6 +79,7 @@ const quickReasons = [
   "评价含好评返现、场外引流或重复灌水内容",
   "含恶意人身攻击、辱骂或失实诋毁言论",
   "商家回复含辱骂驱赶或暴露隐私等不当言论",
+  "核对订单履约属实，属真实消费体验予以保留",
 ];
 
 function formatFulfillment(sec: number | null) {
@@ -148,8 +149,8 @@ async function runAction(
 ) {
   if (busyId.value !== null) return;
   const reason = (reasons[row.id] || "").trim();
-  if (action !== "clear" && !reason) {
-    notify("执行屏蔽、恢复公开或清理回复时，必须填写治理原因与核实依据。", "error");
+  if (!reason) {
+    notify("执行评论治理或复核操作时，必须填写治理原因与核实依据。", "error");
     return;
   }
 
@@ -392,7 +393,7 @@ onMounted(() => {
 
         <div v-if="session.hasOpsPerm('manage_reviews')" class="o-drawer">
           <label class="o-field">
-            治理原因与核实依据（屏蔽、恢复公开、清理商家回复必填）
+            治理原因与核实依据（所有治理动作必填）
             <input
               v-model="reasons[row.id]"
               class="o-input"

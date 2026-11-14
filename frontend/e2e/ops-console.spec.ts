@@ -412,6 +412,7 @@ test("dedicated /ops/login rejects non-admin credentials, logs in admin, and fit
   await honestCard.getByRole("button", { name: "商家回复含辱骂驱赶或暴露隐私等不当言论" }).click();
   await honestCard.getByRole("button", { name: "清理不当商家回复" }).click();
   await expect(honestCard.getByText("爱吃不吃滚出夜市")).toHaveCount(0);
+  await honestCard.getByRole("button", { name: "核对订单履约属实，属真实消费体验予以保留" }).click();
   await honestCard.getByRole("button", { name: "复核正常保留" }).click();
   await expect(page.getByRole("button", { name: "待复核风险 (0)" })).toBeVisible();
 
