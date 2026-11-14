@@ -1,5 +1,10 @@
 import { computed, nextTick, onUnmounted, ref, watch } from "vue";
-import type { Router, RouteLocationNormalized } from "vue-router";
+import type {
+  NavigationFailure,
+  RouteLocationNormalized,
+  RouteLocationRaw,
+  Router,
+} from "vue-router";
 import { useRoute, useRouter } from "vue-router";
 import { useSession } from "../stores/session";
 import { useDiscovery } from "../stores/discovery";
@@ -29,6 +34,17 @@ type Entry = {
   origin?: string;
   snapshot?: Snapshot;
 };
+type RouteTier =
+  | "consumer-root"
+  | "consumer-hub"
+  | "consumer-context"
+  | "consumer-leaf"
+  | "merchant-root"
+  | "merchant-section"
+  | "ops-root"
+  | "ops-section"
+  | "ops-login"
+  | "other";
 export type ReturnControl = {
   signal: AbortSignal;
   active: () => boolean;
@@ -39,6 +55,7 @@ type Adapter = {
   restore: (snapshot: Snapshot, control: ReturnControl) => Promise<boolean>;
 };
 const entries = new Map<string, Entry>();
+const stackByPosition = new Map<number, string>();
 const adapters = new Map<string, Adapter>();
 const currentKey = ref("");
 const revision = ref(0);
@@ -64,14 +81,47 @@ function filterFingerprint() {
     f.position,
   ]);
 }
+function routePath(fullPath: string) {
+  return fullPath.split(/[?#]/, 1)[0] || "/";
+}
+function routeTier(path: string): RouteTier {
+  if (path === "/") return "consumer-root";
+  if (["/search", "/map", "/cart", "/orders", "/me"].includes(path))
+    return "consumer-hub";
+  if (
+    /^\/(stalls|checkout)\/\d+$/.test(path) ||
+    /^\/orders\/[^/]+$/.test(path)
+  )
+    return "consumer-context";
+  if (
+    /^\/stalls\/\d+\/products\/\d+$/.test(path) ||
+    ["/login", "/recover", "/account-security"].includes(path)
+  )
+    return "consumer-leaf";
+  if (path === "/merchant") return "merchant-root";
+  if (path.startsWith("/merchant/")) return "merchant-section";
+  if (path === "/ops/login") return "ops-login";
+  if (path === "/ops") return "ops-root";
+  if (path.startsWith("/ops/")) return "ops-section";
+  return "other";
+}
 function sourcePath(path: string) {
   return (
-    ["/", "/search", "/map", "/cart"].includes(path) ||
-    /^\/(stalls|checkout)\/\d+$/.test(path)
+    ["/", "/search", "/map", "/cart", "/orders", "/me"].includes(path) ||
+    /^\/(stalls|checkout)\/\d+$/.test(path) ||
+    /^\/orders\/[^/]+$/.test(path)
   );
 }
 function detailPath(path: string) {
   return /^\/stalls\/\d+(\/products\/\d+)?$/.test(path);
+}
+function returnablePath(path: string) {
+  return (
+    detailPath(path) ||
+    ["/search", "/map", "/cart", "/orders", "/me"].includes(path) ||
+    /^\/checkout\/\d+$/.test(path) ||
+    /^\/orders\/[^/]+$/.test(path)
+  );
 }
 function linksFor(path: string, region = "") {
   return [
@@ -126,7 +176,10 @@ function label(path: string) {
   if (path === "/search") return "返回搜索结果";
   if (path === "/map") return "返回地图找摊";
   if (path === "/cart") return "返回餐袋";
+  if (path === "/orders") return "返回我的订单";
+  if (path === "/me") return "返回个人中心";
   if (path.startsWith("/checkout/")) return "返回订单确认";
+  if (path.startsWith("/orders/")) return "返回订单详情";
   if (path.startsWith("/stalls/")) return "返回菜单";
   return "返回附近摊位";
 }
@@ -287,9 +340,58 @@ async function restore(entry: Entry, router: Router) {
   }
 }
 
+function hasAncestorContext(curPos: number, currentScope: string) {
+  for (let pos = curPos - 1; pos >= 0; pos--) {
+    const anc = entries.get(stackByPosition.get(pos) || "");
+    if (
+      anc &&
+      anc.scope === currentScope &&
+      anc.position === pos &&
+      routeTier(routePath(anc.path)) === "consumer-context"
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+let activeGo: Promise<NavigationFailure | void | undefined> | null = null;
+function goDelta(
+  router: Router,
+  delta: number,
+): Promise<NavigationFailure | void | undefined> {
+  if (activeGo) return activeGo;
+  const promise = new Promise<NavigationFailure | void | undefined>(
+    (resolve) => {
+      let settled = false;
+      const done = (failure?: NavigationFailure | void) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        stopAfter();
+        stopError();
+        if (activeGo === promise) activeGo = null;
+        resolve(failure);
+      };
+      const stopAfter = router.afterEach((_to, _from, failure) => {
+        done(failure);
+      });
+      const stopError = router.onError(() => {
+        done();
+      });
+      const timer = window.setTimeout(() => done(), 400);
+      router.go(delta);
+    },
+  );
+  activeGo = promise;
+  return promise;
+}
+
 export function installBrowseReturn(router: Router) {
   let nextOrigin: string | undefined;
   let popKey: string | undefined;
+  let prevEntry: Entry | undefined;
+
   router.beforeEach((to, from) => {
     if (!initialized) {
       initialized = true;
@@ -319,6 +421,7 @@ export function installBrowseReturn(router: Router) {
           cancelRestore?.();
           pending = null;
           entries.clear();
+          stackByPosition.clear();
           currentKey.value = "";
           clickedLink = null;
           revision.value++;
@@ -351,9 +454,11 @@ export function installBrowseReturn(router: Router) {
         scope: scope(),
       };
       entries.set(current.key, current);
+      stackByPosition.set(current.position, current.key);
       currentKey.value = current.key;
       history.replaceState({ ...history.state, yanhuoBrowse: current.key }, "");
     }
+    prevEntry = current;
     if (
       popKey &&
       destination &&
@@ -366,35 +471,159 @@ export function installBrowseReturn(router: Router) {
     } else if (
       !popKey &&
       current &&
-      sourcePath(from.path) &&
-      detailPath(to.path) &&
       to.path !== from.path &&
       current.scope === scope()
     ) {
-      current.snapshot = capture(from.path, to.path);
-      nextOrigin = current.key;
+      if (sourcePath(from.path) && detailPath(to.path)) {
+        current.snapshot = capture(from.path, to.path);
+        nextOrigin = current.key;
+      } else if (sourcePath(from.path) && returnablePath(to.path)) {
+        current.snapshot = undefined;
+        nextOrigin = current.key;
+      }
     }
     clickedLink = null;
   });
+
   router.afterEach((to: RouteLocationNormalized, _from, failure) => {
     if (failure) {
       pending = null;
       return;
     }
-    const existing = popKey && entries.get(popKey);
+    const position = Number(history.state?.position ?? 0);
+    const currentScope = scope();
+    const existing = popKey ? entries.get(popKey) : undefined;
+    const wasReplaced =
+      !existing &&
+      !!prevEntry &&
+      prevEntry.scope === currentScope &&
+      prevEntry.position === position;
+    const inheritedOrigin = wasReplaced
+      ? returnablePath(to.path)
+        ? prevEntry?.origin
+        : undefined
+      : nextOrigin;
+    if (existing) existing.position = position;
     const entry: Entry = existing || {
       key: `${pageSession}:${++serial}`,
       path: to.fullPath,
-      position: Number(history.state?.position ?? 0),
-      scope: scope(),
-      origin: nextOrigin,
+      position,
+      scope: currentScope,
+      origin: inheritedOrigin,
     };
     history.replaceState({ ...history.state, yanhuoBrowse: entry.key }, "");
     currentKey.value = entry.key;
     entries.set(entry.key, entry);
+    stackByPosition.set(position, entry.key);
+    if (!existing && !wasReplaced) {
+      for (const pos of [...stackByPosition.keys()]) {
+        if (pos > position) stackByPosition.delete(pos);
+      }
+    }
     // Bound metadata to recent navigation, not the lifetime of an open tab.
     if (entries.size > 60) entries.delete(entries.keys().next().value!);
     revision.value++;
     if (pending === entry) void restore(entry, router).catch(() => {});
   });
+
+  const rawPush = router.push.bind(router);
+  router.push = (to: RouteLocationRaw) => {
+    const current = router.currentRoute.value;
+    if (!current.matched.length) return rawPush(to);
+    const target = router.resolve(to);
+    if (target.fullPath === current.fullPath) return Promise.resolve();
+
+    const currentScope = scope();
+    const curPos = Number(history.state?.position ?? -1);
+    const curEntry = entries.get(currentKey.value);
+
+    // 1. If the target route is already an ancestor on the active tab stack,
+    // unwind directly back to that ancestor instead of stacking a cycle.
+    if (
+      curEntry &&
+      curEntry.scope === currentScope &&
+      curEntry.position === curPos &&
+      curPos > 0
+    ) {
+      for (let pos = curPos - 1; pos >= 0; pos--) {
+        const anc = entries.get(stackByPosition.get(pos) || "");
+        if (
+          anc &&
+          anc.scope === currentScope &&
+          anc.position === pos &&
+          anc.path === target.fullPath
+        ) {
+          return goDelta(router, pos - curPos);
+        }
+      }
+    }
+
+    // 2. Same-pathname query/hash refinements replace in-place (e.g. /search?q=a -> /search?q=b).
+    if (target.path === current.path) {
+      return router.replace(to);
+    }
+
+    const fromTier = routeTier(current.path);
+    const toTier = routeTier(target.path);
+
+    // 3. Merchant & Ops console section tabs stay at max depth 1 above their console home.
+    if (toTier === "merchant-root" || toTier === "ops-root") {
+      return router.replace(to);
+    }
+    if (
+      (fromTier === "merchant-section" && toTier === "merchant-section") ||
+      (fromTier === "ops-section" && toTier === "ops-section")
+    ) {
+      return router.replace(to);
+    }
+
+    // 4. Consumer hierarchy: prevent unbounded nesting across hubs, stalls, carts, checkouts, and dishes.
+    if (toTier === "consumer-root" && fromTier.startsWith("consumer-")) {
+      return router.replace(to);
+    }
+
+    if (toTier === "consumer-hub") {
+      if (fromTier === "consumer-hub" || fromTier === "consumer-leaf") {
+        return router.replace(to);
+      }
+      if (fromTier === "consumer-context") {
+        if (
+          target.path === "/cart" &&
+          !hasAncestorContext(curPos, currentScope)
+        ) {
+          return rawPush(to);
+        }
+        return router.replace(to);
+      }
+    }
+
+    if (toTier === "consumer-context") {
+      if (fromTier === "consumer-leaf") {
+        return router.replace(to);
+      }
+      if (fromTier === "consumer-context") {
+        const forwardToCheckout =
+          /^\/stalls\/\d+$/.test(current.path) &&
+          /^\/checkout\/\d+$/.test(target.path) &&
+          !hasAncestorContext(curPos, currentScope);
+        const orderToStall =
+          /^\/orders\/[^/]+$/.test(current.path) &&
+          /^\/stalls\/\d+$/.test(target.path) &&
+          !hasAncestorContext(curPos, currentScope);
+        if (!forwardToCheckout && !orderToStall) {
+          return router.replace(to);
+        }
+      }
+    }
+
+    if (toTier === "consumer-leaf" && fromTier === "consumer-leaf") {
+      const loginToRecover =
+        current.path === "/login" && target.path === "/recover";
+      if (!loginToRecover) {
+        return router.replace(to);
+      }
+    }
+
+    return rawPush(to);
+  };
 }

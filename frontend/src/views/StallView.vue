@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useRoute } from "vue-router";
 import {
   ArrowLeft,
+  House,
   Heart,
   Star,
   MapPin,
@@ -156,9 +157,14 @@ onUnmounted(() => {
 </script>
 <template>
   <div class="page stall-page">
-    <a class="back-link" :href="returnTarget" @click="returnToSource"
-      ><ArrowLeft :size="16" />{{ returnLabel }}</a
-    >
+    <div class="subpage-top-nav">
+      <a class="back-link" :href="returnTarget" @click="returnToSource"
+        ><ArrowLeft :size="16" />{{ returnLabel }}</a
+      >
+      <RouterLink v-if="returnTarget !== '/'" to="/" class="home-escape-link"
+        ><House :size="15" />回首页</RouterLink
+      >
+    </div>
     <div v-if="loading" class="skeleton skeleton-banner"></div>
     <div v-else-if="error && !stall" class="empty-state card">
       <AlertCircle :size="30" />
@@ -605,7 +611,7 @@ onUnmounted(() => {
   </div>
 </template>
 <style scoped>
-.stall-page > .back-link {
+.stall-page .back-link {
   min-height: 44px;
 }
 .stall-share-entry {
@@ -1153,8 +1159,11 @@ onUnmounted(() => {
     padding-bottom: 90px;
   }
   .back-link {
-    font-size: 11px;
+    font-size: 12px;
     margin-bottom: 0;
+  }
+  .stall-page > .subpage-top-nav {
+    margin-bottom: 4px;
   }
   .stall-hero {
     height: 148px;

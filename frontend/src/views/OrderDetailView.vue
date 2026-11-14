@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   ChefHat,
   Clock3,
+  House,
   MapPin,
   MessageSquare,
   Navigation,
@@ -465,9 +466,14 @@ async function submitReview() {
 
 <template>
   <div class="page order-detail-page">
-    <RouterLink to="/orders" class="back-link"
-      ><ArrowLeft :size="18" /> 我的订单</RouterLink
-    >
+    <div class="subpage-top-nav">
+      <RouterLink to="/orders" class="back-link"
+        ><ArrowLeft :size="18" /> 我的订单</RouterLink
+      >
+      <RouterLink to="/" class="home-escape-link"
+        ><House :size="15" />回首页</RouterLink
+      >
+    </div>
     <p v-if="error" class="error-message" role="alert">
       {{ error }} <button class="btn btn-ghost" @click="load">重试</button>
     </p>

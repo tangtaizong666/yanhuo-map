@@ -7,6 +7,7 @@ import {
   Check,
   ChevronRight,
   Clock3,
+  House,
   MapPin,
   Minus,
   Plus,
@@ -701,9 +702,14 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
       '--checkout-action-height': `${actionBarHeight}px`,
     }"
   >
-    <RouterLink :to="`/stalls/${stallId}`" class="back-link"
-      ><ArrowLeft :size="18" /> 继续挑选</RouterLink
-    >
+    <div class="subpage-top-nav">
+      <RouterLink :to="`/stalls/${stallId}`" class="back-link"
+        ><ArrowLeft :size="18" /> 继续挑选</RouterLink
+      >
+      <RouterLink to="/" class="home-escape-link"
+        ><House :size="15" />回首页</RouterLink
+      >
+    </div>
     <div class="page-heading">
       <div>
         <span class="eyebrow">确认这一餐</span>

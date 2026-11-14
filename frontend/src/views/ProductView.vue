@@ -8,6 +8,7 @@ import {
   Check,
   ChevronRight,
   Clock3,
+  House,
   MapPin,
   Minus,
   Plus,
@@ -195,7 +196,11 @@ onUnmounted(() => {
         ><ArrowLeft :size="16" />{{ returnLabel }}</a
       >
       <span v-if="stall"
-        ><span class="breadcrumb-divider">/</span>{{ stall.name }}</span
+        ><span class="breadcrumb-divider">/</span
+        ><span class="breadcrumb-stall-name">{{ stall.name }}</span></span
+      >
+      <RouterLink v-if="returnTarget !== '/'" to="/" class="home-escape-link"
+        ><House :size="15" />回首页</RouterLink
       >
     </nav>
 
@@ -459,13 +464,24 @@ onUnmounted(() => {
   gap: 8px;
   min-height: 44px;
   color: #6f5c48;
+  flex-shrink: 0;
+}
+.dish-breadcrumb > a.home-escape-link {
+  margin-left: auto;
+  gap: 6px;
 }
 .dish-breadcrumb > span {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
   min-width: 0;
-  overflow-wrap: anywhere;
+  flex: 1 1 auto;
+}
+.breadcrumb-stall-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .breadcrumb-divider {
   color: #c8b8a3;

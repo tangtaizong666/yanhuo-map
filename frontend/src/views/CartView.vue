@@ -24,7 +24,7 @@ import { useSession } from '../stores/session';
 import { listSubmissions } from '../lib/checkoutSubmission';
 import PortionEditor from "../components/PortionEditor.vue";
 import { normalizePortions, invalidPortions } from "../lib/portions";
-import { useBrowseReturn } from "../lib/browseReturn";
+import { useBrowseReturn, useDetailReturn } from "../lib/browseReturn";
 import {
   productAvailable,
   productUnavailableReason,
@@ -32,6 +32,11 @@ import {
 
 const cart = useCart();
 const session = useSession();
+const {
+  target: returnTarget,
+  label: returnLabel,
+  go: returnToSource,
+} = useDetailReturn(() => "/", "返回附近摊位");
 const recoveries = computed(() => listSubmissions(session.user?.id));
 const hasRecovery = (id: string) => recoveries.value.some(row => row.stallId === Number(id));
 type StallState = {
@@ -311,9 +316,14 @@ function acceptPrice(id: string, item: CartItem) {
 
 <template>
   <div class="page cart-page">
-    <RouterLink to="/search?type=dishes" class="cart-back"
-      ><ArrowLeft :size="16" /> 继续发现好味道</RouterLink
-    >
+    <div class="subpage-top-nav">
+      <a :href="returnTarget" class="cart-back" @click="returnToSource"
+        ><ArrowLeft :size="16" /> {{ returnLabel }}</a
+      >
+      <RouterLink to="/search?type=dishes" class="home-escape-link"
+        >继续发现好味道 <ArrowUpRight :size="15"
+      /></RouterLink>
+    </div>
     <header class="cart-heading">
       <div>
         <span class="eyebrow">今日餐袋</span>

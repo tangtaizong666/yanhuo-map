@@ -62,6 +62,9 @@ async function fixture(page: Page, mapEnabled = false) {
       })), stall];
       return send({ results: state.removed ? [] : rows, next: null, truncated: false });
     }
+    if (path === "/orders") return send({ results: [], next: null });
+    if (path === "/orders/99") return send({ id: 99, order_no: "YH202611140099", stall_id: 71, stall_name: stall.name, stall_address: stall.address, stall_phone: stall.contact_phone, status: "accepted", payment_method: "offline", payment_status: "unpaid", fulfillment_type: "pickup", total_cents: 800, pickup_code: "A08", prep_minutes: 8, note: "", contact_phone: "13800000000", created_at: new Date().toISOString(), items: [{ id: 1, product_id: 711, product_name: products[0]!.name, unit_price_cents: 800, quantity: 1, portions: [] }], review: null });
+    if (path === "/follows") return send([stall]);
     if (path === "/stalls" || path === "/stalls/map") return send({ results: state.removed ? [] : [stall], next: null, truncated: false });
     if (path === "/stalls/71") {
       state.details++;
@@ -406,4 +409,117 @@ test("navigation return restores a scrolled desktop map list and the chosen map 
   expect(state.details).toBeGreaterThan(readsBeforeReturn);
   expect(state.writes).toEqual([]);
   await page.screenshot({ path: info.outputPath("map-list-scroll-and-viewport-restored.png"), animations: "disabled" });
+});
+
+test("bounded navigation prevents stall-dish-cart-checkout loops and peer-tab history piling", async ({ page }) => {
+  const state = await fixture(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  // 1. Peer hub hopping stays at depth 1 above Home so 1 Back returns to "/".
+  await page.goto("/");
+  await expect(page.locator('.stall-title[href="/stalls/71"]')).toBeVisible();
+  const basePos = await page.evaluate(() => Number(history.state?.position ?? 0));
+
+  const mobileNav = page.getByRole("navigation", { name: "底部导航", exact: true });
+  await mobileNav.getByRole("link", { name: "地图", exact: true }).click();
+  await expect(page).toHaveURL(/\/map$/);
+  await mobileNav.getByRole("link", { name: "订单", exact: true }).click();
+  await expect(page).toHaveURL(/\/orders$/);
+  await mobileNav.getByRole("link", { name: "我的", exact: true }).click();
+  await expect(page).toHaveURL(/\/me$/);
+  await page.locator('header.site-header a[href="/cart"]').click();
+  await expect(page).toHaveURL(/\/cart$/);
+  await page.getByRole("link", { name: "继续发现好味道", exact: true }).click();
+  await expect(page).toHaveURL(/\/search\?type=dishes$/);
+
+  expect(await page.evaluate(() => Number(history.state?.position ?? 0))).toBe(basePos + 1);
+  await page.goBack();
+  await expect(page).toHaveURL(/\/$/);
+  expect(await page.evaluate(() => Number(history.state?.position ?? 0))).toBe(basePos);
+
+  // 2. Repeated Stall <-> Dish <-> Cart <-> Checkout hops unwind cycles instead of nesting.
+  await page.locator('.stall-title[href="/stalls/71"]').click();
+  await expect(page).toHaveURL(/\/stalls\/71$/);
+
+  await page.getByRole("link", { name: "查看鸡蛋煎饼1详情", exact: true }).click();
+  await expect(page).toHaveURL(/\/stalls\/71\/products\/711$/);
+  await page.locator('button[type="submit"]').click();
+  await page.getByRole("link", { name: "继续选餐", exact: true }).click();
+  await expect(page).toHaveURL(/\/stalls\/71$/);
+
+  await page.getByRole("link", { name: "查看鸡蛋煎饼2详情", exact: true }).click();
+  await expect(page).toHaveURL(/\/stalls\/71\/products\/712$/);
+  await page.locator(".dish-stall-link").click();
+  await expect(page).toHaveURL(/\/stalls\/71$/);
+
+  await page.locator('.mobile-cart a[href="/cart"]').click();
+  await expect(page).toHaveURL(/\/cart$/);
+  await expect(page.getByRole("link", { name: "返回菜单", exact: true })).toBeVisible();
+  await page.getByRole("link", { name: "返回菜单", exact: true }).click();
+  await expect(page).toHaveURL(/\/stalls\/71$/);
+
+  await page.locator('.mobile-cart a[href="/checkout/71"]').click();
+  await expect(page).toHaveURL(/\/checkout\/71$/);
+  await page.getByRole("link", { name: "继续挑选", exact: true }).click();
+  await expect(page).toHaveURL(/\/stalls\/71$/);
+
+  await page.getByRole("link", { name: "查看鸡蛋煎饼3详情", exact: true }).click();
+  await expect(page).toHaveURL(/\/stalls\/71\/products\/713$/);
+  expect(await page.evaluate(() => Number(history.state?.position ?? 0))).toBe(basePos + 2);
+
+  await page.getByRole("link", { name: "返回菜单", exact: true }).click();
+  await expect(page).toHaveURL(/\/stalls\/71$/);
+  await page.getByRole("link", { name: "返回附近摊位", exact: true }).click();
+  await expect(page).toHaveURL(/\/$/);
+  expect(await page.evaluate(() => Number(history.state?.position ?? 0))).toBe(basePos);
+  expect(state.writes).toEqual([]);
+});
+
+test("direct dish to stall inherits origin and deep subpages expose one-tap home escape", async ({ page }) => {
+  const state = await fixture(page);
+  await page.goto("/search?type=dishes");
+  const basePos = await page.evaluate(() => Number(history.state?.position ?? 0));
+
+  await page.locator('.dish-card[href="/stalls/71/products/711"]').click();
+  await expect(page).toHaveURL(/\/stalls\/71\/products\/711$/);
+  await page.locator(".dish-stall-link").click();
+  await expect(page).toHaveURL(/\/stalls\/71$/);
+  // ProductView was replaced by StallView and inherited Search as its direct origin!
+  await expect(page.getByRole("link", { name: "返回搜索结果", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => Number(history.state?.position ?? 0))).toBe(basePos + 1);
+  await page.getByRole("link", { name: "返回搜索结果", exact: true }).click();
+  await expect(page).toHaveURL(/\/search\?type=dishes$/);
+
+  // Deep subpage 1-tap home escape unwinds browser history back to "/" across all 4 widths.
+  await page.goto("/");
+  const homePos = await page.evaluate(() => Number(history.state?.position ?? 0));
+  await page.locator('.stall-title[href="/stalls/71"]').click();
+  await page.locator('a[href="/checkout/71"]').first().click();
+  await expect(page).toHaveURL(/\/checkout\/71$/);
+  await page.getByRole("link", { name: "查看鸡蛋煎饼1详情", exact: true }).click();
+  await expect(page).toHaveURL(/\/stalls\/71\/products\/711$/);
+
+  for (const width of [360, 390, 768, 1440]) {
+    await page.setViewportSize({ width, height: 844 });
+    const escapeLink = page.getByRole("link", { name: "回首页", exact: true });
+    await expect(escapeLink).toBeVisible();
+    const box = (await escapeLink.boundingBox())!;
+    expect(box.height).toBeGreaterThanOrEqual(44);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
+  }
+
+  await page.getByRole("link", { name: "回首页", exact: true }).click();
+  await expect(page).toHaveURL(/\/$/);
+  expect(await page.evaluate(() => Number(history.state?.position ?? 0))).toBe(homePos);
+
+  // OrderDetail -> Stall records "返回订单详情" and exposes "回首页".
+  await page.goto("/orders/99");
+  await expect(page.getByRole("link", { name: "回首页", exact: true })).toBeVisible();
+  await page.locator('a[href="/stalls/71"]').first().click();
+  await expect(page).toHaveURL(/\/stalls\/71$/);
+  await expect(page.getByRole("link", { name: "返回订单详情", exact: true })).toBeVisible();
+  await page.getByRole("link", { name: "返回订单详情", exact: true }).click();
+  await expect(page).toHaveURL(/\/orders\/99$/);
+  expect(state.writes).toEqual([]);
 });
