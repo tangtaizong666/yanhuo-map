@@ -3,6 +3,7 @@ from datetime import timedelta
 from django.core.management.base import BaseCommand
 from django.db import close_old_connections, connection
 from django.utils import timezone
+from market.demo_keepalive import keep_open_demo_stalls_fresh
 from market.models import Event, Order, SiteConfiguration, Stall
 from market.services import expire_pending_orders
 from market.runtime_health import record_worker_failure, record_worker_success
@@ -15,6 +16,7 @@ class Command(BaseCommand):
         parser.add_argument('--loop', action='store_true')
         parser.add_argument('--interval', type=int, default=15)
         parser.add_argument('--batch-size', type=int, default=100)
+        parser.add_argument('--keep-demo-fresh', action='store_true')
     def handle(self, *args, **options):
         while True:
             if not connection.in_atomic_block:
@@ -24,6 +26,8 @@ class Command(BaseCommand):
                 expired = expire_pending_orders(limit=max(1, min(options['batch_size'], 1000)), on_error=failures.append)
                 cleanup_authentication_buckets()
                 config = SiteConfiguration.current()
+                if options['keep_demo_fresh']:
+                    keep_open_demo_stalls_fresh(config)
                 for stall in Stall.objects.select_related('current_session').filter(is_visible=True).iterator(chunk_size=100):
                     if stall.effective_status(config) == 'stale':
                         confirmed = (stall.current_session.last_confirmed_at.isoformat()

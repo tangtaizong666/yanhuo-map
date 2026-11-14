@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import {
   Activity,
   AlertTriangle,
@@ -26,10 +26,24 @@ const emit = defineEmits<{
 
 const session = useSession();
 const saving = ref(false);
+const restoringDemo = ref(false);
 const configError = ref("");
 const cfgForm = reactive({
   stale_minutes: 60,
   pending_minutes: 15,
+});
+
+const canRestoreDemoStalls = computed(
+  () =>
+    Boolean(session.config?.demo_mode) &&
+    session.hasOpsPerm("manage_stalls") &&
+    (props.data?.summary?.demo_stalls_visible ?? 0) > 0,
+);
+
+const needsDemoRestore = computed(() => {
+  const s = props.data?.summary;
+  if (!s) return false;
+  return (s.demo_stalls_open ?? 0) < (s.demo_stalls_visible ?? 0);
 });
 
 watch(
@@ -74,6 +88,29 @@ async function saveConfig() {
     saving.value = false;
   }
 }
+
+async function restoreDemoStalls() {
+  if (restoringDemo.value) return;
+  restoringDemo.value = true;
+  try {
+    const res = await api<{ restored_count: number }>(
+      "/ops/demo-stalls/restore",
+      {
+        method: "POST",
+        body: {},
+      },
+    );
+    notify(
+      `已恢复 ${res.restored_count} 个示例摊位出摊并刷新位置确认时间`,
+      "success",
+    );
+    emit("refresh");
+  } catch (e) {
+    notify((e as Error).message, "error");
+  } finally {
+    restoringDemo.value = false;
+  }
+}
 </script>
 
 <template>
@@ -100,7 +137,12 @@ async function saveConfig() {
 
       <div
         class="o-kpi-card"
-        :class="{ 'is-warn': (data?.summary?.stalls_stale || 0) > 0 }"
+        :class="{
+          'is-warn':
+            (data?.summary?.stalls_stale || 0) > 0 ||
+            ((data?.summary?.stalls_visible || 0) > 0 &&
+              (data?.summary?.stalls_open || 0) === 0),
+        }"
       >
         <span>出摊与准入状态</span>
         <strong
@@ -112,9 +154,27 @@ async function saveConfig() {
           {{ data?.summary?.stalls_stale ?? 0 }} · 可交易
           {{ data?.summary?.stalls_trade_eligible ?? 0 }}
         </small>
-        <button type="button" class="o-btn" @click="emit('navigate', 'stalls')">
-          管理商户与摊位
-        </button>
+        <div class="o-actions-row">
+          <button
+            type="button"
+            class="o-btn"
+            style="flex: 1 1 116px; padding: 8px 10px"
+            @click="emit('navigate', 'stalls')"
+          >
+            管理商户与摊位
+          </button>
+          <button
+            v-if="canRestoreDemoStalls"
+            type="button"
+            class="o-btn"
+            :class="{ 'o-btn-primary': needsDemoRestore }"
+            style="flex: 1 1 116px; padding: 8px 10px"
+            :disabled="restoringDemo"
+            @click="restoreDemoStalls"
+          >
+            {{ restoringDemo ? "恢复中…" : "恢复示例摊位出摊" }}
+          </button>
+        </div>
       </div>
 
       <div

@@ -37,6 +37,7 @@ from .admission import (
     pickup_eligibility_reason,
 )
 from .auth_limits import LoginRateLimited, TrustedUserRateThrottle, login_attempt
+from .demo_keepalive import demo_environment_active, restore_demo_stalls
 from .errors import BusinessError
 from .financial_export import reconciliation_export
 from .list_api import CURSOR_SALT, scope_orders
@@ -672,6 +673,8 @@ def overview(request):
     stale_count = 0
     trade_eligible_count = 0
     visible_count = 0
+    demo_visible_count = 0
+    demo_open_count = 0
     for stall in all_stalls:
         eff = stall.effective_status(cfg)
         if eff == 'open':
@@ -680,6 +683,10 @@ def overview(request):
             stale_count += 1
         if stall.is_visible:
             visible_count += 1
+            if stall.is_demo:
+                demo_visible_count += 1
+                if eff == 'open':
+                    demo_open_count += 1
         if new_trade_eligible(stall):
             trade_eligible_count += 1
 
@@ -725,6 +732,8 @@ def overview(request):
                 'stalls_open': open_count,
                 'stalls_stale': stale_count,
                 'stalls_trade_eligible': trade_eligible_count,
+                'demo_stalls_visible': demo_visible_count if demo_environment_active() else 0,
+                'demo_stalls_open': demo_open_count if demo_environment_active() else 0,
                 'applications_submitted': MerchantApplication.objects.filter(status='submitted').count(),
                 'applications_needs_changes': MerchantApplication.objects.filter(status='needs_changes').count(),
                 'applications_draft': MerchantApplication.objects.filter(status='draft').count(),
@@ -935,6 +944,22 @@ def stalls_governance(request):
         },
         headers={'Cache-Control': 'private, no-store'},
     )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@throttle_classes([TrustedUserRateThrottle])
+def restore_demo_stalls_view(request):
+    require_ops_perm(request.user, 'market.change_stall')
+    result = restore_demo_stalls()
+    audit(
+        request.user,
+        'ops_demo_stalls_restored',
+        'market.Stall:demo',
+        restored_count=result['restored_count'],
+        stall_ids=result['stall_ids'],
+    )
+    return Response(result)
 
 
 @api_view(['PATCH'])

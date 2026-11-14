@@ -29,7 +29,19 @@ const keyword = ref("");
 const expandedId = ref<number | null>(null);
 const savingMerchant = ref(false);
 const savingStall = ref(false);
+const restoringDemo = ref(false);
 const drawerError = ref("");
+
+const canRestoreDemoStalls = computed(
+  () =>
+    Boolean(session.config?.demo_mode) &&
+    session.hasOpsPerm("manage_stalls") &&
+    stalls.value.some((s) => s.is_demo && s.is_visible),
+);
+
+const hasClosedOrStaleDemo = computed(() =>
+  stalls.value.some((s) => s.is_demo && s.is_visible && s.status !== "open"),
+);
 
 const merchantDraft = reactive({
   business_name: "",
@@ -245,6 +257,31 @@ async function saveStall(stall: any) {
   }
 }
 
+async function restoreDemoStalls() {
+  if (restoringDemo.value) return;
+  restoringDemo.value = true;
+  error.value = "";
+  try {
+    const res = await api<{ restored_count: number }>(
+      "/ops/demo-stalls/restore",
+      {
+        method: "POST",
+        body: {},
+      },
+    );
+    notify(
+      `已恢复 ${res.restored_count} 个示例摊位出摊并刷新位置确认时间`,
+      "success",
+    );
+    await load();
+    emit("changed");
+  } catch (e) {
+    error.value = (e as Error).message;
+  } finally {
+    restoringDemo.value = false;
+  }
+}
+
 onMounted(() => {
   void load();
 });
@@ -260,9 +297,21 @@ onMounted(() => {
             流动摊默认仅限地图展示发现；仅经核验且证照在有效期内的固定门店，方可开通自取预定、线上支付与定点配送。
           </p>
         </div>
-        <button type="button" class="o-btn" :disabled="loading" @click="load">
-          <RefreshCw :size="15" /> 刷新
-        </button>
+        <div class="o-actions-row">
+          <button
+            v-if="canRestoreDemoStalls"
+            type="button"
+            class="o-btn"
+            :class="{ 'o-btn-primary': hasClosedOrStaleDemo }"
+            :disabled="loading || restoringDemo"
+            @click="restoreDemoStalls"
+          >
+            {{ restoringDemo ? "恢复中…" : "恢复示例摊位出摊" }}
+          </button>
+          <button type="button" class="o-btn" :disabled="loading" @click="load">
+            <RefreshCw :size="15" /> 刷新
+          </button>
+        </div>
       </div>
 
       <div class="o-toolbar">

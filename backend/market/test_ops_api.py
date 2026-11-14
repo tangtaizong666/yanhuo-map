@@ -5,14 +5,18 @@ from unittest.mock import patch
 
 from django.contrib.auth.models import Permission, User
 from django.core.cache import cache
+from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from .demo_keepalive import recover_startup_demo_stalls
 from .models import (
     Area,
     AuditLog,
+    BusinessSession,
     DeliveryPoint,
+    Event,
     Feedback,
     MerchantApplication,
     MerchantProfile,
@@ -955,3 +959,154 @@ class OpsGovernanceApiTests(TestCase):
         self.assertTrue(
             AuditLog.objects.filter(action='password_changed', actor=staff_acc, target=f'auth.User:{staff_acc.pk}').exists()
         )
+
+    def test_demo_stalls_restore_endpoint_and_opt_in_keepalive_preserve_stale_rules(self):
+        now = timezone.now()
+        demo_stall = Stall.objects.create(
+            merchant=self.stall.merchant,
+            area=self.stall.area,
+            name='示例烤冷面',
+            category='小吃',
+            is_demo=True,
+            is_visible=True,
+            accepting_orders=False,
+            transaction_enabled=True,
+        )
+        demo_stall.current_session = BusinessSession.objects.create(
+            stall=demo_stall,
+            status='closed',
+            opened_at=now - timedelta(hours=8),
+            last_confirmed_at=now - timedelta(hours=8),
+            closes_at=now - timedelta(hours=2),
+        )
+        demo_stall.save(update_fields=['current_session'])
+
+        paused_demo = Stall.objects.create(
+            merchant=self.stall.merchant,
+            area=self.stall.area,
+            name='示例小馄饨',
+            category='正餐',
+            is_demo=True,
+            is_visible=True,
+        )
+        paused_demo.current_session = BusinessSession.objects.create(
+            stall=paused_demo,
+            status='paused',
+            opened_at=now - timedelta(hours=3),
+            last_confirmed_at=now - timedelta(hours=3),
+        )
+        paused_demo.save(update_fields=['current_session'])
+
+        hidden_demo = Stall.objects.create(
+            merchant=self.stall.merchant,
+            area=self.stall.area,
+            name='未公开示例摊',
+            category='饮品',
+            is_demo=True,
+            is_visible=False,
+        )
+        hidden_demo.current_session = BusinessSession.objects.create(
+            stall=hidden_demo,
+            status='closed',
+            opened_at=now - timedelta(hours=5),
+            last_confirmed_at=now - timedelta(hours=5),
+        )
+        hidden_demo.save(update_fields=['current_session'])
+
+        real_stall = Stall.objects.create(
+            merchant=self.stall.merchant,
+            area=self.stall.area,
+            name='真实持证门店',
+            category='正餐',
+            is_demo=False,
+            is_visible=True,
+        )
+        real_stall.current_session = BusinessSession.objects.create(
+            stall=real_stall,
+            status='open',
+            opened_at=now - timedelta(hours=3),
+            last_confirmed_at=now - timedelta(hours=3),
+        )
+        real_stall.save(update_fields=['current_session'])
+
+        # Unauthorized & read-only staff cannot restore demo stalls
+        self.assertIn(self.api.post('/api/v1/ops/demo-stalls/restore', {}, format='json').status_code, (401, 403))
+        for actor in (self.student, self.vendor, self.readonly_staff):
+            self.auth(actor)
+            self.assertEqual(self.api.post('/api/v1/ops/demo-stalls/restore', {}, format='json').status_code, 403)
+
+        # Rejected outside DEMO_MODE
+        self.auth(self.admin_user)
+        with override_settings(DEMO_MODE=False):
+            denied = self.api.post('/api/v1/ops/demo-stalls/restore', {}, format='json')
+            self.assertEqual(denied.status_code, 403)
+            self.assertEqual(denied.data['code'], 'demo_only')
+
+        # 1-click restore reopens visible demo stalls only, leaving real & hidden stalls untouched
+        restored = self.api.post('/api/v1/ops/demo-stalls/restore', {}, format='json')
+        self.assertEqual(restored.status_code, 200, restored.data)
+        self.assertIn(demo_stall.pk, restored.data['stall_ids'])
+        self.assertIn(paused_demo.pk, restored.data['stall_ids'])
+        self.assertNotIn(hidden_demo.pk, restored.data['stall_ids'])
+        self.assertNotIn(real_stall.pk, restored.data['stall_ids'])
+
+        demo_stall.refresh_from_db()
+        paused_demo.refresh_from_db()
+        hidden_demo.refresh_from_db()
+        real_stall.refresh_from_db()
+        cfg = SiteConfiguration.current()
+        self.assertEqual(demo_stall.effective_status(cfg), 'open')
+        self.assertTrue(demo_stall.accepting_orders)
+        self.assertIsNone(demo_stall.current_session.closes_at)
+        self.assertEqual(paused_demo.effective_status(cfg), 'open')
+        self.assertEqual(hidden_demo.effective_status(cfg), 'closed')
+        self.assertEqual(real_stall.effective_status(cfg), 'stale')
+        self.assertTrue(
+            AuditLog.objects.filter(
+                action='ops_demo_stalls_restored',
+                actor=self.admin_user,
+                target='market.Stall:demo',
+            ).exists()
+        )
+
+        # Default expire_orders (without --keep-demo-fresh) STILL enforces location-expiry auto-stop on demo stalls
+        demo_stall.current_session.last_confirmed_at = timezone.now() - timedelta(hours=3)
+        demo_stall.current_session.save(update_fields=['last_confirmed_at'])
+        call_command('expire_orders')
+        demo_stall.refresh_from_db()
+        self.assertEqual(demo_stall.effective_status(cfg), 'stale')
+        self.assertTrue(Event.objects.filter(type='stall_stale', stall=demo_stall).exists())
+
+        # Opt-in --keep-demo-fresh refreshes open demo stalls before expiry, respects paused/closed & real stalls
+        paused_demo.current_session.status = 'paused'
+        paused_demo.current_session.last_confirmed_at = timezone.now() - timedelta(hours=3)
+        paused_demo.current_session.save(update_fields=['status', 'last_confirmed_at'])
+        call_command('expire_orders', '--keep-demo-fresh')
+        demo_stall.refresh_from_db()
+        paused_demo.refresh_from_db()
+        real_stall.refresh_from_db()
+        self.assertEqual(demo_stall.effective_status(cfg), 'open')
+        self.assertEqual(paused_demo.current_session.status, 'paused')
+        self.assertEqual(real_stall.effective_status(cfg), 'stale')
+        self.assertTrue(Event.objects.filter(type='stall_stale', stall=real_stall).exists())
+
+        # Short stale_minutes (< 30) bypasses auto-refresh so live roadshow expiry tests still trigger stale
+        cfg.stale_minutes = 10
+        cfg.save()
+        demo_stall.current_session.last_confirmed_at = timezone.now() - timedelta(minutes=15)
+        demo_stall.current_session.save(update_fields=['last_confirmed_at'])
+        call_command('expire_orders', '--keep-demo-fresh')
+        demo_stall.refresh_from_db()
+        self.assertEqual(demo_stall.effective_status(cfg), 'stale')
+
+        # Startup recovery reopens demo stalls if 0 demo stalls remain open
+        cfg.stale_minutes = 60
+        cfg.save()
+        for s in Stall.objects.filter(is_demo=True, is_visible=True).select_related('current_session'):
+            if s.current_session:
+                s.current_session.status = 'closed'
+                s.current_session.save(update_fields=['status'])
+        reopened = recover_startup_demo_stalls()
+        self.assertGreaterEqual(reopened, 2)
+        demo_stall.refresh_from_db()
+        self.assertEqual(demo_stall.effective_status(cfg), 'open')

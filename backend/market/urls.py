@@ -48,6 +48,7 @@ urlpatterns = [
     path('ops/applications', ops_api.applications),
     path('ops/applications/<int:application_id>/review', ops_api.review_application_view),
     path('ops/stalls', ops_api.stalls_governance),
+    path('ops/demo-stalls/restore', ops_api.restore_demo_stalls_view),
     path('ops/stalls/<int:stall_id>', ops_api.update_stall),
     path('ops/merchants/<int:merchant_id>', ops_api.update_merchant),
     path('ops/areas', ops_api.areas_view),

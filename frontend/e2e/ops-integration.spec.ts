@@ -59,13 +59,16 @@ test("real admin login, governance modules, audit trail and student preview isol
     page.locator(".o-badge", { hasText: "ops_site_config_updated" }).first(),
   ).toBeVisible();
 
-  // Restore default stale_minutes so shared demo state stays clean
+  // Restore default stale_minutes and verify 1-click demo stall recovery against real API
   await page.goto("/ops");
   await page
     .getByLabel("位置过期停单分钟数（1 - 1440）")
     .fill("60");
   await page.getByRole("button", { name: "保存全局配置" }).click();
   await expect(page.locator(".toast")).toContainText("已保存");
+  await page.getByRole("button", { name: "恢复示例摊位出摊" }).click();
+  await expect(page.locator(".toast")).toContainText("已恢复 8 个示例摊位出摊");
+  await expect(page.getByText("8 / 8")).toBeVisible();
 
   // Explicit consumer preview & return to /ops
   await page.setViewportSize({ width: 1280, height: 860 });

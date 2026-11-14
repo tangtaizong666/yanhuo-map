@@ -52,12 +52,19 @@ try {
     }
     & $pythonExe -m pip install -r (Join-Path $backendDir 'requirements.txt')
     if ($LASTEXITCODE -ne 0) { throw 'Backend dependencies could not be installed.' }
+    $demoActive = ($env:DJANGO_ENV -ne 'production') -and ((-not $env:DEMO_MODE) -or $env:DEMO_MODE.ToLowerInvariant() -eq 'true')
     $newDatabase = -not (Test-Path -LiteralPath (Join-Path $backendDir 'db.sqlite3'))
     & $pythonExe (Join-Path $backendDir 'manage.py') migrate --noinput
     if ($LASTEXITCODE -ne 0) { throw 'Database migration failed.' }
     if ($newDatabase -and -not $NoSeed) {
         & $pythonExe (Join-Path $backendDir 'manage.py') seed_demo
         if ($LASTEXITCODE -ne 0) { throw 'Demo data could not be prepared.' }
+    }
+    if ($demoActive -and -not $NoSeed) {
+        $refreshDemoArgs = @((Join-Path $backendDir 'manage.py'), 'refresh_demo_stalls', '--startup')
+        if ($newDatabase) { $refreshDemoArgs += '--clear-seeded-closing' }
+        & $pythonExe @refreshDemoArgs
+        if ($LASTEXITCODE -ne 0) { throw 'Demo stall sessions could not be refreshed.' }
     }
     Push-Location $frontendDir
     try {
@@ -83,7 +90,9 @@ try {
         & $pythonExe (Join-Path $backendDir 'manage.py') prepare_simulation
         if ($LASTEXITCODE -ne 0) { throw 'Simulation services could not be prepared.' }
     }
-    $workerProcess = Start-Process -FilePath $pythonExe -ArgumentList @('-u',$manageArgument,'expire_orders','--loop') -WorkingDirectory $backendDir -WindowStyle Hidden -RedirectStandardOutput (Join-Path $runtimeDir 'worker.log') -RedirectStandardError (Join-Path $runtimeDir 'worker.error.log') -PassThru
+    $workerArgs = @('-u', $manageArgument, 'expire_orders', '--loop')
+    if ($demoActive -and -not $NoSeed) { $workerArgs += '--keep-demo-fresh' }
+    $workerProcess = Start-Process -FilePath $pythonExe -ArgumentList $workerArgs -WorkingDirectory $backendDir -WindowStyle Hidden -RedirectStandardOutput (Join-Path $runtimeDir 'worker.log') -RedirectStandardError (Join-Path $runtimeDir 'worker.error.log') -PassThru
     Register-DevProcess -Registry $registry -Process $workerProcess
     $paymentWorkerProcess = Start-Process -FilePath $pythonExe -ArgumentList @('-u',$manageArgument,'reconcile_payments','--loop') -WorkingDirectory $backendDir -WindowStyle Hidden -RedirectStandardOutput (Join-Path $runtimeDir 'payment-worker.log') -RedirectStandardError (Join-Path $runtimeDir 'payment-worker.error.log') -PassThru
     Register-DevProcess -Registry $registry -Process $paymentWorkerProcess

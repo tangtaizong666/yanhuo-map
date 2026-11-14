@@ -44,6 +44,7 @@ async function mountOpsFixture(page: Page) {
     is_superuser: true,
     ops_permissions: fullPerms,
   };
+  let demoOpenCount = 2;
   const appRow = {
     id: 91,
     status: "submitted",
@@ -220,9 +221,11 @@ async function mountOpsFixture(page: Page) {
         summary: {
           stalls_total: 4,
           stalls_visible: 3,
-          stalls_open: 2,
-          stalls_stale: 0,
+          stalls_open: demoOpenCount,
+          stalls_stale: demoOpenCount < 3 ? 1 : 0,
           stalls_trade_eligible: 1,
+          demo_stalls_visible: 3,
+          demo_stalls_open: demoOpenCount,
           applications_submitted: appRow.status === "submitted" ? 1 : 0,
           applications_needs_changes: 0,
           applications_draft: 0,
@@ -251,6 +254,10 @@ async function mountOpsFixture(page: Page) {
           location_reports_confirmed: feedbackRow.verification === "confirmed" ? 1 : 0,
         },
       });
+    }
+    if (path === "/ops/demo-stalls/restore" && req.method() === "POST") {
+      demoOpenCount = 3;
+      return send({ restored_count: 3, stall_ids: [1, 2, 3] });
     }
     if (path === "/ops/applications" && req.method() === "GET") {
       return send({
@@ -374,6 +381,12 @@ test("dedicated /ops/login rejects non-admin credentials, logs in admin, and fit
     await page.setViewportSize({ width, height: 900 });
     await assertNoHorizontalOverflow(page);
   }
+
+  // 1-click demo stall recovery on /ops overview
+  await expect(page.getByText("2 / 4")).toBeVisible();
+  await page.getByRole("button", { name: "恢复示例摊位出摊" }).click();
+  await expect(page.locator(".toast")).toContainText("已恢复 3 个示例摊位出摊");
+  await expect(page.getByText("3 / 4")).toBeVisible();
 
   // Onboarding review flow
   await page.getByRole("button", { name: "前往入驻审核" }).click();
