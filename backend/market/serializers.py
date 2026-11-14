@@ -83,10 +83,17 @@ class ReviewSerializer(serializers.ModelSerializer):
     mode = serializers.CharField(source='order.mode', read_only=True)
     class Meta:
         model = Review
-        fields = ['id', 'mode', 'rating', 'content', 'created_at', 'display_name', 'merchant_reply', 'replied_at']
+        fields = ['id', 'mode', 'rating', 'content', 'created_at', 'display_name', 'merchant_reply', 'replied_at', 'is_hidden']
     def get_display_name(self, obj):
         name = obj.user.first_name or obj.user.username
         return name[:1] + '同学'
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if instance.is_hidden and self.context.get('merchant'):
+            data['content'] = '该评价因违反平台社区规范已被治理屏蔽。'
+            data['merchant_reply'] = ''
+            data['replied_at'] = None
+        return data
 
 
 class StallSerializer(serializers.ModelSerializer):
@@ -198,10 +205,10 @@ class StallSerializer(serializers.ModelSerializer):
     def get_rating(self, obj):
         if hasattr(obj, 'rating_average'):
             return round(obj.rating_average, 1) if obj.rating_average is not None else None
-        ratings = [r.rating for r in obj.reviews.all() if r.order.mode == 'live']
+        ratings = [r.rating for r in obj.reviews.all() if r.order.mode == 'live' and not r.is_hidden]
         return round(sum(ratings) / len(ratings), 1) if ratings else None
     def get_review_count(self, obj):
-        return obj.rating_count if hasattr(obj, 'rating_count') else sum(r.order.mode == 'live' for r in obj.reviews.all())
+        return obj.rating_count if hasattr(obj, 'rating_count') else sum(r.order.mode == 'live' and not r.is_hidden for r in obj.reviews.all())
     def get_order_count(self, obj): return getattr(obj, 'completed_count', 0)
     def get_distance_m(self, obj):
         if hasattr(obj, 'distance_m_db'):
@@ -219,7 +226,7 @@ class StallSerializer(serializers.ModelSerializer):
         for row in rows: row.stall = obj
         return serializer(rows, many=True).data
     def get_reviews(self, obj):
-        rows = obj._preview_reviews if hasattr(obj, '_preview_reviews') else [r for r in obj.reviews.all() if r.order.mode == 'live'][:20]
+        rows = obj._preview_reviews if hasattr(obj, '_preview_reviews') else [r for r in obj.reviews.all() if r.order.mode == 'live' and not r.is_hidden][:20]
         return ReviewSerializer(rows, many=True).data
 
 

@@ -19,6 +19,8 @@ const fullPerms = {
   export_reconciliation: true,
   view_feedback: true,
   manage_feedback: true,
+  view_reviews: true,
+  manage_reviews: true,
   view_users: true,
   manage_users: true,
   view_audit: true,
@@ -77,6 +79,81 @@ async function mountOpsFixture(page: Page) {
     resolved: false,
     created_at: "2026-10-12T11:00:00+08:00",
   };
+  const reviewRows = [
+    {
+      id: 701,
+      mode: "live",
+      order_id: "00000000-0000-0000-0000-000000000701",
+      order_number: "YH202610120701",
+      order_payment_method: "offline",
+      order_total_cents: 800,
+      fulfillment_seconds: 25,
+      stall_id: 1,
+      stall_name: "阿婆葱油饼",
+      user_id: 2101,
+      username: "student",
+      display_name: "测试同学",
+      rating: 5,
+      content: "好评返现加微领红包",
+      created_at: "2026-10-12T11:20:00+08:00",
+      merchant_reply: "",
+      replied_at: null,
+      is_hidden: false,
+      moderation_status: "unreviewed",
+      moderation_reason: "",
+      moderated_at: null,
+      moderated_by_username: "",
+      pair_7d_count: 3,
+      pair_total_count: 3,
+      risk_flags: [
+        {
+          code: "repeat_pair",
+          label: "同客同摊高频评价（7天 3 次 / 累计 3 次）",
+          tone: "danger",
+        },
+        {
+          code: "rapid_completion",
+          label: "极速完单（下单至完成仅 25 秒）",
+          tone: "warn",
+        },
+      ],
+      is_flagged: true,
+    },
+    {
+      id: 702,
+      mode: "live",
+      order_id: "00000000-0000-0000-0000-000000000702",
+      order_number: "YH202610120702",
+      order_payment_method: "wechat",
+      order_total_cents: 1200,
+      fulfillment_seconds: 840,
+      stall_id: 1,
+      stall_name: "阿婆葱油饼",
+      user_id: 2199,
+      username: "critic_stu",
+      display_name: "林同学",
+      rating: 1,
+      content: "今天排队等了十四分钟，饼稍微有点凉。",
+      created_at: "2026-10-12T11:25:00+08:00",
+      merchant_reply: "爱吃不吃滚出夜市",
+      replied_at: "2026-10-12T11:26:00+08:00",
+      is_hidden: false,
+      moderation_status: "unreviewed",
+      moderation_reason: "",
+      moderated_at: null,
+      moderated_by_username: "",
+      pair_7d_count: 1,
+      pair_total_count: 1,
+      risk_flags: [
+        {
+          code: "extreme_low_rating",
+          label: "1 星极端差评（若属真实体验请点「复核保留」）",
+          tone: "warn",
+        },
+      ],
+      is_flagged: true,
+    },
+  ];
 
   await page.route("https://**/*", (route) => route.abort());
   await page.route("**/api/v1/**", async (route) => {
@@ -151,6 +228,9 @@ async function mountOpsFixture(page: Page) {
           applications_draft: 0,
           feedback_unresolved: feedbackRow.resolved ? 0 : 1,
           feedback_unreviewed_location: feedbackRow.verification === "unreviewed" ? 1 : 0,
+          reviews_total: reviewRows.length,
+          reviews_hidden: reviewRows.filter((r) => r.is_hidden).length,
+          reviews_flagged: reviewRows.filter((r) => r.is_flagged).length,
           orders_live_active: 1,
           orders_live_attention: 0,
           orders_simulation_active: 0,
@@ -196,6 +276,53 @@ async function mountOpsFixture(page: Page) {
       Object.assign(feedbackRow, body);
       return send({ feedback: feedbackRow });
     }
+    if (path === "/ops/reviews" && req.method() === "GET") {
+      const status = new URL(req.url()).searchParams.get("status") || "all";
+      const filtered =
+        status === "flagged"
+          ? reviewRows.filter((r) => r.is_flagged)
+          : status === "hidden"
+            ? reviewRows.filter((r) => r.is_hidden)
+            : status === "visible"
+              ? reviewRows.filter((r) => !r.is_hidden)
+              : reviewRows;
+      return send({
+        counts: {
+          all: reviewRows.length,
+          flagged: reviewRows.filter((r) => r.is_flagged).length,
+          visible: reviewRows.filter((r) => !r.is_hidden).length,
+          hidden: reviewRows.filter((r) => r.is_hidden).length,
+        },
+        stalls: [{ id: 1, name: "阿婆葱油饼" }],
+        results: filtered,
+      });
+    }
+    if (path.startsWith("/ops/reviews/") && req.method() === "PATCH") {
+      const id = Number(path.split("/").pop());
+      const body = req.postDataJSON();
+      const target = reviewRows.find((r) => r.id === id)!;
+      if (body.action === "hide") {
+        target.is_hidden = true;
+        target.moderation_status = "hidden";
+        target.is_flagged = false;
+      } else if (body.action === "clear") {
+        target.moderation_status = "cleared";
+        target.is_flagged = false;
+      } else if (body.action === "clear_reply") {
+        target.merchant_reply = "";
+        target.replied_at = null;
+      }
+      target.moderation_reason = body.moderation_reason || "人工复核正常";
+      target.moderated_at = "2026-10-12T12:00:00+08:00";
+      target.moderated_by_username = "admin";
+      return send({ review: target });
+    }
+    if (path === "/ops/users" && req.method() === "GET") {
+      return send({ counts: { all: 2, staff: 1, merchant: 0, student: 1 }, results: [adminAccount, studentAccount] });
+    }
+    if (path === "/auth/password" && req.method() === "POST") {
+      return send({ detail: "密码已更新，其他设备需要重新登录。" });
+    }
     return send({ detail: `Unhandled ${path}` }, 404);
   });
 }
@@ -209,6 +336,21 @@ test("dedicated /ops/login rejects non-admin credentials, logs in admin, and fit
   await expect(page).toHaveURL(/\/ops\/login$/);
   await expect(page.getByRole("heading", { name: "管理员登录", exact: true })).toBeVisible();
   await expect(page.locator(".site-header")).toHaveCount(0);
+
+  // Guard against white-on-white invisible button regression outside .o-shell
+  const submitBtn = page.getByRole("button", { name: "进入平台管理台" });
+  const btnColors = await submitBtn.evaluate((el) => {
+    const s = window.getComputedStyle(el);
+    return { bg: s.backgroundColor, color: s.color };
+  });
+  expect(btnColors.bg).toBe("rgb(36, 55, 47)");
+  expect(btnColors.color).toBe("rgb(255, 255, 255)");
+
+  // Recovery link on /ops/login returns to /ops/login rather than consumer /login
+  await page.getByRole("link", { name: /使用预先保存的恢复码重设/ }).click();
+  await expect(page).toHaveURL(/\/recover\?.*role=ops/);
+  await page.getByRole("link", { name: "返回登录" }).click();
+  await expect(page).toHaveURL(/\/ops\/login/);
 
   for (const width of [360, 390, 768, 1440]) {
     await page.setViewportSize({ width, height: 900 });
@@ -256,4 +398,41 @@ test("dedicated /ops/login rejects non-admin credentials, logs in admin, and fit
   await expect(page.locator(".consumer-preview-bar")).toContainText("正在预览学生端");
   await page.getByRole("link", { name: "返回平台管理台" }).click();
   await expect(page).toHaveURL(/\/ops$/);
+
+  // Review anti-brushing & malicious comment governance flow
+  await page.goto("/ops/reviews");
+  await expect(page.getByRole("heading", { name: "评论治理与防刷评风控" })).toBeVisible();
+  await expect(page.getByText("同客同摊高频评价（7天 3 次 / 累计 3 次）")).toBeVisible();
+
+  const brushCard = page.locator(".o-item", { hasText: "好评返现加微领红包" });
+  await brushCard.getByRole("button", { name: "同客短时高频极速完单，疑似刷评控分" }).click();
+  await brushCard.getByRole("button", { name: "屏蔽违规/刷评" }).click();
+
+  const honestCard = page.locator(".o-item", { hasText: "今天排队等了十四分钟" });
+  await honestCard.getByRole("button", { name: "商家回复含辱骂驱赶或暴露隐私等不当言论" }).click();
+  await honestCard.getByRole("button", { name: "清理不当商家回复" }).click();
+  await expect(honestCard.getByText("爱吃不吃滚出夜市")).toHaveCount(0);
+  await honestCard.getByRole("button", { name: "复核正常保留" }).click();
+  await expect(page.getByRole("button", { name: "待复核风险 (0)" })).toBeVisible();
+
+  // Admin self-service password security tab & responsive check
+  await page.goto("/ops/users?tab=security");
+  await expect(page.getByRole("heading", { name: "修改当前管理员密码" })).toBeVisible();
+  for (const width of [360, 390, 768, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    await assertNoHorizontalOverflow(page);
+  }
+
+  // Session expiry on /ops/* routes to /ops/login rather than consumer /login
+  await page.setViewportSize({ width: 1280, height: 860 });
+  await page.route("**/api/v1/ops/reviews**", (route) =>
+    route.fulfill({
+      status: 403,
+      json: { detail: "身份认证信息未提供。", code: "not_authenticated" },
+    }),
+  );
+  await page.getByRole("link", { name: "评价与风控" }).click();
+  await expect(page).toHaveURL(
+    /\/ops\/login\?returnTo=(?:\/|%2F)ops(?:\/|%2F)reviews$/,
+  );
 });

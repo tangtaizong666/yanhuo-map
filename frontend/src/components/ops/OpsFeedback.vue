@@ -36,9 +36,8 @@ const drafts = reactive<
 const kindLabels: Record<string, string> = {
   not_found: "没找到摊位",
   wrong_location: "现场位置不符",
-  closed_early: "提前收摊",
-  order_help: "订单求助",
-  general: "建议与反馈",
+  mismatch: "信息不符",
+  general: "意见建议",
 };
 
 const verificationLabels: Record<string, { text: string; tone: string }> = {
@@ -166,9 +165,8 @@ onMounted(() => {
             <option value="all">全部反馈类型</option>
             <option value="not_found">没找到摊位</option>
             <option value="wrong_location">现场位置不符</option>
-            <option value="closed_early">提前收摊</option>
-            <option value="order_help">订单求助</option>
-            <option value="general">建议与反馈</option>
+            <option value="mismatch">信息不符</option>
+            <option value="general">意见建议</option>
           </select>
         </div>
       </div>

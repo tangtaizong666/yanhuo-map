@@ -1,5 +1,16 @@
 /* Platform Administrator Governance Console (校园烟火治理台) */
 
+.o-shell,
+.ops-login-page {
+  --o-bg: #faf7f2;
+  --o-surface: #fffdf9;
+  --o-border: #eae1d4;
+  --o-ink: #302b26;
+  --o-muted: #7b6f63;
+  --o-pine: #24372f;
+  --o-accent: #e86a27;
+}
+
 .ops-login-page {
   min-height: 100dvh;
   background:
@@ -7,7 +18,7 @@
     radial-gradient(circle at 88% 82%, rgba(232, 106, 39, 0.09), transparent 44%),
     #fcf9f4;
   padding: 28px 18px 48px;
-  color: #302b26;
+  color: var(--o-ink);
 }
 
 .ops-login-topbar {
@@ -450,6 +461,7 @@
   margin: 0 auto;
   padding: 24px 28px 56px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 20px;
 }
 
@@ -715,6 +727,7 @@
 
 .o-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
 }
 
@@ -764,6 +777,7 @@
   padding-top: 14px;
   border-top: 1px dashed #e6dccd;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
 }
 
@@ -874,12 +888,19 @@
   }
   .o-mobile-switcher {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
     gap: 6px;
-    padding: 10px 16px 0;
+    padding: 10px 16px 2px;
+  }
+  .o-mobile-switcher::-webkit-scrollbar {
+    display: none;
   }
   .o-mobile-switcher a,
   .o-mobile-switcher button {
+    flex-shrink: 0;
     min-height: 44px;
     padding: 7px 12px;
     border-radius: 11px;
@@ -891,6 +912,7 @@
     display: inline-flex;
     align-items: center;
     gap: 5px;
+    white-space: nowrap;
   }
   .o-mobile-switcher a.active {
     background: var(--o-pine);

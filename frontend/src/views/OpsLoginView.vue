@@ -11,7 +11,7 @@ import {
   ShieldCheck,
 } from "lucide-vue-next";
 import { api } from "../lib/api";
-import { loginDestination, safeReturnTo } from "../lib/identity";
+import { isOpsPath, loginDestination, safeReturnTo } from "../lib/identity";
 import { notify } from "../lib/notify";
 import type { User } from "../lib/types";
 import { useSession } from "../stores/session";
@@ -177,12 +177,38 @@ async function submit() {
             {{ busy ? "正在核验身份…" : "进入平台管理台" }}
             <ArrowUpRight :size="17" />
           </button>
+
+          <div
+            style="
+              display: flex;
+              justify-content: flex-end;
+              margin-top: 2px;
+              font-size: 12px;
+            "
+          >
+            <RouterLink
+              :to="{
+                path: '/recover',
+                query:
+                  typeof route.query.returnTo === 'string' &&
+                  isOpsPath(safeReturnTo(route.query.returnTo))
+                    ? {
+                        role: 'ops',
+                        returnTo: safeReturnTo(route.query.returnTo),
+                      }
+                    : { role: 'ops' },
+              }"
+              style="color: #24372f; font-weight: 600"
+            >
+              忘记密码？使用预先保存的恢复码重设
+            </RouterLink>
+          </div>
         </form>
 
         <div class="ops-login-notice">
           <ShieldCheck :size="16" style="flex-shrink: 0; margin-top: 2px" />
           <span>
-            登录与管理操作受速率限制、会话身份绑定及操作审计保护；若需重置管理员凭证，请联系系统超级管理员处理。
+            登录与管理操作受速率限制、会话身份绑定及操作审计保护；若未设置恢复码且遗失凭证，请联系系统超级管理员处理。
           </span>
         </div>
 

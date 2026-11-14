@@ -18,6 +18,7 @@ from .models import (
     MerchantProfile,
     Order,
     PaymentAttempt,
+    Review,
     SiteConfiguration,
     Stall,
 )
@@ -663,3 +664,186 @@ class OpsGovernanceApiTests(TestCase):
         missing_mid = self.api.get('/api/v1/ops/reconciliation/export?starts_on=2026-10-01&ends_on=2026-10-07')
         self.assertEqual(missing_mid.status_code, 400)
         self.assertEqual(missing_mid.data['code'], 'invalid_merchant')
+
+    def _completed_order(self, buyer, *, created_offset_seconds=600, completed_offset_seconds=120):
+        now = timezone.now()
+        order, _ = create_order(buyer, payload(self.stall, self.product))
+        Order.objects.filter(pk=order.pk).update(
+            status='completed',
+            payment_status='paid',
+            created_at=now - timedelta(seconds=created_offset_seconds),
+            paid_at=now - timedelta(seconds=completed_offset_seconds + 10),
+            completed_at=now - timedelta(seconds=completed_offset_seconds),
+        )
+        order.refresh_from_db()
+        return order
+
+    def test_review_governance_anti_brushing_malicious_moderation_and_public_recalculation(self):
+        # 1. Permission boundary: readonly_staff lacks view_review -> 403
+        self.auth(self.readonly_staff)
+        self.assertEqual(self.api.get('/api/v1/ops/reviews').status_code, 403)
+
+        review_viewer = User.objects.create_user('ops_review_viewer', password='password123', is_staff=True)
+        review_viewer.user_permissions.add(
+            Permission.objects.get(content_type__app_label='market', codename='view_review')
+        )
+
+        # 2. Seed an honest 4-star review (with an inappropriate merchant reply) + 3 rapid 5-star brush reviews + 1 honest 1-star review
+        honest_order = self._completed_order(self.other, created_offset_seconds=900, completed_offset_seconds=300)
+        honest_review = Review.objects.create(
+            order=honest_order,
+            user=self.other,
+            stall=self.stall,
+            rating=4,
+            content='面很筋道，酱稍微偏咸一点点。',
+            merchant_reply='爱吃不吃，不吃滚出夜市！',
+            replied_at=timezone.now(),
+        )
+
+        low_user = User.objects.create_user('honest_critic', password='password123', first_name='林同学')
+        low_order = self._completed_order(low_user, created_offset_seconds=1200, completed_offset_seconds=200)
+        low_review = Review.objects.create(
+            order=low_order,
+            user=low_user,
+            stall=self.stall,
+            rating=1,
+            content='今天等了二十分钟，拿到的时候已经凉了。',
+        )
+
+        brush_reviews = []
+        for idx in range(3):
+            b_order = self._completed_order(self.student, created_offset_seconds=60, completed_offset_seconds=20)
+            brush_reviews.append(
+                Review.objects.create(
+                    order=b_order,
+                    user=self.student,
+                    stall=self.stall,
+                    rating=5,
+                    content=f'好评返现加微领红包{idx}',
+                )
+            )
+
+        # Viewer can read list & risk signals, but cannot mutate
+        self.auth(review_viewer)
+        list_res = self.api.get('/api/v1/ops/reviews?status=flagged')
+        self.assertEqual(list_res.status_code, 200, list_res.data)
+        self.assertEqual(list_res.data['counts']['all'], 5)
+        self.assertEqual(list_res.data['counts']['flagged'], 5)
+        flagged_by_id = {row['id']: row for row in list_res.data['results']}
+        brush_item = flagged_by_id[brush_reviews[0].pk]
+        flag_codes = {f['code'] for f in brush_item['risk_flags']}
+        self.assertIn('repeat_pair', flag_codes)
+        self.assertIn('rapid_completion', flag_codes)
+        self.assertIn('suspicious_content', flag_codes)
+        self.assertEqual(
+            self.api.patch(
+                f'/api/v1/ops/reviews/{brush_reviews[0].pk}',
+                {'action': 'hide', 'moderation_reason': '越权尝试'},
+                format='json',
+            ).status_code,
+            403,
+        )
+
+        # 3. Admin hides the 3 brushed reviews (reason required)
+        self.auth(self.admin_user)
+        missing_reason = self.api.patch(
+            f'/api/v1/ops/reviews/{brush_reviews[0].pk}',
+            {'action': 'hide', 'moderation_reason': '   '},
+            format='json',
+        )
+        self.assertEqual(missing_reason.status_code, 400)
+
+        for br in brush_reviews:
+            hide_res = self.api.patch(
+                f'/api/v1/ops/reviews/{br.pk}',
+                {'action': 'hide', 'moderation_reason': '同客7天连刷3单且30秒极速完单并含返现引流词'},
+                format='json',
+            )
+            self.assertEqual(hide_res.status_code, 200, hide_res.data)
+            self.assertTrue(hide_res.data['review']['is_hidden'])
+            self.assertEqual(hide_res.data['review']['moderation_status'], 'hidden')
+
+        # 4. Honest 1-star complaint is cleared (kept public, removed from flagged queue!)
+        clear_res = self.api.patch(
+            f'/api/v1/ops/reviews/{low_review.pk}',
+            {'action': 'clear', 'moderation_reason': '核对履约耗时属实，属正常体验差评予以保留'},
+            format='json',
+        )
+        self.assertEqual(clear_res.status_code, 200, clear_res.data)
+        self.assertFalse(clear_res.data['review']['is_hidden'])
+        self.assertEqual(clear_res.data['review']['moderation_status'], 'cleared')
+        self.assertFalse(clear_res.data['review']['is_flagged'])
+
+        # 5. Clear abusive merchant reply while keeping honest 4-star student review public
+        clear_reply_res = self.api.patch(
+            f'/api/v1/ops/reviews/{honest_review.pk}',
+            {'action': 'clear_reply', 'moderation_reason': '商家回复含辱骂驱赶言论，予以清理'},
+            format='json',
+        )
+        self.assertEqual(clear_reply_res.status_code, 200, clear_reply_res.data)
+        self.assertEqual(clear_reply_res.data['review']['merchant_reply'], '')
+        self.assertFalse(clear_reply_res.data['review']['is_flagged'])
+
+        # Overview flagged count is now 0, hidden count is 3!
+        ov = self.api.get('/api/v1/ops/overview').data['summary']
+        self.assertEqual(ov['reviews_total'], 5)
+        self.assertEqual(ov['reviews_hidden'], 3)
+        self.assertEqual(ov['reviews_flagged'], 0)
+
+        # 6. Verify public stall rating & count exclude hidden brush reviews ((4 + 1) / 2 = 2.5)
+        public_detail = self.api.get(f'/api/v1/stalls/{self.stall.pk}').data
+        self.assertEqual(public_detail['review_count'], 2)
+        self.assertEqual(public_detail['rating'], 2.5)
+        public_ids = {r['id'] for r in public_detail['reviews']}
+        self.assertEqual(public_ids, {honest_review.pk, low_review.pk})
+
+        # 7. Verify spammer cannot re-submit review on the hidden order, and merchant cannot reply to hidden review
+        self.auth(self.student)
+        student_order = self.api.get(f'/api/v1/orders/{brush_reviews[0].order_id}').data
+        self.assertTrue(student_order['review']['is_hidden'])
+        re_review = self.api.post(
+            f'/api/v1/orders/{brush_reviews[0].order_id}/review',
+            {'rating': 5, 'content': '再刷一次'},
+            format='json',
+        )
+        self.assertEqual(re_review.status_code, 409)
+        self.assertEqual(re_review.data['code'], 'already_reviewed')
+
+        self.auth(self.vendor)
+        merchant_list = self.api.get(f'/api/v1/merchant/reviews?stall={self.stall.pk}').data
+        self.assertEqual({r['id'] for r in merchant_list}, {honest_review.pk, low_review.pk})
+        blocked_reply = self.api.post(
+            f'/api/v1/merchant/reviews/{brush_reviews[0].pk}/reply',
+            {'content': '谢谢好评'},
+            format='json',
+        )
+        self.assertEqual(blocked_reply.status_code, 400)
+        self.assertEqual(blocked_reply.data['code'], 'review_hidden')
+        merchant_order_view = self.api.get(f'/api/v1/merchant/orders/{brush_reviews[0].order_id}').data
+        self.assertEqual(merchant_order_view['review']['content'], '该评价因违反平台社区规范已被治理屏蔽。')
+
+        # 8. Admin can restore a hidden review with explicit reason
+        self.auth(self.admin_user)
+        restore_res = self.api.patch(
+            f'/api/v1/ops/reviews/{brush_reviews[0].pk}',
+            {'action': 'restore', 'moderation_reason': '申诉复核恢复'},
+            format='json',
+        )
+        self.assertEqual(restore_res.status_code, 200, restore_res.data)
+        self.assertFalse(restore_res.data['review']['is_hidden'])
+        self.assertTrue(AuditLog.objects.filter(action='ops_review_moderated', actor=self.admin_user).exists())
+        self.assertTrue(AuditLog.objects.filter(action='ops_review_reply_cleared', actor=self.admin_user).exists())
+
+    def test_admin_self_password_change_audits_and_preserves_session(self):
+        staff_acc = User.objects.create_user('ops_pw_tester', password='OldPassword!234', is_staff=True)
+        self.api.login(username='ops_pw_tester', password='OldPassword!234')
+        res = self.api.post(
+            '/api/v1/auth/password',
+            {'old_password': 'OldPassword!234', 'new_password': 'NewPassword!567'},
+            format='json',
+        )
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(self.api.get('/api/v1/ops/overview').status_code, 200)
+        self.assertTrue(
+            AuditLog.objects.filter(action='password_changed', actor=staff_acc, target=f'auth.User:{staff_acc.pk}').exists()
+        )

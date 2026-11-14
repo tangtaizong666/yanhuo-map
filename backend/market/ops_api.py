@@ -16,7 +16,8 @@ from django.contrib.auth import authenticate, get_user_model, login
 from django.core import signing
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Exists, OuterRef, Q
+from django.db.models import Count, Exists, IntegerField, OuterRef, Q, Subquery
+from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
@@ -50,6 +51,7 @@ from .models import (
     Order,
     PaymentAttempt,
     PaymentRefund,
+    Review,
     SiteConfiguration,
     Stall,
     StallLocation,
@@ -120,6 +122,8 @@ def ops_permissions_map(user):
         'export_reconciliation': has('market.export_financial_reconciliation'),
         'view_feedback': has('market.view_feedback') or has('market.change_feedback'),
         'manage_feedback': has('market.change_feedback'),
+        'view_reviews': has('market.view_review') or has('market.change_review'),
+        'manage_reviews': has('market.change_review'),
         'view_users': has('auth.view_user') or has('auth.change_user'),
         'manage_users': has('auth.change_user'),
         'view_audit': has('market.view_auditlog'),
@@ -285,6 +289,148 @@ class FinancialResolutionInput(StrictInput):
 class UserGovernanceInput(StrictInput):
     is_active = serializers.BooleanField(required=False)
     display_name = serializers.CharField(max_length=30, allow_blank=True, required=False)
+
+
+class ReviewGovernanceInput(StrictInput):
+    action = serializers.ChoiceField(choices=['hide', 'restore', 'clear', 'clear_reply'])
+    moderation_reason = serializers.CharField(
+        max_length=200, allow_blank=True, required=False, default=''
+    )
+
+
+_REVIEW_RISK_KEYWORDS = (
+    '刷单',
+    '好评返现',
+    '返现',
+    '加微',
+    '加v',
+    'vx:',
+    '扫码领',
+    '微信群',
+    '傻逼',
+    '去死',
+    '滚出',
+    '毒死',
+    '吃死',
+    '黑心摊',
+    '骗子摊',
+)
+
+
+def _has_suspicious_review_text(text: str) -> bool:
+    raw = (text or '').strip()
+    if not raw:
+        return False
+    lowered = raw.lower()
+    if any(kw in lowered for kw in _REVIEW_RISK_KEYWORDS):
+        return True
+    compact = ''.join(ch for ch in raw if not ch.isspace())
+    if len(compact) >= 8 and len(set(compact)) <= 2:
+        return True
+    return False
+
+
+def _review_risk_flags(
+    *,
+    rating: int,
+    content: str,
+    merchant_reply: str,
+    order_created_at,
+    order_completed_at,
+    pair_7d_count: int,
+    pair_total_count: int,
+):
+    flags = []
+    if pair_7d_count >= 3 or pair_total_count >= 4:
+        flags.append(
+            {
+                'code': 'repeat_pair',
+                'label': f'同客同摊高频评价（7天 {pair_7d_count} 次 / 累计 {pair_total_count} 次）',
+                'tone': 'danger',
+            }
+        )
+    if order_created_at is not None and order_completed_at is not None:
+        dur = (order_completed_at - order_created_at).total_seconds()
+        if 0 <= dur < 90:
+            flags.append(
+                {
+                    'code': 'rapid_completion',
+                    'label': f'极速完单（下单至完成仅 {max(0, round(dur))} 秒）',
+                    'tone': 'warn',
+                }
+            )
+    if _has_suspicious_review_text(content) or _has_suspicious_review_text(merchant_reply):
+        flags.append(
+            {
+                'code': 'suspicious_content',
+                'label': '正文或回复含刷评引流、恶意攻击或重复灌水特征',
+                'tone': 'danger',
+            }
+        )
+    if rating == 1:
+        flags.append(
+            {
+                'code': 'extreme_low_rating',
+                'label': '1 星极端差评（若属真实体验请点「复核保留」）',
+                'tone': 'warn',
+            }
+        )
+    return flags
+
+
+def _annotate_reviews(queryset, now=None):
+    ref_now = now or timezone.now()
+    recent_7d = ref_now - timedelta(days=7)
+    same_pair = (
+        Review.objects.filter(
+            user_id=OuterRef('user_id'),
+            stall_id=OuterRef('stall_id'),
+            order__mode=OuterRef('order__mode'),
+        )
+        .order_by()
+        .values('user_id')
+    )
+    return queryset.annotate(
+        pair_total_count=Coalesce(
+            Subquery(same_pair.annotate(c=Count('pk')).values('c')[:1], output_field=IntegerField()),
+            0,
+        ),
+        pair_7d_count=Coalesce(
+            Subquery(
+                same_pair.filter(created_at__gte=recent_7d).annotate(c=Count('pk')).values('c')[:1],
+                output_field=IntegerField(),
+            ),
+            0,
+        ),
+    )
+
+
+def _count_flagged_reviews(now=None) -> int:
+    candidates = _annotate_reviews(
+        Review.objects.filter(is_hidden=False, moderation_status='unreviewed'),
+        now=now,
+    ).values_list(
+        'rating',
+        'content',
+        'merchant_reply',
+        'order__created_at',
+        'order__completed_at',
+        'pair_7d_count',
+        'pair_total_count',
+    )
+    return sum(
+        1
+        for rating, content, reply_text, created_at, completed_at, c7, ctotal in candidates
+        if _review_risk_flags(
+            rating=rating,
+            content=content,
+            merchant_reply=reply_text,
+            order_created_at=created_at,
+            order_completed_at=completed_at,
+            pair_7d_count=c7,
+            pair_total_count=ctotal,
+        )
+    )
 
 
 def _can_view_merchant_sensitive(user) -> bool:
@@ -521,6 +667,9 @@ def overview(request):
                 'applications_draft': MerchantApplication.objects.filter(status='draft').count(),
                 'feedback_unresolved': Feedback.objects.filter(resolved=False).count(),
                 'feedback_unreviewed_location': Feedback.objects.exclude(kind='general').filter(verification='unreviewed').count(),
+                'reviews_total': Review.objects.count(),
+                'reviews_hidden': Review.objects.filter(is_hidden=True).count(),
+                'reviews_flagged': _count_flagged_reviews(now=now),
                 'orders_live_active': live_orders.filter(live_filters['active']).count(),
                 'orders_live_attention': live_orders.filter(live_filters['attention']).count(),
                 'orders_simulation_active': sim_orders.filter(sim_filters['active']).count(),
@@ -1413,6 +1562,279 @@ def feedback_detail_view(request, feedback_id):
             )
     row = Feedback.objects.select_related('stall__location', 'order', 'user').get(pk=row.pk)
     return Response({'feedback': _serialize_feedback(row)})
+
+
+def _serialize_ops_review(row: Review):
+    pair_7d = getattr(row, 'pair_7d_count', 1)
+    pair_total = getattr(row, 'pair_total_count', 1)
+    flags = _review_risk_flags(
+        rating=row.rating,
+        content=row.content,
+        merchant_reply=row.merchant_reply,
+        order_created_at=row.order.created_at,
+        order_completed_at=row.order.completed_at,
+        pair_7d_count=pair_7d,
+        pair_total_count=pair_total,
+    )
+    fulfillment_seconds = None
+    if row.order.created_at and row.order.completed_at:
+        fulfillment_seconds = max(
+            0, round((row.order.completed_at - row.order.created_at).total_seconds())
+        )
+    return {
+        'id': row.pk,
+        'mode': row.order.mode,
+        'order_id': str(row.order_id),
+        'order_number': row.order.number,
+        'order_payment_method': row.order.payment_method,
+        'order_total_cents': row.order.total_cents,
+        'fulfillment_seconds': fulfillment_seconds,
+        'stall_id': row.stall_id,
+        'stall_name': row.stall.name,
+        'user_id': row.user_id,
+        'username': row.user.username,
+        'display_name': row.user.first_name or row.user.username,
+        'rating': row.rating,
+        'content': row.content,
+        'created_at': row.created_at.isoformat(),
+        'merchant_reply': row.merchant_reply,
+        'replied_at': row.replied_at.isoformat() if row.replied_at else None,
+        'is_hidden': row.is_hidden,
+        'moderation_status': row.moderation_status,
+        'moderation_reason': row.moderation_reason,
+        'moderated_at': row.moderated_at.isoformat() if row.moderated_at else None,
+        'moderated_by_username': (
+            row.moderated_by.username if row.moderated_by_id and row.moderated_by else ''
+        ),
+        'pair_7d_count': pair_7d,
+        'pair_total_count': pair_total,
+        'risk_flags': flags,
+        'is_flagged': (not row.is_hidden) and row.moderation_status == 'unreviewed' and bool(flags),
+    }
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+@throttle_classes([TrustedUserRateThrottle])
+def reviews_list(request):
+    require_ops_perm(request.user, 'market.view_review', 'market.change_review', any_of=True)
+    now = timezone.now()
+    base = Review.objects.select_related('user', 'stall', 'order', 'moderated_by')
+    counts = base.aggregate(
+        all=Count('pk'),
+        visible=Count('pk', filter=Q(is_hidden=False)),
+        hidden=Count('pk', filter=Q(is_hidden=True)),
+        cleared=Count('pk', filter=Q(is_hidden=False, moderation_status='cleared')),
+    )
+    counts['flagged'] = _count_flagged_reviews(now=now)
+
+    mode = request.query_params.get('mode', 'all')
+    if mode in ('live', 'simulation'):
+        base = base.filter(order__mode=mode)
+    elif mode != 'all':
+        raise BusinessError('评价模式筛选无效。', 'invalid_mode', status=400)
+
+    rating_param = request.query_params.get('rating', 'all')
+    if rating_param == 'low':
+        base = base.filter(rating__lte=2)
+    elif rating_param == 'high':
+        base = base.filter(rating__gte=4)
+    elif rating_param in ('1', '2', '3', '4', '5'):
+        base = base.filter(rating=int(rating_param))
+    elif rating_param != 'all':
+        raise BusinessError('评分筛选无效。', 'invalid_rating', status=400)
+
+    stall_param = request.query_params.get('stall', '').strip()
+    if stall_param:
+        stall_id = serializers.IntegerField(min_value=1).run_validation(stall_param)
+        base = base.filter(stall_id=stall_id)
+
+    q = request.query_params.get('q', '').strip()
+    if q:
+        base = base.filter(
+            Q(content__icontains=q)
+            | Q(merchant_reply__icontains=q)
+            | Q(user__username__icontains=q)
+            | Q(user__first_name__icontains=q)
+            | Q(stall__name__icontains=q)
+            | Q(order__number__icontains=q)
+        )
+
+    status_filter = request.query_params.get('status', 'all')
+    if status_filter == 'visible':
+        base = base.filter(is_hidden=False)
+    elif status_filter == 'hidden':
+        base = base.filter(is_hidden=True)
+    elif status_filter == 'cleared':
+        base = base.filter(is_hidden=False, moderation_status='cleared')
+    elif status_filter == 'flagged':
+        base = base.filter(is_hidden=False, moderation_status='unreviewed')
+    elif status_filter != 'all':
+        raise BusinessError('评价治理筛选状态无效。', 'invalid_status', status=400)
+
+    annotated = _annotate_reviews(base, now=now).order_by('-created_at', '-pk')
+    if status_filter == 'flagged':
+        serialized = []
+        for row in annotated[:300]:
+            item = _serialize_ops_review(row)
+            if item['is_flagged']:
+                serialized.append(item)
+            if len(serialized) >= 100:
+                break
+    else:
+        serialized = [_serialize_ops_review(row) for row in annotated[:100]]
+
+    stalls = [
+        {'id': s.pk, 'name': s.name}
+        for s in Stall.objects.order_by('id').only('id', 'name')
+    ]
+    return Response(
+        {'counts': counts, 'stalls': stalls, 'results': serialized},
+        headers={'Cache-Control': 'private, no-store'},
+    )
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+@throttle_classes([TrustedUserRateThrottle])
+def review_detail_view(request, review_id):
+    require_ops_perm(request.user, 'market.change_review')
+    form = ReviewGovernanceInput(data=request.data)
+    form.is_valid(raise_exception=True)
+    data = form.validated_data
+    action = data['action']
+    reason = data['moderation_reason'].strip()
+    now = timezone.now()
+
+    with transaction.atomic():
+        row = get_object_or_404(Review.objects.select_for_update(), pk=review_id)
+        if action == 'hide':
+            if not reason:
+                raise serializers.ValidationError(
+                    {'moderation_reason': ['屏蔽刷评或违规评价必须填写治理原因与核实依据。']}
+                )
+            row.is_hidden = True
+            row.moderation_status = 'hidden'
+            row.moderation_reason = reason
+            row.moderated_at = now
+            row.moderated_by = request.user
+            row.save(
+                update_fields=[
+                    'is_hidden',
+                    'moderation_status',
+                    'moderation_reason',
+                    'moderated_at',
+                    'moderated_by',
+                ]
+            )
+            audit(
+                request.user,
+                'ops_review_moderated',
+                f'market.Review:{row.pk}',
+                decision='hide',
+                stall_id=row.stall_id,
+                order_id=str(row.order_id),
+                reason=reason,
+            )
+        elif action == 'restore':
+            if not reason:
+                raise serializers.ValidationError(
+                    {'moderation_reason': ['恢复公开评价必须说明复核依据。']}
+                )
+            row.is_hidden = False
+            row.moderation_status = 'cleared'
+            row.moderation_reason = reason
+            row.moderated_at = now
+            row.moderated_by = request.user
+            row.save(
+                update_fields=[
+                    'is_hidden',
+                    'moderation_status',
+                    'moderation_reason',
+                    'moderated_at',
+                    'moderated_by',
+                ]
+            )
+            audit(
+                request.user,
+                'ops_review_moderated',
+                f'market.Review:{row.pk}',
+                decision='restore',
+                stall_id=row.stall_id,
+                order_id=str(row.order_id),
+                reason=reason,
+            )
+        elif action == 'clear':
+            if row.is_hidden:
+                raise BusinessError(
+                    '已屏蔽评价请使用「恢复公开」操作并填写复核依据。',
+                    'review_currently_hidden',
+                    status=400,
+                )
+            effective_reason = reason or '人工复核正常，保留公开展示'
+            row.moderation_status = 'cleared'
+            row.moderation_reason = effective_reason
+            row.moderated_at = now
+            row.moderated_by = request.user
+            row.save(
+                update_fields=[
+                    'moderation_status',
+                    'moderation_reason',
+                    'moderated_at',
+                    'moderated_by',
+                ]
+            )
+            audit(
+                request.user,
+                'ops_review_moderated',
+                f'market.Review:{row.pk}',
+                decision='clear',
+                stall_id=row.stall_id,
+                order_id=str(row.order_id),
+                reason=effective_reason,
+            )
+        elif action == 'clear_reply':
+            if not reason:
+                raise serializers.ValidationError(
+                    {'moderation_reason': ['清理不当商家回复必须填写治理原因。']}
+                )
+            if not row.merchant_reply:
+                raise BusinessError(
+                    '该评价当前没有商家回复可清理。',
+                    'no_merchant_reply',
+                    status=400,
+                )
+            row.merchant_reply = ''
+            row.replied_at = None
+            row.moderation_reason = reason
+            row.moderated_at = now
+            row.moderated_by = request.user
+            row.save(
+                update_fields=[
+                    'merchant_reply',
+                    'replied_at',
+                    'moderation_reason',
+                    'moderated_at',
+                    'moderated_by',
+                ]
+            )
+            audit(
+                request.user,
+                'ops_review_reply_cleared',
+                f'market.Review:{row.pk}',
+                stall_id=row.stall_id,
+                order_id=str(row.order_id),
+                reason=reason,
+            )
+
+    refreshed = (
+        _annotate_reviews(
+            Review.objects.select_related('user', 'stall', 'order', 'moderated_by'),
+            now=now,
+        )
+        .get(pk=review_id)
+    )
+    return Response({'review': _serialize_ops_review(refreshed)})
 
 
 def _user_has_active_obligations(target_user):

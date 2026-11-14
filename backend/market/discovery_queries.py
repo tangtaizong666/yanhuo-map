@@ -29,7 +29,7 @@ def filter_status(query, status, config):
 
 
 def visible_stall_query(mode='detail'):
-    reviews = Review.objects.filter(stall_id=OuterRef('pk'), order__mode='live').order_by().values('stall_id')
+    reviews = Review.objects.filter(stall_id=OuterRef('pk'), order__mode='live', is_hidden=False).order_by().values('stall_id')
     from .admission import public_listing_q
     from .models import active_prep_q
     now = timezone.now()
@@ -47,7 +47,7 @@ def visible_stall_query(mode='detail'):
         return query.prefetch_related(
             Prefetch('products', queryset=Product.objects.filter(is_active=True).order_by('id')),
             Prefetch('delivery_points', queryset=DeliveryPoint.objects.order_by('id'), to_attr='_delivery_points'),
-            Prefetch('reviews', queryset=Review.objects.filter(order__mode='live').select_related('user', 'order').order_by('-created_at', '-id')[:20], to_attr='_preview_reviews'),
+            Prefetch('reviews', queryset=Review.objects.filter(order__mode='live', is_hidden=False).select_related('user', 'order').order_by('-created_at', '-id')[:20], to_attr='_preview_reviews'),
         ).annotate(completed_count=count_orders(status='completed', mode='live'),
             delivery_active_count=count_orders(active_delivery_q(now=now)))
     if mode == 'summary':

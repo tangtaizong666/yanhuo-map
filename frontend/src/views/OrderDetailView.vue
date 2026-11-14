@@ -655,14 +655,17 @@ async function submitReview() {
                 {{ order.review.content || "用户给出了星级评价。" }}
               </p>
               <div
-                v-if="order.review.merchant_reply"
+                v-if="order.review.merchant_reply && !order.review.is_hidden"
                 class="merchant-public-reply"
               >
                 <strong>商家回复</strong>
                 <p>{{ order.review.merchant_reply }}</p>
                 <small>{{ formatTime(order.review.replied_at) }}</small>
               </div>
-              <span class="review-saved"
+              <span v-if="order.review.is_hidden" class="review-saved muted"
+                >该评价因违反社区规范已被平台隐藏，不计入摊位公开评分与展示</span
+              >
+              <span v-else class="review-saved"
                 ><CheckCircle2 :size="14" /> 已评价，感谢你的分享</span
               ></template
             >

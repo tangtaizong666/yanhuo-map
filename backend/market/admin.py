@@ -302,7 +302,13 @@ class ProductAdmin(AuditedAdmin):
             'opts': self.model._meta, 'product': product, 'form': form})
 
 
-admin.site.register(Review, ReadOnlyAdmin)
+@admin.register(Review)
+class ReviewAdmin(ReadOnlyAdmin):
+    list_display = ['created_at', 'stall', 'user', 'rating', 'is_hidden', 'moderation_status', 'moderated_by']
+    list_filter = ['is_hidden', 'moderation_status', 'rating', 'stall']
+    search_fields = ['content', 'merchant_reply', 'user__username', 'stall__name', 'order__number']
+
+
 admin.site.register(Event, ReadOnlyAdmin)
 admin.site.register(BusinessSession, ReadOnlyAdmin)
 admin.site.register(RestockBatch, ReadOnlyAdmin)

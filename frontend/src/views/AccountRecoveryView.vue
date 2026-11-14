@@ -37,12 +37,15 @@ const back = computed(() => {
 });
 const loginTarget = computed(() => {
   const query: Record<string, string> = {};
+  let isOps = route.query.role === "ops";
   if (route.query.role === "merchant") query.role = "merchant";
   if (typeof route.query.returnTo === "string" && route.query.returnTo) {
     const target = safeReturnTo(route.query.returnTo);
+    if (isOpsPath(target)) isOps = true;
     if (target !== "/" || route.query.returnTo === "/") query.returnTo = target;
   }
-  return Object.keys(query).length ? { path: "/login", query } : "/login";
+  const basePath = isOps ? "/ops/login" : "/login";
+  return Object.keys(query).length ? { path: basePath, query } : basePath;
 });
 async function loadStatus() {
   if (!managing.value || !session.user || busy.value) return;

@@ -4,9 +4,11 @@ import { useRoute, useRouter } from "vue-router";
 import {
   ArrowUpRight,
   ClipboardCheck,
+  KeyRound,
   LayoutDashboard,
   LogOut,
   MapPin,
+  MessageSquareOff,
   MessageSquareWarning,
   ReceiptText,
   RefreshCw,
@@ -15,15 +17,17 @@ import {
   Users,
 } from "lucide-vue-next";
 import { api } from "../lib/api";
+import { isOpsLoginPath } from "../lib/identity";
 import { notify } from "../lib/notify";
 import { useSession } from "../stores/session";
-import type { OpsPermissions } from "../lib/types";
+import type { Config, OpsPermissions } from "../lib/types";
 import OpsOverview from "../components/ops/OpsOverview.vue";
 import OpsApplications from "../components/ops/OpsApplications.vue";
 import OpsStalls from "../components/ops/OpsStalls.vue";
 import OpsAreas from "../components/ops/OpsAreas.vue";
 import OpsOrders from "../components/ops/OpsOrders.vue";
 import OpsFeedback from "../components/ops/OpsFeedback.vue";
+import OpsReviews from "../components/ops/OpsReviews.vue";
 import OpsAuditUsers from "../components/ops/OpsAuditUsers.vue";
 import "../ops.css";
 
@@ -45,6 +49,7 @@ const validSections = [
   "areas",
   "orders",
   "feedback",
+  "reviews",
   "users",
 ];
 
@@ -106,19 +111,40 @@ const navItems = computed(() => {
       allowed: session.hasOpsPerm("view_feedback"),
     },
     {
+      id: "reviews",
+      label: "评价与风控",
+      short: "评价",
+      icon: MessageSquareOff,
+      badge: s.reviews_flagged || 0,
+      allowed: session.hasOpsPerm("view_reviews"),
+    },
+    {
       id: "users",
       label: "账号与审计",
       short: "账号",
       icon: Users,
       badge: 0,
-      allowed:
-        session.hasOpsPerm("view_users") || session.hasOpsPerm("view_audit"),
+      allowed: true,
     },
   ];
 });
 
 const visibleNav = computed(() => navItems.value.filter((item) => item.allowed));
-const mobilePrimaryNav = computed(() => visibleNav.value.slice(0, 4));
+const mobilePrimaryNav = computed(() => {
+  const preferred = ["", "applications", "orders", "reviews"];
+  const picked = preferred
+    .map((id) => visibleNav.value.find((item) => item.id === id))
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+  for (const item of visibleNav.value) {
+    if (picked.length >= 4) break;
+    if (!picked.some((p) => p.id === item.id)) picked.push(item);
+  }
+  return picked.slice(0, 4);
+});
+const mobileSecondaryNav = computed(() => {
+  const primaryIds = new Set(mobilePrimaryNav.value.map((item) => item.id));
+  return visibleNav.value.filter((item) => !primaryIds.has(item.id));
+});
 const currentNav = computed(
   () =>
     navItems.value.find((item) => item.id === section.value) || navItems.value[0],
@@ -177,6 +203,18 @@ function handleTopRefresh() {
   void refreshOverview();
 }
 
+async function handleAreasChanged() {
+  void refreshOverview();
+  try {
+    const latest = await api<Config>("/config");
+    if (session.config) {
+      session.config = { ...session.config, areas: latest.areas };
+    }
+  } catch {
+    /* Overview still updates independently if public config reload fails. */
+  }
+}
+
 function changePeriod(nextDays: number) {
   days.value = nextDays;
   void refreshOverview();
@@ -212,7 +250,12 @@ async function switchToAdminLogin() {
 onMounted(async () => {
   if (!session.loaded) await session.load();
   if (!session.user) {
-    await router.replace("/ops/login");
+    if (!isOpsLoginPath(route.path)) {
+      await router.replace({
+        path: "/ops/login",
+        query: route.fullPath !== "/ops" ? { returnTo: route.fullPath } : {},
+      });
+    }
     return;
   }
   if (session.isAdmin) {
@@ -280,6 +323,9 @@ onMounted(async () => {
         <RouterLink to="/" @click="session.setConsumerPreview(true)">
           <ArrowUpRight :size="16" /> 预览学生端
         </RouterLink>
+        <RouterLink to="/ops/users?tab=security">
+          <KeyRound :size="16" /> 账号安全与改密
+        </RouterLink>
         <RouterLink v-if="session.isMerchant" to="/merchant">
           <Store :size="16" /> 商家工作台
         </RouterLink>
@@ -317,7 +363,7 @@ onMounted(async () => {
 
       <div class="o-mobile-switcher" aria-label="移动端治理快捷栏">
         <RouterLink
-          v-for="item in visibleNav"
+          v-for="item in mobileSecondaryNav"
           :key="item.id"
           :to="item.id ? `/ops/${item.id}` : '/ops'"
           :class="{ active: section === item.id }"
@@ -325,6 +371,7 @@ onMounted(async () => {
           {{ item.short }}
           <span v-if="item.badge">({{ item.badge }})</span>
         </RouterLink>
+        <RouterLink to="/ops/users?tab=security">账号安全</RouterLink>
         <RouterLink to="/" @click="session.setConsumerPreview(true)">
           预览学生端 <ArrowUpRight :size="13" />
         </RouterLink>
@@ -365,6 +412,7 @@ onMounted(async () => {
           <OpsAreas
             v-else-if="section === 'areas'"
             :refresh-tick="refreshTick"
+            @changed="handleAreasChanged"
           />
           <OpsOrders
             v-else-if="section === 'orders'"
@@ -379,9 +427,15 @@ onMounted(async () => {
             :refresh-tick="refreshTick"
             @changed="refreshOverview"
           />
+          <OpsReviews
+            v-else-if="section === 'reviews'"
+            :refresh-tick="refreshTick"
+            @changed="refreshOverview"
+          />
           <OpsAuditUsers
             v-else-if="section === 'users'"
             :refresh-tick="refreshTick"
+            @changed="refreshOverview"
           />
         </template>
       </div>

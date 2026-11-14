@@ -176,6 +176,7 @@ def password(request):
         check_password(new, user)
         user.set_password(new)
         user.save(update_fields=['password'])
+        audit(user, 'password_changed', f'auth.User:{user.pk}')
         from .auth_limits import clear_account_failures
         transaction.on_commit(lambda: clear_account_failures(user.username))
     update_session_auth_hash(request, user)

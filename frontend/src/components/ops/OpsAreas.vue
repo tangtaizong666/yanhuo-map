@@ -9,6 +9,10 @@ const props = defineProps<{
   refreshTick?: number;
 }>();
 
+const emit = defineEmits<{
+  (e: "changed"): void;
+}>();
+
 const session = useSession();
 const loading = ref(true);
 const error = ref("");
@@ -97,6 +101,7 @@ async function createArea() {
     newArea.subtitle = "";
     showAreaForm.value = false;
     await load();
+    emit("changed");
   } catch (e) {
     areaError.value = (e as Error).message;
   } finally {
@@ -134,6 +139,7 @@ async function saveArea(areaId: number) {
     notify("区域信息已更新", "success");
     editingAreaId.value = null;
     await load();
+    emit("changed");
   } catch (e) {
     notify((e as Error).message, "error");
   } finally {
@@ -176,6 +182,7 @@ async function createPoint(areaId: number) {
     notify("校园固定交接点已添加", "success");
     addingPointFor.value = null;
     await load();
+    emit("changed");
   } catch (e) {
     pointError.value = (e as Error).message;
   } finally {
@@ -194,6 +201,7 @@ async function togglePoint(point: any) {
       "success",
     );
     await load();
+    emit("changed");
   } catch (e) {
     notify((e as Error).message, "error");
   }

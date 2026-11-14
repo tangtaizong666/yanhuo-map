@@ -142,24 +142,42 @@ async function saveConfig() {
 
       <div
         class="o-kpi-card"
-        :class="{ 'is-warn': (data?.summary?.feedback_unresolved || 0) > 0 }"
+        :class="{
+          'is-warn':
+            (data?.summary?.feedback_unresolved || 0) +
+              (data?.summary?.reviews_flagged || 0) >
+            0,
+        }"
       >
-        <span>待处理现场反馈</span>
-        <strong>{{ data?.summary?.feedback_unresolved ?? 0 }}</strong>
+        <span>现场反馈与评价风控</span>
+        <strong>{{
+          (data?.summary?.feedback_unresolved ?? 0) +
+          (data?.summary?.reviews_flagged ?? 0)
+        }}</strong>
         <small>
-          待核实位置报错
-          {{ data?.summary?.feedback_unreviewed_location ?? 0 }} · 已核验主体
-          {{ data?.summary?.merchants_verified ?? 0 }}/{{
-            data?.summary?.merchants_total ?? 0
-          }}
+          待处理反馈 {{ data?.summary?.feedback_unresolved ?? 0 }} · 待复核评价
+          {{ data?.summary?.reviews_flagged ?? 0 }} · 已屏蔽评价
+          {{ data?.summary?.reviews_hidden ?? 0 }}
         </small>
-        <button
-          type="button"
-          class="o-btn"
-          @click="emit('navigate', 'feedback')"
-        >
-          核实现场反馈
-        </button>
+        <div class="o-actions-row">
+          <button
+            type="button"
+            class="o-btn"
+            style="flex: 1; padding: 8px 10px"
+            @click="emit('navigate', 'feedback')"
+          >
+            核实反馈
+          </button>
+          <button
+            v-if="session.hasOpsPerm('view_reviews')"
+            type="button"
+            class="o-btn"
+            style="flex: 1; padding: 8px 10px"
+            @click="emit('navigate', 'reviews')"
+          >
+            评价风控
+          </button>
+        </div>
       </div>
     </section>
 

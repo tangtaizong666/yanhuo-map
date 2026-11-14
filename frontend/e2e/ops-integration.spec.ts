@@ -41,6 +41,7 @@ test("real admin login, governance modules, audit trail and student preview isol
     ["stalls", "商户与摊位"],
     ["areas", "区域与交接点"],
     ["orders", "订单与对账"],
+    ["reviews", "评价与风控"],
     ["users", "账号与审计"],
   ] as const) {
     await page.goto(`/ops/${sec}`);

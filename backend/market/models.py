@@ -444,6 +444,11 @@ class PaymentRefund(models.Model):
 
 
 class Review(models.Model):
+    MODERATION_STATUSES = [
+        ('unreviewed', '未人工复核'),
+        ('cleared', '复核保留'),
+        ('hidden', '违规屏蔽'),
+    ]
     order = models.OneToOneField(Order, on_delete=models.CASCADE, related_name='review')
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     stall = models.ForeignKey(Stall, on_delete=models.PROTECT, related_name='reviews')
@@ -452,6 +457,15 @@ class Review(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     merchant_reply = models.CharField('商家回复', max_length=500, blank=True)
     replied_at = models.DateTimeField('回复时间', null=True, blank=True)
+    is_hidden = models.BooleanField('治理屏蔽（不计入公开评分与展示）', default=False, db_index=True)
+    moderation_status = models.CharField(
+        '治理状态', max_length=16, choices=MODERATION_STATUSES, default='unreviewed', db_index=True
+    )
+    moderation_reason = models.CharField('治理原因与依据', max_length=200, blank=True)
+    moderated_at = models.DateTimeField('治理时间', null=True, blank=True)
+    moderated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='+'
+    )
     class Meta:
         verbose_name = verbose_name_plural = '评价'
         constraints = [models.CheckConstraint(condition=Q(rating__gte=1) & Q(rating__lte=5), name='review_valid_rating')]

@@ -361,7 +361,10 @@ def reviews(request):
     mode = request.query_params.get('mode', 'live')
     if mode not in ('live', 'simulation'):
         raise BusinessError('评价数据模式无效。', 'invalid_mode', status=400)
-    query = owned(Review.objects.select_related('user', 'order').filter(order__mode=mode), request.user)
+    query = owned(
+        Review.objects.select_related('user', 'order').filter(order__mode=mode, is_hidden=False),
+        request.user,
+    )
     if stall:
         query = query.filter(stall=stall)
     return Response(ReviewSerializer(query.order_by('-created_at'), many=True).data)
@@ -375,6 +378,8 @@ def reply(request, review_id):
     content = form.validated_data['content']
     with transaction.atomic():
         review = get_object_or_404(owned(Review.objects.select_for_update(), request.user, permission='market.change_review'), pk=review_id)
+        if review.is_hidden:
+            raise BusinessError('该评价已被平台治理屏蔽，无需回复。', 'review_hidden', status=400)
         review.merchant_reply, review.replied_at = content, timezone.now() if content else None
         review.save(update_fields=['merchant_reply', 'replied_at'])
         audit(request.user, 'review_replied' if content else 'review_reply_withdrawn', review.id)

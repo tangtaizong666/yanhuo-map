@@ -17,6 +17,8 @@ export interface OpsPermissions {
   export_reconciliation: boolean;
   view_feedback: boolean;
   manage_feedback: boolean;
+  view_reviews: boolean;
+  manage_reviews: boolean;
   view_users: boolean;
   manage_users: boolean;
   view_audit: boolean;
@@ -86,6 +88,7 @@ export interface Review {
   username?: string;
   merchant_reply?: string;
   replied_at?: string | null;
+  is_hidden?: boolean;
 }
 export interface ServiceCapability {
   eligible: boolean;

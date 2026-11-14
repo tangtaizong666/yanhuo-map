@@ -60,6 +60,8 @@ urlpatterns = [
     path('ops/reconciliation/export', ops_api.reconciliation_export_view),
     path('ops/feedback', ops_api.feedback_list),
     path('ops/feedback/<int:feedback_id>', ops_api.feedback_detail_view),
+    path('ops/reviews', ops_api.reviews_list),
+    path('ops/reviews/<int:review_id>', ops_api.review_detail_view),
     path('ops/users', ops_api.users_list),
     path('ops/users/<int:user_id>', ops_api.user_detail_view),
     path('ops/audit-logs', ops_api.audit_logs),

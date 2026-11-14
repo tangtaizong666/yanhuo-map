@@ -1,6 +1,14 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from "vue";
-import { ArrowUpRight, RefreshCw, Search, ShieldAlert } from "lucide-vue-next";
+import { onMounted, reactive, ref, watch } from "vue";
+import { useRoute } from "vue-router";
+import {
+  ArrowUpRight,
+  KeyRound,
+  LockKeyhole,
+  RefreshCw,
+  Search,
+  ShieldAlert,
+} from "lucide-vue-next";
 import { api } from "../../lib/api";
 import { notify } from "../../lib/notify";
 import { useSession } from "../../stores/session";
@@ -9,8 +17,21 @@ const props = defineProps<{
   refreshTick?: number;
 }>();
 
+const emit = defineEmits<{
+  (e: "changed"): void;
+}>();
+
+const route = useRoute();
 const session = useSession();
-const subTab = ref<"users" | "audit">("users");
+const subTab = ref<"users" | "audit" | "security">("users");
+
+const pwForm = reactive({
+  old_password: "",
+  new_password: "",
+  confirm_password: "",
+});
+const pwBusy = ref(false);
+const pwError = ref("");
 
 const usersLoading = ref(true);
 const usersError = ref("");
@@ -82,14 +103,24 @@ watch(auditAction, () => {
 
 watch(subTab, (next) => {
   if (next === "audit") void loadAudit();
-  else void loadUsers();
+  else if (next === "users") void loadUsers();
 });
+
+watch(
+  () => route.query.tab,
+  (tab) => {
+    if (tab === "security") subTab.value = "security";
+    else if (tab === "audit" && session.hasOpsPerm("view_audit"))
+      subTab.value = "audit";
+  },
+  { immediate: true },
+);
 
 watch(
   () => props.refreshTick,
   () => {
     if (subTab.value === "audit") void loadAudit();
-    else void loadUsers();
+    else if (subTab.value === "users") void loadUsers();
   },
 );
 
@@ -106,6 +137,7 @@ async function toggleUserActive(u: any) {
       "success",
     );
     await loadUsers();
+    emit("changed");
   } catch (e) {
     notify((e as Error).message, "error");
   } finally {
@@ -113,12 +145,53 @@ async function toggleUserActive(u: any) {
   }
 }
 
+async function submitPasswordChange() {
+  if (pwBusy.value) return;
+  pwError.value = "";
+  if (!pwForm.old_password || !pwForm.new_password) {
+    pwError.value = "请填写当前密码与新密码。";
+    return;
+  }
+  if (pwForm.new_password.length < 8) {
+    pwError.value = "新密码长度至少需要 8 位。";
+    return;
+  }
+  if (pwForm.new_password !== pwForm.confirm_password) {
+    pwError.value = "两次输入的新密码不一致。";
+    return;
+  }
+  pwBusy.value = true;
+  try {
+    const res = await api<{ detail: string }>("/auth/password", {
+      method: "POST",
+      body: {
+        old_password: pwForm.old_password,
+        new_password: pwForm.new_password,
+      },
+    });
+    pwForm.old_password = "";
+    pwForm.new_password = "";
+    pwForm.confirm_password = "";
+    notify(res.detail || "管理员登录密码已更新", "success");
+  } catch (e) {
+    pwError.value = (e as Error).message;
+  } finally {
+    pwBusy.value = false;
+  }
+}
+
 onMounted(() => {
+  if (route.query.tab === "security") {
+    subTab.value = "security";
+    return;
+  }
   if (!session.hasOpsPerm("view_users") && session.hasOpsPerm("view_audit")) {
     subTab.value = "audit";
     void loadAudit();
-  } else {
+  } else if (session.hasOpsPerm("view_users")) {
     void loadUsers();
+  } else {
+    subTab.value = "security";
   }
 });
 </script>
@@ -164,6 +237,14 @@ onMounted(() => {
           @click="subTab = 'audit'"
         >
           操作审计日志
+        </button>
+        <button
+          type="button"
+          class="o-tab"
+          :class="{ active: subTab === 'security' }"
+          @click="subTab = 'security'"
+        >
+          当前账号安全
         </button>
       </div>
     </section>
@@ -335,6 +416,109 @@ onMounted(() => {
             {{ JSON.stringify(log.details) }}
           </div>
         </article>
+      </div>
+    </template>
+
+    <template v-else-if="subTab === 'security'">
+      <div class="o-two-col">
+        <section class="o-card">
+          <div class="o-card-header">
+            <div>
+              <h2>
+                <LockKeyhole
+                  :size="17"
+                  style="vertical-align: -3px; margin-right: 6px"
+                />修改当前管理员密码
+              </h2>
+              <p>
+                密码修改后当前治理会话保持有效，其余已登录设备及先前生成的恢复码将自动失效。
+              </p>
+            </div>
+          </div>
+
+          <form class="stack" style="gap: 12px" @submit.prevent="submitPasswordChange">
+            <label class="o-field">
+              当前登录密码 *
+              <input
+                v-model="pwForm.old_password"
+                type="password"
+                class="o-input"
+                autocomplete="current-password"
+                required
+                maxlength="128"
+                :disabled="pwBusy"
+              />
+            </label>
+            <label class="o-field">
+              新登录密码（至少 8 位）*
+              <input
+                v-model="pwForm.new_password"
+                type="password"
+                class="o-input"
+                autocomplete="new-password"
+                required
+                minlength="8"
+                maxlength="128"
+                :disabled="pwBusy"
+              />
+            </label>
+            <label class="o-field">
+              再次确认新密码 *
+              <input
+                v-model="pwForm.confirm_password"
+                type="password"
+                class="o-input"
+                autocomplete="new-password"
+                required
+                minlength="8"
+                maxlength="128"
+                :disabled="pwBusy"
+              />
+            </label>
+
+            <p v-if="pwError" class="o-alert" role="alert">{{ pwError }}</p>
+
+            <div class="o-actions-row">
+              <button
+                type="submit"
+                class="o-btn o-btn-pine"
+                :disabled="pwBusy"
+              >
+                {{ pwBusy ? "正在更新…" : "确认更新密码" }}
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <section class="o-card">
+          <div class="o-card-header">
+            <div>
+              <h2>
+                <KeyRound
+                  :size="17"
+                  style="vertical-align: -3px; margin-right: 6px"
+                />一次性账号恢复码
+              </h2>
+              <p>
+                无需绑定手机短信或外部邮箱，离线生成并妥善保管恢复码后，可在管理员登录页凭恢复码安全重设密码。
+              </p>
+            </div>
+          </div>
+
+          <div class="o-callout" style="margin-bottom: 14px">
+            建议每位运营与治理人员首次入职改密后立即生成一把离线恢复码并妥善保存。一旦使用恢复码重设或主动修改密码，旧恢复码立即作废。
+          </div>
+
+          <div class="o-actions-row">
+            <RouterLink
+              to="/account-security?returnTo=/ops/users"
+              class="o-btn o-btn-pine"
+            >
+              <KeyRound :size="15" /> 管理当前账号恢复码
+              <ArrowUpRight :size="15" />
+            </RouterLink>
+          </div>
+        </section>
       </div>
     </template>
   </div>
