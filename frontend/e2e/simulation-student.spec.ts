@@ -28,7 +28,7 @@ function order(overrides: Record<string, any> = {}): any {
     delivery_fee_cents: 200,
     created_at: new Date().toISOString(),
     expires_at: new Date(Date.now() + 600000).toISOString(),
-    pickup_code: "123456",
+    pickup_code: "1234",
     pickup_address: "示例小摊",
     contact_phone: "13800000000",
     delivery_point_name: "模拟校园交接点",

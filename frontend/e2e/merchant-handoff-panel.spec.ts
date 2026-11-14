@@ -409,10 +409,10 @@ test("long portion requirements scroll normally without hiding the code input", 
   await assertNoHorizontalOverflow(page);
 });
 
-test("eight-digit fallback pickup code hint and narrow-tablet workspace stay compact without overflow", async ({
+test("strict four-digit pickup code lookup, quick clear, usage guide, and narrow-tablet workspace stay compact without overflow", async ({
   page,
 }) => {
-  const data = await fixture(page, { pickup_code: "76358562" });
+  const data = await fixture(page, { pickup_code: "8562" });
   for (const width of [768, 847, 960]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto("/merchant/orders");
@@ -422,20 +422,32 @@ test("eight-digit fallback pickup code hint and narrow-tablet workspace stay com
     expect(workspaceBox!.width).toBeGreaterThanOrEqual(width - 168);
     await assertNoHorizontalOverflow(page);
   }
+  await page.getByRole("button", { name: "使用说明", exact: true }).click();
+  const guide = page.getByRole("dialog", { name: "商家摆摊快速使用说明" });
+  await expect(guide).toBeVisible();
+  await expect(guide).toContainText("4 位数字取餐码");
+  await guide.getByRole("button", { name: "关闭使用说明" }).click();
+  await expect(guide).toBeHidden();
+
   await page.getByRole("button", { name: "取餐码查单", exact: true }).click();
-  await expect(page.locator("#pickup-lookup-hint")).toContainText("兼容 8 位");
-  await page.getByLabel("4 位取餐码", { exact: true }).fill("76358562");
+  await expect(page.locator("#pickup-lookup-hint")).toContainText("4 位取餐码");
+  const lookupInput = page.getByLabel("4 位取餐码", { exact: true });
+  await lookupInput.fill("76358562");
+  await expect(lookupInput).toHaveValue("7635");
+  await page.getByRole("button", { name: "清空取餐码" }).click();
+  await expect(lookupInput).toHaveValue("");
+  await lookupInput.fill("8562");
   await page.getByRole("button", { name: "查找待取餐订单" }).click();
   const drawer = page.getByRole("dialog", { name: "订单详情", exact: true });
   await expect(drawer.locator("#detail-pickup-code-hint")).toContainText(
-    "兼容 8 位备用码",
+    "4 位数字码",
   );
   await expect(
     drawer.getByPlaceholder("输入取餐码", { exact: true }),
-  ).toHaveValue("76358562");
+  ).toHaveValue("8562");
   await drawer.getByRole("button", { name: "核销并完成", exact: true }).click();
   await expect.poll(() => data.order.status).toBe("completed");
-  expect(data.lookups).toEqual([{ pickup_code: "76358562" }]);
+  expect(data.lookups).toEqual([{ pickup_code: "8562" }]);
   expect(data.actions.map((row) => row.action)).toEqual(["complete"]);
   expect(data.unexpected).toEqual([]);
 });

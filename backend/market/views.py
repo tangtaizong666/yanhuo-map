@@ -455,7 +455,7 @@ def merchant_status(request, stall_id):
 @permission_classes([IsAuthenticated])
 def merchant_order_action(request, order_id):
     action = serializers.ChoiceField(choices=['accept', 'update_prep', 'reject', 'ready', 'confirm_payment', 'complete', 'approve_cancel', 'deny_cancel', 'dispatch', 'arrive', 'report_delivery_issue', 'resolve_delivery_issue']).run_validation(request.data.get('action'))
-    code = serializers.CharField(max_length=8, allow_blank=True).run_validation(request.data.get('pickup_code', ''))
+    code = serializers.CharField(max_length=4, allow_blank=True).run_validation(request.data.get('pickup_code', ''))
     reason = serializers.CharField(max_length=200, allow_blank=True).run_validation(request.data.get('reason', ''))
     options = {}
     if 'idempotency_key' in request.data:

@@ -24,8 +24,8 @@ const areaError = ref("");
 const newArea = reactive({
   name: "",
   subtitle: "",
-  latitude: 31.2304,
-  longitude: 121.4737,
+  latitude: 45.711192,
+  longitude: 126.634053,
   is_demo: false,
 });
 
@@ -43,8 +43,8 @@ const pointError = ref("");
 const newPoint = reactive({
   name: "",
   address: "",
-  latitude: 31.2306,
-  longitude: 121.4739,
+  latitude: 45.71152,
+  longitude: 126.63462,
   is_active: true,
 });
 

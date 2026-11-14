@@ -94,10 +94,10 @@ async function init() {
     map?.destroy();
     const restoredMap = returnViewState("/map")?.map;
     map = new AMap.Map(mapNode.value, {
-      zoom: restoredMap?.zoom || 15,
+      zoom: restoredMap?.zoom || 16,
       center: restoredMap?.center || (area.value
         ? [area.value.longitude, area.value.latitude]
-        : [126.632, 45.752]),
+        : [126.634053, 45.711192]),
       viewMode: "2D",
       mapStyle: "amap://styles/whitesmoke",
     });
@@ -285,7 +285,7 @@ watch(
   { flush: "sync" },
 );
 watch(area, (a) => {
-  if (a && map) map.setZoomAndCenter(15, [a.longitude, a.latitude]);
+  if (a && map) map.setZoomAndCenter(16, [a.longitude, a.latitude]);
 });
 useBrowseReturn({
   capture() {
@@ -895,11 +895,17 @@ onUnmounted(() => {
     overflow: visible;
   }
   .map-canvas {
-    height: 330px;
-    min-height: 330px;
-    border-radius: 17px;
+    height: clamp(360px, 48dvh, 430px);
+    min-height: 360px;
+    border-radius: 18px;
     overflow: hidden;
-    border: 1px solid #e9e1d1;
+    border: 1px solid #e7dcc9;
+    box-shadow: 0 10px 26px rgba(60, 37, 20, 0.07);
+  }
+  .map-canvas.map-fallback {
+    height: auto;
+    min-height: 0;
+    box-shadow: none;
   }
   .map-sidebar {
     border: 0;
@@ -948,12 +954,16 @@ onUnmounted(() => {
     margin: 0 10px 10px;
   }
   .selected-stall {
-    left: 12px;
-    right: 12px;
-    bottom: 12px;
-    padding: 12px;
-    grid-template-columns: 57px 1fr;
-    gap: 9px;
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    padding: 12px 13px;
+    grid-template-columns: 56px 1fr;
+    gap: 10px;
+    border-radius: 16px;
+    background: rgba(255, 253, 249, 0.97);
+    backdrop-filter: blur(8px);
+    box-shadow: 0 12px 28px rgba(48, 30, 16, 0.16);
   }
   .selected-stall > img,
   .selected-stall-placeholder {

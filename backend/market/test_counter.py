@@ -398,19 +398,22 @@ class CounterTests(TestCase):
 
     def test_pickup_lookup_requires_exact_code_and_throttles_attempts(self):
         url = f'/api/v1/merchant/stalls/{self.stall.pk}/pickup-lookup'
-        for code in ('123', '123456', 'abcd', '１２３４'):
+        for code in ('123', '123456', '12345678', 'abcd', '１２３４'):
             self.assertEqual(self.api.post(url, {'pickup_code': code}, format='json').status_code, 400)
         cache.clear()
         with patch('market.counter.PickupLookupThrottle.rate', '2/minute'):
-            self.assertEqual(self.api.post(url, {'pickup_code': '12345678'}, format='json').status_code, 404)
-            self.assertEqual(self.api.post(url, {'pickup_code': '12345678'}, format='json').status_code, 404)
-            self.assertEqual(self.api.post(url, {'pickup_code': '12345678'}, format='json').status_code, 429)
+            self.assertEqual(self.api.post(url, {'pickup_code': '9999'}, format='json').status_code, 404)
+            self.assertEqual(self.api.post(url, {'pickup_code': '9999'}, format='json').status_code, 404)
+            self.assertEqual(self.api.post(url, {'pickup_code': '9999'}, format='json').status_code, 429)
 
     def test_pickup_codes_are_four_digits_and_unique_among_open_orders(self):
         from market.models import pickup_code
         self.assertRegex(pickup_code(), r'^[0-9]{4}$')
         taken = {f'{n:04d}' for n in range(10000)} - {'0420'}
         self.assertEqual(pickup_code(taken), '0420')
+        with self.assertRaises(BusinessError) as raised:
+            pickup_code({f'{n:04d}' for n in range(10000)})
+        self.assertEqual(raised.exception.detail['code'], 'pickup_code_exhausted')
 
     def test_wrong_pickup_code_locks_after_five_attempts(self):
         cache.clear()

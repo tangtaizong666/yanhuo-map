@@ -6,6 +6,7 @@ import {
   ClipboardCheck,
   KeyRound,
   LayoutDashboard,
+  LayoutGrid,
   LogOut,
   MapPin,
   MessageSquareOff,
@@ -15,6 +16,7 @@ import {
   ShieldCheck,
   Store,
   Users,
+  X,
 } from "lucide-vue-next";
 import { api } from "../lib/api";
 import { isOpsLoginPath } from "../lib/identity";
@@ -145,6 +147,13 @@ const mobileSecondaryNav = computed(() => {
   const primaryIds = new Set(mobilePrimaryNav.value.map((item) => item.id));
   return visibleNav.value.filter((item) => !primaryIds.has(item.id));
 });
+const mobileSheetOpen = ref(false);
+const secondaryBadgeTotal = computed(() =>
+  mobileSecondaryNav.value.reduce((sum, item) => sum + (item.badge || 0), 0),
+);
+const isSecondarySection = computed(() =>
+  mobileSecondaryNav.value.some((item) => item.id === section.value),
+);
 const currentNav = computed(
   () =>
     navItems.value.find((item) => item.id === section.value) || navItems.value[0],
@@ -184,6 +193,7 @@ async function refreshOverview() {
 watch(
   section,
   (val) => {
+    mobileSheetOpen.value = false;
     if (!validSections.includes(val)) {
       void router.replace("/ops");
     }
@@ -445,12 +455,89 @@ onMounted(async () => {
           v-for="item in mobilePrimaryNav"
           :key="item.id"
           :to="item.id ? `/ops/${item.id}` : '/ops'"
-          :class="{ active: section === item.id }"
+          :class="{ active: section === item.id && !mobileSheetOpen }"
+          @click="mobileSheetOpen = false"
         >
           <component :is="item.icon" :size="19" />
           <span>{{ item.short }}</span>
+          <i v-if="item.badge" class="o-mobile-badge">{{ item.badge }}</i>
         </RouterLink>
+        <button
+          type="button"
+          class="o-mobile-more-btn"
+          :class="{ active: isSecondarySection || mobileSheetOpen }"
+          :aria-expanded="mobileSheetOpen"
+          aria-label="全部治理模块"
+          @click="mobileSheetOpen = !mobileSheetOpen"
+        >
+          <LayoutGrid :size="19" />
+          <span>更多</span>
+          <i v-if="secondaryBadgeTotal" class="o-mobile-badge">{{
+            secondaryBadgeTotal
+          }}</i>
+        </button>
       </nav>
+
+      <div
+        v-if="mobileSheetOpen"
+        class="o-mobile-sheet-backdrop"
+        @click.self="mobileSheetOpen = false"
+      >
+        <section
+          class="o-mobile-sheet"
+          role="dialog"
+          aria-modal="true"
+          aria-label="全部治理模块与快捷操作"
+        >
+          <header class="o-mobile-sheet-head">
+            <div>
+              <strong>全部治理模块</strong>
+              <small>{{ session.user?.display_name }} · 平台管理台</small>
+            </div>
+            <button
+              type="button"
+              class="o-mobile-sheet-close"
+              aria-label="关闭模块菜单"
+              @click="mobileSheetOpen = false"
+            >
+              <X :size="18" />
+            </button>
+          </header>
+          <div class="o-mobile-sheet-grid">
+            <RouterLink
+              v-for="item in visibleNav"
+              :key="item.id"
+              :to="item.id ? `/ops/${item.id}` : '/ops'"
+              :class="{ active: section === item.id }"
+              @click="mobileSheetOpen = false"
+            >
+              <component :is="item.icon" :size="18" />
+              <span>{{ item.label }}</span>
+              <b v-if="item.badge" class="o-nav-badge">{{ item.badge }}</b>
+            </RouterLink>
+          </div>
+          <div class="o-mobile-sheet-actions">
+            <RouterLink
+              to="/"
+              @click="
+                session.setConsumerPreview(true);
+                mobileSheetOpen = false;
+              "
+            >
+              <ArrowUpRight :size="16" /> 预览学生端
+            </RouterLink>
+            <RouterLink
+              to="/ops/users?tab=security"
+              @click="mobileSheetOpen = false"
+            >
+              <KeyRound :size="16" /> 账号安全与改密
+            </RouterLink>
+            <button type="button" @click="logout">
+              <LogOut :size="16" /> 退出登录
+            </button>
+          </div>
+        </section>
+      </div>
     </div>
   </div>
 </template>

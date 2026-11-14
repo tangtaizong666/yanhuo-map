@@ -68,8 +68,8 @@ const stallDraft = reactive({
   delivery_point_ids: [] as number[],
   update_location: false,
   address: "",
-  latitude: 31.2304,
-  longitude: 121.4737,
+  latitude: 45.711192,
+  longitude: 126.634053,
 });
 
 const statusTextMap: Record<string, { label: string; tone: string }> = {
@@ -142,9 +142,9 @@ function syncDrafts(stall: any) {
   const areaObj = areas.value.find((a) => a.id === stall.area_id);
   stallDraft.address =
     stall.location?.address || stall.location_draft_address || "";
-  stallDraft.latitude = stall.location?.latitude ?? areaObj?.latitude ?? 31.2304;
+  stallDraft.latitude = stall.location?.latitude ?? areaObj?.latitude ?? 45.711192;
   stallDraft.longitude =
-    stall.location?.longitude ?? areaObj?.longitude ?? 121.4737;
+    stall.location?.longitude ?? areaObj?.longitude ?? 126.634053;
 }
 
 function toggleExpand(stall: any) {

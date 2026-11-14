@@ -419,7 +419,7 @@ class SecurityCapacityAndThrottleHardeningTests(DeliverySetup, TestCase):
         self.assertEqual(err.status_code, 502)
         self.assertNotIn('secretjscode99', err.content.decode('utf-8').lower())
 
-    def test_pickup_lookup_five_failure_lockout_and_eight_digit_fallback(self):
+    def test_pickup_lookup_five_failure_lockout_and_strict_four_digit_exhaustion(self):
         pickup_order, _ = create_order(self.student, payload(self.stall, self.product))
         merchant_action(pickup_order.pk, self.vendor, 'accept')
         merchant_action(pickup_order.pk, self.vendor, 'ready')
@@ -442,9 +442,9 @@ class SecurityCapacityAndThrottleHardeningTests(DeliverySetup, TestCase):
         self.assertEqual(locked.data['code'], 'pickup_code_locked')
 
         all_four_digits = {f'{i:04d}' for i in range(10000)}
-        fallback_code = pickup_code(all_four_digits)
-        self.assertEqual(len(fallback_code), 8)
-        self.assertTrue(fallback_code.isdigit())
+        with self.assertRaises(BusinessError) as raised:
+            pickup_code(all_four_digits)
+        self.assertEqual(raised.exception.detail['code'], 'pickup_code_exhausted')
 
     @override_settings(
         CHECKOUT_MAX_ACTIVE_PER_STALL=1,
@@ -698,6 +698,67 @@ class HistoricalMigrationUpgradeTests(TransactionTestCase):
             self.assertEqual(upgraded_stall.payment_qr_image, f'/media/{expected_protected_rel}')
             self.assertTrue(default_storage.exists(expected_protected_rel))
             self.assertFalse(default_storage.exists(legacy_rel))
+
+    def test_0026_to_0027_normalizes_legacy_pickup_codes_to_four_digits(self):
+        from django.db.migrations.executor import MigrationExecutor
+
+        migrate_from = [('market', '0026_review_governance')]
+        migrate_to = [('market', '0027_four_digit_pickup_code')]
+
+        def restore_latest():
+            exec_restore = MigrationExecutor(connection)
+            exec_restore.migrate(exec_restore.loader.graph.leaf_nodes())
+
+        self.addCleanup(restore_latest)
+
+        executor = MigrationExecutor(connection)
+        executor.migrate(migrate_from)
+        old_apps = executor.loader.project_state(migrate_from).apps
+        HistUser = old_apps.get_model('auth', 'User')
+        HistArea = old_apps.get_model('market', 'Area')
+        HistMerchant = old_apps.get_model('market', 'MerchantProfile')
+        HistStall = old_apps.get_model('market', 'Stall')
+        HistOrder = old_apps.get_model('market', 'Order')
+
+        u = HistUser.objects.create(username='hist27-user')
+        m_user = HistUser.objects.create(username='hist27-vendor')
+        area = HistArea.objects.create(name='南区旧点', latitude=45.71, longitude=126.63)
+        mp = HistMerchant.objects.create(user=m_user, business_name='南区摊主', is_verified=True)
+        stall = HistStall.objects.create(merchant=mp, area=area, name='南区摊位', category='小吃')
+        now = timezone.now()
+        common = dict(
+            user=u,
+            stall=stall,
+            stall_name='南区摊位',
+            total_cents=800,
+            expires_at=now + timedelta(minutes=15),
+            pickup_address='哈理工南区',
+            pickup_latitude=45.711,
+            pickup_longitude=126.634,
+        )
+        open_keep = HistOrder.objects.create(
+            status='ready', pickup_code='8562', idempotency_key='k27-1', request_hash='h27-1', **common
+        )
+        open_legacy = HistOrder.objects.create(
+            status='preparing', pickup_code='76358562', idempotency_key='k27-2', request_hash='h27-2', **common
+        )
+        closed_legacy = HistOrder.objects.create(
+            status='completed', pickup_code='60659380', idempotency_key='k27-3', request_hash='h27-3', **common
+        )
+
+        executor = MigrationExecutor(connection)
+        executor.loader.build_graph()
+        executor.migrate(migrate_to)
+
+        new_apps = executor.loader.project_state(migrate_to).apps
+        NewOrder = new_apps.get_model('market', 'Order')
+        code_keep = NewOrder.objects.get(pk=open_keep.pk).pickup_code
+        code_legacy = NewOrder.objects.get(pk=open_legacy.pk).pickup_code
+        code_closed = NewOrder.objects.get(pk=closed_legacy.pk).pickup_code
+        self.assertEqual(code_keep, '8562')
+        self.assertRegex(code_legacy, r'^[0-9]{4}$')
+        self.assertNotEqual(code_legacy, '8562')
+        self.assertEqual(code_closed, '9380')
 
     def test_0025_rollback_preserves_legacy_file_and_collision_writes_distinct_qr(self):
         import importlib

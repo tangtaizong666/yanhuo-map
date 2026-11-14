@@ -1440,11 +1440,12 @@ onMounted(() =>
     min-height: 44px;
   }
   .home-hero {
-    min-height: 112px;
-    border-radius: 17px;
+    min-height: 132px;
+    border-radius: 19px;
+    box-shadow: 0 10px 26px rgba(92, 54, 24, 0.08);
   }
   .hero-copy {
-    padding: 12px 16px;
+    padding: 14px 17px;
     width: 90%;
   }
   .hero-kicker {
@@ -1456,7 +1457,7 @@ onMounted(() =>
   }
   .hero-copy h1 {
     font-size: 23px;
-    line-height: 1.5;
+    line-height: 1.42;
     margin-top: 3px;
     letter-spacing: 0;
   }
@@ -1464,7 +1465,15 @@ onMounted(() =>
     display: inline;
   }
   .hero-copy p {
-    display: none;
+    display: -webkit-box;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #6e5239;
+    margin: 4px 0 8px;
+    max-width: 72%;
   }
   .hero-link {
     font-size: 12px;

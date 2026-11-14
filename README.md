@@ -27,7 +27,7 @@
 
 位置超过 60 分钟未确认会停止接单。再次演示时，请到商家工作台确认位置或重新开摊；不要依靠重置数据保持虚假的“实时营业”。
 
-日常选餐、开摊接单、出餐核销与现场观察说明见[日常使用指南](docs/daily-use-guide.md)、[找摊与开摊指南](docs/merchant-onboarding-guide.md)、[选餐与出餐台指南](docs/kitchen-use-guide.md)、[真实用户观察任务卡](docs/usability-pilot.md)与[真机检查表](docs/launch-device-checklist.md)。
+日常选餐、商家一分钟上手、开摊接单、出餐核销与现场观察说明见[商家摆摊快速使用说明](docs/merchant-quick-guide.md)、[日常使用指南](docs/daily-use-guide.md)、[找摊与开摊指南](docs/merchant-onboarding-guide.md)、[选餐与出餐台指南](docs/kitchen-use-guide.md)、[真实用户观察任务卡](docs/usability-pilot.md)与[真机检查表](docs/launch-device-checklist.md)。
 
 ## 前端设计要求
 

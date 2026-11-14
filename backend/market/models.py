@@ -255,18 +255,16 @@ def active_prep_q(now=None, prefix=''):
 
 def pickup_code(taken=()):
     # 4-digit codes are easy to read aloud at a busy stall; uniqueness among a stall's open orders is enforced on create.
-    taken = set(taken)
+    taken = {str(item) for item in taken}
     for _ in range(50):
         code = ''.join(secrets.choice('0123456789') for _ in range(PICKUP_CODE_DIGITS))
-        if code not in taken: return code
+        if code not in taken:
+            return code
     free = [f'{n:04d}' for n in range(10 ** PICKUP_CODE_DIGITS) if f'{n:04d}' not in taken]
     if free:
         return secrets.choice(free)
-    for _ in range(200):
-        code8 = ''.join(secrets.choice('0123456789') for _ in range(8))
-        if code8 not in taken:
-            return code8
-    raise RuntimeError('Unable to allocate unique pickup code')
+    from .errors import BusinessError
+    raise BusinessError('当前摊位待取餐订单已达上限，请先核销已完成订单后再接新单。', 'pickup_code_exhausted', status=409)
 
 
 class Order(models.Model):
@@ -307,7 +305,7 @@ class Order(models.Model):
     completed_at = models.DateTimeField(null=True, blank=True)
     paid_at = models.DateTimeField(null=True, blank=True)
     expires_at = models.DateTimeField(db_index=True)
-    pickup_code = models.CharField(max_length=8, default=pickup_code)
+    pickup_code = models.CharField(max_length=4, default=pickup_code)
     pickup_address = models.CharField(max_length=200)
     pickup_latitude = models.FloatField()
     pickup_longitude = models.FloatField()

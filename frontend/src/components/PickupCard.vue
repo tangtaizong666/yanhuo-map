@@ -42,7 +42,7 @@ async function copy() {
       订单暂未同步，以下为上次读取的信息，请刷新后与商家核对。
     </p>
     <div class="pickup-code">
-      <span>向商家出示取餐码</span><strong>{{ order.pickup_code }}</strong
+      <span>向商家出示 4 位取餐码</span><strong>{{ order.pickup_code }}</strong
       ><small>请勿向无关人员分享 · 商家确认收款后核销</small>
     </div>
     <p
@@ -125,18 +125,23 @@ h2 {
   text-align: center;
   border-top: 1px dashed #dec9a9;
   border-bottom: 1px dashed #dec9a9;
-  padding: 16px 0;
+  background: rgba(255, 250, 240, 0.72);
+  border-radius: 14px;
+  padding: 16px 12px;
 }
 .pickup-code span {
   display: block;
   color: #826242;
   font-size: 12px;
+  font-weight: 600;
 }
 .pickup-code strong {
   display: block;
-  font-size: 42px;
-  letter-spacing: 5px;
-  line-height: 1.4;
+  font-size: 46px;
+  font-weight: 800;
+  letter-spacing: 8px;
+  padding-left: 8px;
+  line-height: 1.35;
   font-variant-numeric: tabular-nums;
   color: #9c471a;
 }
@@ -239,8 +244,9 @@ h2 {
     padding: 12px 0;
   }
   .pickup-code strong {
-    font-size: 36px;
-    letter-spacing: 4px;
+    font-size: 42px;
+    letter-spacing: 7px;
+    padding-left: 7px;
   }
   .pickup-payment {
     margin: 12px 0;

@@ -37,7 +37,7 @@ function makeOrder(overrides: Record<string, any> = {}) {
     payment_can_close: false,
     total_cents: 1450,
     created_at: new Date().toISOString(),
-    pickup_code: "123456",
+    pickup_code: "1234",
     pickup_address: "测试取餐点",
     pickup_latitude: 45.7,
     pickup_longitude: 126.6,

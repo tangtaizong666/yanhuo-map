@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { Settings2, ChartNoAxesCombined, MessageSquare, History, ArrowUpRight, ChevronRight, ShieldCheck } from "lucide-vue-next";
+import { Settings2, ChartNoAxesCombined, MessageSquare, History, ArrowUpRight, ChevronRight, ShieldCheck, BookOpenCheck } from "lucide-vue-next";
 import { useSession } from "../../stores/session";
 import StallShare from "../StallShare.vue";
 import { computed } from "vue";
 
 const props = defineProps<{ stall: any; sellable: boolean; discoveryOnly?: boolean }>();
+const emit = defineEmits<{ guide: [] }>();
 const session = useSession();
 const links = computed(() => [
   { to: "/merchant/store", title: "店铺与营业", note: props.discoveryOnly ? "出摊位置、时间与认摊资料" : "开摊、位置、支付和配送", icon: Settings2 },
@@ -19,6 +20,11 @@ const preparationSteps = computed(() => (props.stall.activation?.steps || []).fi
 <template>
   <div class="m-more-page">
     <div class="m-more-menu">
+      <button type="button" class="m-more-guide-btn" @click="emit('guide')">
+        <span class="m-more-icon m-more-icon-guide"><BookOpenCheck :size="22" /></span>
+        <span><strong>摆摊使用说明</strong><small>{{ discoveryOnly ? '确认位置、修改供应与收摊一分钟上手' : '开摊、接单、收款与 4 位取餐码核销一分钟上手' }}</small></span>
+        <ChevronRight :size="18" />
+      </button>
       <RouterLink v-for="link in links" :key="link.to" :to="link.to">
         <span class="m-more-icon"><component :is="link.icon" :size="22" /></span>
         <span><strong>{{ link.title }}</strong><small>{{ link.note }}</small></span>
@@ -38,3 +44,39 @@ const preparationSteps = computed(() => (props.stall.activation?.steps || []).fi
     <p v-else class="m-muted">公开展示尚未开通，暂不能分享学生端地址。工作台仍可继续完善资料。</p>
   </div>
 </template>
+
+<style scoped>
+.m-more-guide-btn {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 68px;
+  padding: 15px 18px;
+  border: 0;
+  border-bottom: 1px solid #eee2d0;
+  background: linear-gradient(135deg, #fff7ea, #fffdf8);
+  color: inherit;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.m-more-guide-btn span:nth-child(2) {
+  display: grid;
+  gap: 3px;
+}
+.m-more-guide-btn strong {
+  font-size: 16px;
+  color: #8f3e14;
+}
+.m-more-guide-btn small {
+  font-size: 12.5px;
+  color: #7c6248;
+  line-height: 1.5;
+}
+.m-more-icon-guide {
+  background: #fde9d3 !important;
+  color: #b55523 !important;
+}
+</style>

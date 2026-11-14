@@ -115,7 +115,7 @@ function loadPrepRequests() {
             Number(value.prep_minutes) >= 1 &&
             Number(value.prep_minutes) <= 180)) &&
         (value.pickup_code === undefined ||
-          /^(\d{4}|\d{8})$/.test(value.pickup_code)) &&
+          /^\d{4}$/.test(value.pickup_code)) &&
         typeof value.idempotency_key === "string" &&
         value.idempotency_key.length >= 8 &&
         value.idempotency_key.length <= 128 &&
@@ -1026,9 +1026,9 @@ async function performAction(order: any, value: string, explanation = "") {
     body.reason = explanation;
   if (value === "complete" && !existingPrep) {
     const code = (pickupCodes[order.id] || "").trim();
-    if (!/^(\d{4}|\d{8})$/.test(code)) {
+    if (!/^\d{4}$/.test(code)) {
       notify(
-        `请输入顾客出示的 4 位（或 8 位备用）${isDelivery(order) ? "收餐码" : "取餐码"}`,
+        `请输入顾客出示的 4 位${isDelivery(order) ? "收餐码" : "取餐码"}`,
         "error",
       );
       return;
@@ -1904,25 +1904,43 @@ onUnmounted(() => {
                     >核验顾客的 4 位{{
                       isDelivery(selectedOrder) ? "收餐码" : "取餐码"
                     }}</label
-                  ><small id="detail-pickup-code-hint">兼容 8 位备用码</small>
+                  ><small id="detail-pickup-code-hint">当面核对 4 位数字码</small>
                 </span>
                 <div>
-                  <input
-                    id="detail-pickup-code"
-                    v-model="pickupCodes[selectedOrder.id]"
-                    class="pickup-code-input"
-                    inputmode="numeric"
-                    pattern="[0-9]{4}([0-9]{4})?"
-                    maxlength="8"
-                    minlength="4"
-                    aria-describedby="detail-pickup-code-hint"
-                    :placeholder="
-                      isDelivery(selectedOrder) ? '输入收餐码' : '输入取餐码'
-                    "
-                    required
-                    autocomplete="off"
-                    :disabled="isBusy(selectedOrder)"
-                  /><button
+                  <span class="pickup-code-field">
+                    <input
+                      id="detail-pickup-code"
+                      :value="pickupCodes[selectedOrder.id] || ''"
+                      class="pickup-code-input"
+                      inputmode="numeric"
+                      pattern="[0-9]{4}"
+                      maxlength="4"
+                      minlength="4"
+                      aria-describedby="detail-pickup-code-hint"
+                      :placeholder="
+                        isDelivery(selectedOrder) ? '输入收餐码' : '输入取餐码'
+                      "
+                      required
+                      autocomplete="off"
+                      :disabled="isBusy(selectedOrder)"
+                      @input="
+                        (e) => {
+                          const el = e.target as HTMLInputElement;
+                          const digits = el.value.replace(/\D+/g, '').slice(0, 4);
+                          if (el.value !== digits) el.value = digits;
+                          pickupCodes[selectedOrder.id] = digits;
+                        }
+                      "
+                    /><button
+                      v-if="pickupCodes[selectedOrder.id] && !isBusy(selectedOrder)"
+                      type="button"
+                      class="pickup-code-clear"
+                      aria-label="清空核销码"
+                      @click="pickupCodes[selectedOrder.id] = ''"
+                    >
+                      ×
+                    </button>
+                  </span><button
                     class="m-orders-button primary"
                     :disabled="isBusy(selectedOrder)"
                   >
@@ -2953,18 +2971,47 @@ onUnmounted(() => {
   align-items: stretch;
   gap: 9px;
 }
+.pickup-code-field {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
 .pickup-code-input {
   min-width: 0;
   width: 100%;
   border: 1px solid #decbb6;
   border-radius: 9px;
-  padding: 12px;
+  padding: 12px 36px 12px 12px;
   background: #fff;
   color: #3c322a;
   font: inherit;
   font-size: 14px;
   letter-spacing: 2px;
   min-height: 46px;
+  font-variant-numeric: tabular-nums;
+}
+.pickup-code-input:not(:placeholder-shown) {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 5px;
+}
+.pickup-code-clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 32px;
+  min-height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #8b6c51;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
 }
 .m-orders-pickup .m-orders-button {
   flex-shrink: 0;

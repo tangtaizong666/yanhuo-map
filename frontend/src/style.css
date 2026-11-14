@@ -803,6 +803,7 @@ a.home-escape-link:hover {
   .header-location {
     display: flex;
     margin-left: auto;
+    min-width: 0;
     border: 0;
     padding: 0;
     font-size: 11px;
@@ -811,6 +812,8 @@ a.home-escape-link:hover {
   .header-location select {
     font-size: 12px;
     max-width: 116px;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .header-location > svg:first-child {
     display: none;

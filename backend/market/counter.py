@@ -89,7 +89,7 @@ def receiving_heartbeat(request, stall_id):
 
 
 class PickupLookupInput(StrictInput):
-    pickup_code = serializers.RegexField(r'^(?:[0-9]{4}|[0-9]{8})$', max_length=8)
+    pickup_code = serializers.RegexField(r'^[0-9]{4}$', max_length=4)
     number = serializers.CharField(max_length=40, required=False)
 
 

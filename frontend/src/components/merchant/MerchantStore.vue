@@ -283,13 +283,15 @@ async function pickLocation() {
     if (disposed) return;
     map?.destroy();
     const area = session.config.areas.find((a) => a.id === props.stall.area_id);
-    const lat = location.latitude ? Number(location.latitude) : area?.latitude;
+    const lat = location.latitude
+      ? Number(location.latitude)
+      : (area?.latitude ?? 45.711192);
     const lng = location.longitude
       ? Number(location.longitude)
-      : area?.longitude;
+      : (area?.longitude ?? 126.634053);
     map = new AMap.Map(mapElement.value, {
       zoom: 17,
-      ...(lat != null && lng != null ? { center: [lng, lat] } : {}),
+      center: [lng, lat],
     });
     marker = null;
     map.on("click", (event: any) => {
@@ -447,7 +449,7 @@ async function upload(
               v-model="location.address"
               required
               maxlength="200"
-              placeholder="例如：学府路夜市入口左侧第三个摊位"
+              placeholder="例如：哈理工南区正门夜市入口左侧第三个摊位"
           /></label>
           <label v-show="hasLocationCoordinates"
             >预计收摊时间<input

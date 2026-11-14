@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { Store, MapPin, ClipboardList, Utensils, Settings2, ArrowUpRight, LogOut, RefreshCw, ArrowRight } from "lucide-vue-next";
+import { Store, MapPin, ClipboardList, Utensils, Settings2, ArrowUpRight, LogOut, RefreshCw, ArrowRight, CircleHelp } from "lucide-vue-next";
 import { api } from "../lib/api";
 import { useSession } from "../stores/session";
 import { attentionOrders, type OrderCounts } from "../lib/orderPages";
 import { notify } from "../lib/notify";
 import MerchantMore from "../components/merchant/MerchantMore.vue";
+import MerchantQuickGuide from "../components/merchant/MerchantQuickGuide.vue";
 import MerchantAnalytics from "../components/merchant/MerchantAnalytics.vue";
 import MerchantStore from "../components/merchant/MerchantStore.vue";
 import MerchantOrders from "../components/merchant/MerchantOrders.vue";
@@ -412,6 +413,27 @@ onUnmounted(() => {
   metricSeq++;
 });
 const reviewRefreshTick = ref(0);
+const guideOpen = ref(false);
+const renewingLocation = ref(false);
+async function renewCurrentLocation() {
+  if (!stall.value || renewingLocation.value) return;
+  renewingLocation.value = true;
+  try {
+    await api(`/merchant/stalls/${stall.value.id}/status`, {
+      method: "POST",
+      body: {
+        status: stall.value.session_status || "open",
+        confirm_location: true,
+      },
+    });
+    notify("已确认仍在此处，出摊位置已续期", "success");
+    await mutationRefresh();
+  } catch (e) {
+    notify((e as Error).message, "error");
+  } finally {
+    renewingLocation.value = false;
+  }
+}
 </script>
 <template>
   <div v-if="!allowed" class="m-application-page">
@@ -441,6 +463,7 @@ const reviewRefreshTick = ref(0);
         <div class="m-breadcrumb">烟火地图 <span>/</span><strong>{{ current.label }}</strong></div>
         <div class="m-topbar-right">
           <span v-if="session.config?.demo_mode" class="m-preview-label">{{ session.config.services_simulation_enabled ? '模拟体验' : '示例环境' }}</span>
+          <button type="button" class="m-refresh-button m-guide-button" aria-label="使用说明" @click="guideOpen = true"><CircleHelp :size="18" /><span>说明</span></button>
           <button class="m-refresh-button" :disabled="refreshing" @click="refresh" aria-label="刷新工作台"><RefreshCw :size="18" :class="{ 'm-spinning': refreshing }" /><span>刷新</span></button>
         </div>
       </header>
@@ -457,11 +480,11 @@ const reviewRefreshTick = ref(0);
             <label v-if="stalls.length > 1" class="m-work-stall-selector"><span>当前摊位</span><select v-model="selectedId" aria-label="选择管理的摊位"><option v-for="s in stalls" :key="s.id" :value="s.id">{{ s.name }}</option></select></label>
             <MerchantOperations v-if="discoveryHome || (orderWorkspace && !discoveryOnly)" :compact="!discoveryHome" :discovery-only="discoveryOnly" :key="`${session.user!.id}:${stall.id}`" :stall="stall" :orders="orders" :ready="ordersReady" @refresh="mutationRefresh" @location="router.push('/merchant/store#location')" />
             <p v-if="orderWorkspace && !discoveryOnly && (!stall.is_visible || !stall.activation?.has_location)" class="m-setup-link"><span>完成开摊准备后，才能接到新订单。</span><RouterLink to="/merchant/more#activation">查看准备事项 <ArrowRight :size="16" /></RouterLink></p>
-            <p v-else-if="orderWorkspace && locationDue" class="m-setup-link"><span>位置即将过期，请核对后确认。</span><RouterLink to="/merchant/store">确认位置 <ArrowRight :size="16" /></RouterLink></p>
+            <p v-else-if="orderWorkspace && locationDue" class="m-setup-link"><span>位置即将过期，请核对后确认。</span><span class="m-due-actions"><button type="button" class="m-inline-renew" :disabled="renewingLocation" @click="renewCurrentLocation">{{ renewingLocation ? '确认中…' : '仍在此处续期' }}</button><RouterLink to="/merchant/store">更换位置 <ArrowRight :size="16" /></RouterLink></span></p>
             <p v-if="heartbeatError" class="m-alert" role="status">{{ heartbeatError }}</p>
             <MerchantOrders v-if="orderWorkspace" :key="`${session.user!.id}:${stall.id}`" :stall="stall" :orders="orders" :orders-ready="ordersReady" :sync-error="error" :loading="refreshing" :initial-filter="String(route.query.filter || 'active')" :counts="orderCounts" @refresh="orderChanged" />
             <MerchantProducts v-else-if="section === 'products'" :key="stall.id" :stall="stall" :discovery-only="discoveryOnly" @refresh="mutationRefresh" />
-            <MerchantMore v-else-if="section === 'more'" :stall="stall" :sellable="!!sellable" :discovery-only="discoveryOnly" />
+            <MerchantMore v-else-if="section === 'more'" :stall="stall" :sellable="!!sellable" :discovery-only="discoveryOnly" @guide="guideOpen = true" />
             <MerchantAnalytics v-else-if="section === 'analytics'" :metrics="metrics" :days="days" :mode="effectiveAnalyticsMode" :can-switch-mode="!!session.config?.services_simulation_enabled || stall.services?.mode === 'simulation'" :error="metricsError" :loading="metricsLoading" @period="changePeriod" @mode="changeAnalyticsMode" />
             <MerchantReviews v-else-if="section === 'reviews'" :key="stall.id" :stall="stall" :refresh-tick="reviewRefreshTick" @refresh="mutationRefresh" />
             <MerchantStore v-else-if="section === 'store'" :key="`${session.user!.id}:${stall.id}`" :stall="stall" :orders="orders" :orders-ready="ordersReady" :discovery-only="discoveryOnly" @refresh="mutationRefresh" />
@@ -478,10 +501,17 @@ const reviewRefreshTick = ref(0);
         <RouterLink v-for="n in nav" :key="n.id" :to="n.id ? `/merchant/${n.id}` : '/merchant'" :class="{ active: activeNav === n.id }"><component :is="n.icon" :size="23" /><span>{{ n.short }}</span><i v-if="n.id === '' && pending">{{ pending }}</i></RouterLink>
       </nav>
     </div>
+    <MerchantQuickGuide :open="guideOpen" :discovery-only="discoveryOnly" @close="guideOpen = false" />
   </div>
 </template>
 <style scoped>
 .m-application-page { max-width: 920px; margin: 0 auto; padding: 28px 18px; }
 .m-application-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-top: 8px; }
 .m-more-final-action { width: 100%; max-width: 820px; margin-top: 24px; }
+.m-due-actions { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.m-inline-renew { min-height: 40px; padding: 6px 12px; border-radius: 9px; border: 1px solid #c97236; background: #fff6ea; color: #9c471a; font-size: 13px; font-weight: 700; cursor: pointer; }
+@media (max-width: 420px) {
+  .m-guide-button span { display: inline; font-size: 12px; }
+  .m-preview-label { display: none; }
+}
 </style>
