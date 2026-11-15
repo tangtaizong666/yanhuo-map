@@ -49,7 +49,8 @@ class PilotEvidenceTests(TestCase):
 class RoutePermissionMatrixTests(TestCase):
     def test_only_explicit_public_routes_allow_anonymous_access(self):
         from .urls import urlpatterns
-        public = {'health', 'config', 'auth/me', 'auth/csrf', 'auth/login', 'ops/auth/login', 'auth/register',
+        public = {'health', 'config', 'auth/me', 'auth/csrf', 'auth/captcha', 'auth/register/code',
+            'auth/login', 'ops/auth/login', 'auth/register',
             'auth/logout', 'auth/recovery/reset', 'products', 'stalls/map', 'stalls',
             'stalls/<int:stall_id>', 'events', 'feedback', 'payments/wechat/notify/<slug:account_key>',
             'amap-proxy/_AMapService/<path:upstream_path>'}

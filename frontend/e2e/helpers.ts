@@ -77,6 +77,8 @@ export async function mutate(
   });
 }
 
+let phoneCounter = Math.floor(Math.random() * 400000);
+
 export async function createStudent(context: BrowserContext) {
   requireIsolatedApi();
   const config = await (
@@ -88,15 +90,30 @@ export async function createStudent(context: BrowserContext) {
   ).toBe(true);
   const username = `e2e_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
   const password = "CampusE2E!2026";
+  phoneCounter = (phoneCounter + 1) % 900000;
+  const suffix = `${String(Date.now()).slice(-2)}${String(phoneCounter).padStart(6, "0")}`;
+  const phone = `139${suffix}`;
+  const captchaRes = await context.request.get(`${baseURL}/api/v1/auth/captcha`);
+  expect(captchaRes.ok(), await captchaRes.text()).toBeTruthy();
+  const captchaData = await captchaRes.json();
+  const codeRes = await mutate(context, "/auth/register/code", {
+    phone,
+    captcha_id: captchaData.captcha_id,
+    captcha_code: captchaData.demo_captcha_code,
+  });
+  expect(codeRes.status(), await codeRes.text()).toBe(200);
+  const codeData = await codeRes.json();
   const registered = await mutate(context, "/auth/register", {
     username,
     password,
     display_name: "自动化测试同学",
+    phone,
+    verification_code: codeData.demo_code,
   });
   expect(registered.status(), await registered.text()).toBe(201);
   const loggedOut = await mutate(context, "/auth/logout", {});
   expect(loggedOut.ok()).toBeTruthy();
-  return { username, password };
+  return { username, password, phone };
 }
 
 // Live integration setup must use the same versioned correction contract as a merchant.

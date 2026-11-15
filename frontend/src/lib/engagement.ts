@@ -22,11 +22,42 @@ export function newRequestKey(prefix: string) {
 }
 
 export async function copyText(value: string) {
-  if (!navigator.clipboard?.writeText) return false;
+  if (!value) return false;
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  if (
+    typeof window === "undefined" ||
+    window.isSecureContext !== false ||
+    typeof document === "undefined"
+  ) {
+    return false;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.setAttribute("aria-hidden", "true");
+  textarea.style.position = "fixed";
+  textarea.style.top = "-9999px";
+  textarea.style.left = "-9999px";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  const previousFocus =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null;
   try {
-    await navigator.clipboard.writeText(value);
-    return true;
+    textarea.focus({ preventScroll: true });
+    textarea.select();
+    textarea.setSelectionRange(0, value.length);
+    return document.execCommand("copy");
   } catch {
     return false;
+  } finally {
+    textarea.remove();
+    previousFocus?.focus({ preventScroll: true });
   }
 }

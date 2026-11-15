@@ -11,13 +11,17 @@ import {
   RefreshCw,
   X,
   Clock3,
+  Copy,
+  Check,
+  ChevronDown,
   Map as MapIcon,
   Store,
 } from "lucide-vue-next";
 import { useStalls } from "../lib/discovery";
 import { useSession } from "../stores/session";
 import { loadAMap, locate } from "../lib/amap";
-import { api, confirmedText, statusText, routeUrl } from "../lib/api";
+import { api, confirmedText, statusText } from "../lib/api";
+import { copyText } from "../lib/engagement";
 import { notify } from "../lib/notify";
 import type { Stall, StallMap } from "../lib/types";
 import StallCard from "../components/StallCard.vue";
@@ -75,11 +79,330 @@ watch(
 );
 let map: any = null,
   markers: any[] = [],
+  routeOverlays: any[] = [],
   unmounted = false,
   userMarker: any = null;
+const pickingOrigin = ref(false),
+  pickingMyPosition = ref(false),
+  customOrigin = ref<{ lat: number; lng: number; label: string } | null>(null),
+  selectedOriginKey = ref(""),
+  routeLoading = ref(false),
+  routeCopied = ref(false),
+  routePlan = ref<{
+    distanceMeters: number;
+    durationMinutes: number;
+    mode: "walking" | "straight";
+    bearing: string;
+    path: [number, number][];
+    steps: { instruction: string; distance: number }[];
+  } | null>(null);
+let routeController: AbortController | null = null;
 const area = computed(() =>
   session.config?.areas.find((a) => a.id === filters.area),
 );
+const routeTarget = computed(() => {
+  if (route.query.route !== "1" || typeof route.query.to !== "string") return null;
+  const [lngRaw, latRaw] = route.query.to.split(",");
+  const lng = Number(lngRaw),
+    lat = Number(latRaw);
+  if (
+    !Number.isFinite(lat) ||
+    !Number.isFinite(lng) ||
+    lat < -90 ||
+    lat > 90 ||
+    lng < -180 ||
+    lng > 180
+  )
+    return null;
+  const stallRaw = route.query.stall ? Number(route.query.stall) : null;
+  return {
+    lat,
+    lng,
+    name:
+      typeof route.query.name === "string" && route.query.name.trim()
+        ? route.query.name.trim()
+        : "目标取餐点",
+    address:
+      typeof route.query.addr === "string" ? route.query.addr.trim() : "",
+    stallId:
+      stallRaw != null && Number.isInteger(stallRaw) && stallRaw > 0
+        ? stallRaw
+        : null,
+  };
+});
+const originPresets = computed(() => {
+  const list: { key: string; label: string; lat: number; lng: number }[] = [];
+  if (filters.position) {
+    list.push({
+      key: "user",
+      label: "我的定位",
+      lat: filters.position.lat,
+      lng: filters.position.lng,
+    });
+  }
+  if (customOrigin.value) {
+    list.push({
+      key: "custom",
+      label: customOrigin.value.label,
+      lat: customOrigin.value.lat,
+      lng: customOrigin.value.lng,
+    });
+  }
+  const areas = session.config?.areas?.length
+    ? session.config.areas
+    : [
+        {
+          id: -1,
+          name: "征仪路正门",
+          subtitle: "哈理工南区",
+          latitude: 45.711192,
+          longitude: 126.634053,
+        },
+      ];
+  for (const item of areas) {
+    if (Number.isFinite(item.latitude) && Number.isFinite(item.longitude)) {
+      list.push({
+        key: `area:${item.id}`,
+        label: item.name.replace(/^哈尔滨理工大学南区[·\s]*/, ""),
+        lat: item.latitude,
+        lng: item.longitude,
+      });
+    }
+  }
+  return list;
+});
+function haversineMeters(
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number,
+) {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return Math.max(1, Math.round(6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))));
+}
+function compassBearing(
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number,
+) {
+  const dy = lat2 - lat1;
+  const dx = (lng2 - lng1) * Math.cos((lat1 * Math.PI) / 180);
+  if (Math.hypot(dx, dy) < 0.00005) return "就在附近";
+  const angle = ((Math.atan2(dx, dy) * 180) / Math.PI + 360) % 360;
+  const dirs = ["正北", "东北", "正东", "东南", "正南", "西南", "正西", "西北"];
+  return `向${dirs[Math.round(angle / 45) % 8]}`;
+}
+const activeOrigin = computed(() => {
+  const presets = originPresets.value;
+  if (!presets.length) return null;
+  const matched = presets.find((p) => p.key === selectedOriginKey.value);
+  if (matched) return matched;
+  if (filters.position) return presets.find((p) => p.key === "user") || presets[0];
+  if (area.value) {
+    const areaPreset = presets.find((p) => p.key === `area:${area.value!.id}`);
+    if (areaPreset) return areaPreset;
+  }
+  if (routeTarget.value) {
+    const t = routeTarget.value;
+    return [...presets].sort(
+      (a, b) =>
+        haversineMeters(a.lat, a.lng, t.lat, t.lng) -
+        haversineMeters(b.lat, b.lng, t.lat, t.lng),
+    )[0];
+  }
+  return presets[0];
+});
+function clearRouteOverlays() {
+  if (map && routeOverlays.length) {
+    map.remove(routeOverlays);
+  }
+  routeOverlays = [];
+}
+function drawRouteOnMap() {
+  clearRouteOverlays();
+  if (!map || !window.AMap || !routeTarget.value || !activeOrigin.value || !routePlan.value)
+    return;
+  const AMap = window.AMap;
+  const polyline = new AMap.Polyline({
+    path: routePlan.value.path,
+    strokeColor: "#d95f18",
+    strokeWeight: 6,
+    strokeOpacity: 0.92,
+    lineJoin: "round",
+    lineCap: "round",
+    showDir: true,
+    zIndex: 60,
+  });
+  const startEl = document.createElement("span");
+  startEl.className = "route-endpoint-pin route-start-pin";
+  startEl.textContent = "起";
+  const endEl = document.createElement("span");
+  endEl.className = "route-endpoint-pin route-end-pin";
+  endEl.textContent = "摊";
+  const startMarker = new AMap.Marker({
+    position: [activeOrigin.value.lng, activeOrigin.value.lat],
+    content: startEl,
+    anchor: "center",
+    zIndex: 120,
+  });
+  const endMarker = new AMap.Marker({
+    position: [routeTarget.value.lng, routeTarget.value.lat],
+    content: endEl,
+    anchor: "center",
+    zIndex: 121,
+  });
+  routeOverlays = [polyline, startMarker, endMarker];
+  map.add(routeOverlays);
+  map.setFitView?.(routeOverlays, false, [84, 44, 72, 44], 18);
+}
+async function updateWalkingRoute() {
+  routeController?.abort();
+  const target = routeTarget.value;
+  const origin = activeOrigin.value;
+  if (!target || !origin) {
+    routeLoading.value = false;
+    routePlan.value = null;
+    clearRouteOverlays();
+    return;
+  }
+  const straight = haversineMeters(origin.lat, origin.lng, target.lat, target.lng);
+  const bearing = compassBearing(origin.lat, origin.lng, target.lat, target.lng);
+  const fallbackPlan = {
+    distanceMeters: straight,
+    durationMinutes: Math.max(1, Math.round(straight / 72)),
+    mode: "straight" as const,
+    bearing,
+    path: [
+      [origin.lng, origin.lat],
+      [target.lng, target.lat],
+    ] as [number, number][],
+    steps: [],
+  };
+  if (!session.config?.amap_key || !session.config?.amap_proxy) {
+    routePlan.value = fallbackPlan;
+    routeLoading.value = false;
+    drawRouteOnMap();
+    return;
+  }
+  const controller = new AbortController();
+  routeController = controller;
+  routeLoading.value = true;
+  try {
+    const query = new URLSearchParams({
+      origin: `${origin.lng.toFixed(6)},${origin.lat.toFixed(6)}`,
+      destination: `${target.lng.toFixed(6)},${target.lat.toFixed(6)}`,
+      s: "rsv3",
+    });
+    const proxyBase = session.config.amap_proxy.replace(/\/+$/, "");
+    const serviceBase = proxyBase.endsWith("/_AMapService")
+      ? proxyBase
+      : `${proxyBase}/_AMapService`;
+    const response = await fetch(
+      `${serviceBase}/v3/direction/walking?${query.toString()}`,
+      { credentials: "include", signal: controller.signal },
+    );
+    const data = response.ok ? await response.json() : null;
+    if (controller.signal.aborted || unmounted) return;
+    const firstPath = data?.status === "1" ? data?.route?.paths?.[0] : null;
+    if (firstPath) {
+      const coords: [number, number][] = [[origin.lng, origin.lat]];
+      const steps: { instruction: string; distance: number }[] = [];
+      for (const rawStep of Array.isArray(firstPath.steps) ? firstPath.steps : []) {
+        const text = String(rawStep?.instruction || "").replace(/<[^>]+>/g, "").trim();
+        if (text) {
+          steps.push({
+            instruction: text,
+            distance: Number(rawStep?.distance) || 0,
+          });
+        }
+        for (const pair of String(rawStep?.polyline || "").split(";")) {
+          const [pLng, pLat] = pair.split(",").map(Number);
+          if (Number.isFinite(pLng) && Number.isFinite(pLat)) {
+            coords.push([pLng, pLat]);
+          }
+        }
+      }
+      coords.push([target.lng, target.lat]);
+      const dist = Number(firstPath.distance) || straight;
+      const durSec = Number(firstPath.duration) || Math.round(dist / 1.2);
+      routePlan.value = {
+        distanceMeters: dist,
+        durationMinutes: Math.max(1, Math.round(durSec / 60)),
+        mode: "walking",
+        bearing,
+        path: coords,
+        steps,
+      };
+    } else {
+      routePlan.value = fallbackPlan;
+    }
+    drawRouteOnMap();
+  } catch {
+    if (controller.signal.aborted || unmounted) return;
+    routePlan.value = fallbackPlan;
+    drawRouteOnMap();
+  } finally {
+    if (routeController === controller) routeLoading.value = false;
+  }
+}
+function selectOrigin(key: string) {
+  pickingOrigin.value = false;
+  selectedOriginKey.value = key;
+}
+function togglePickOrigin() {
+  if (mapError.value || !map) {
+    notify("当前地图画布未开启，可直接点选校区大门作为起点。", "info");
+    return;
+  }
+  pickingMyPosition.value = false;
+  pickingOrigin.value = !pickingOrigin.value;
+  if (pickingOrigin.value) {
+    notify("请在地图上轻点你当前所在的位置作为步行起点", "info");
+  }
+}
+function closeRoute() {
+  pickingOrigin.value = false;
+  routeController?.abort();
+  routePlan.value = null;
+  clearRouteOverlays();
+  const nextQuery: Record<string, string> = {};
+  if (followOnly.value) nextQuery.follow = "1";
+  void router.replace({ path: "/map", query: nextQuery });
+}
+async function copyRouteDestination() {
+  if (!routeTarget.value) return;
+  const text = [routeTarget.value.name, routeTarget.value.address]
+    .filter(Boolean)
+    .join(" · ");
+  if (await copyText(text)) {
+    routeCopied.value = true;
+    notify("摊位位置已复制", "success");
+    window.setTimeout(() => {
+      routeCopied.value = false;
+    }, 2200);
+  } else {
+    notify(`位置：${text}`, "info");
+  }
+}
+function applyPickedUserPosition(lat: number, lng: number, message: string) {
+  filters.position = { lat, lng };
+  if (map && window.AMap) {
+    if (userMarker) map.remove(userMarker);
+    userMarker = new window.AMap.Marker({
+      position: [lng, lat],
+      content: '<span class="user-position-dot"></span>',
+      anchor: "center",
+    });
+    map.add(userMarker);
+  }
+  notify(message, "success");
+}
 async function init() {
   if (!session.config?.amap_key) {
     mapError.value = "地图服务暂未开放";
@@ -95,16 +418,35 @@ async function init() {
     const restoredMap = returnViewState("/map")?.map;
     map = new AMap.Map(mapNode.value, {
       zoom: restoredMap?.zoom || 16,
-      center: restoredMap?.center || (area.value
-        ? [area.value.longitude, area.value.latitude]
-        : [126.634053, 45.711192]),
+      center: restoredMap?.center || (routeTarget.value
+        ? [routeTarget.value.lng, routeTarget.value.lat]
+        : area.value
+          ? [area.value.longitude, area.value.latitude]
+          : [126.634053, 45.711192]),
       viewMode: "2D",
       mapStyle: "amap://styles/whitesmoke",
     });
-    map.addControl(new AMap.Scale());
+    map.addControl?.(new AMap.Scale());
     map.on("moveend", syncBounds);
+    map.on?.("click", (event: any) => {
+      const lat = event?.lnglat?.getLat?.() ?? event?.lnglat?.lat;
+      const lng = event?.lnglat?.getLng?.() ?? event?.lnglat?.lng;
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      if (pickingOrigin.value) {
+        pickingOrigin.value = false;
+        customOrigin.value = { lat, lng, label: "地图自选起点" };
+        selectedOriginKey.value = "custom";
+        notify("已按你点选的位置更新步行路线", "success");
+        return;
+      }
+      if (pickingMyPosition.value) {
+        pickingMyPosition.value = false;
+        applyPickedUserPosition(lat, lng, "已按地图点选位置计算距离");
+      }
+    });
     syncBounds();
     renderMarkers();
+    if (routePlan.value) drawRouteOnMap();
   } catch (e) {
     mapError.value = (e as Error).message;
   } finally {
@@ -246,6 +588,24 @@ function refreshSelected() {
 }
 async function findMe() {
   if (!session.config) return;
+  if (typeof window !== "undefined" && window.isSecureContext === false) {
+    if (map && !mapError.value) {
+      pickingOrigin.value = false;
+      pickingMyPosition.value = !pickingMyPosition.value;
+      notify(
+        pickingMyPosition.value
+          ? "局域网访问限制自动定位：请直接在地图上轻点你所在的位置。"
+          : "已取消地图选点定位。",
+        "info",
+      );
+    } else {
+      notify(
+        "局域网访问限制自动定位，可在上方选择校区浏览附近摊位。",
+        "info",
+      );
+    }
+    return;
+  }
   locating.value = true;
   try {
     filters.position = await locate(session.config);
@@ -266,6 +626,28 @@ async function findMe() {
     locating.value = false;
   }
 }
+watch(
+  () => [
+    routeTarget.value?.lat,
+    routeTarget.value?.lng,
+    routeTarget.value?.name,
+    activeOrigin.value?.key,
+    activeOrigin.value?.lat,
+    activeOrigin.value?.lng,
+  ],
+  () => {
+    if (routeTarget.value && selectedId.value !== null) {
+      clearSelection();
+    }
+    if (routeTarget.value && window.matchMedia?.("(max-width: 767px)").matches) {
+      void nextTick(() => {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      });
+    }
+    void updateWalkingRoute();
+  },
+  { immediate: true },
+);
 watch(stalls, () => {
   // A summary cannot update arrival photos, notes or closing time. Refresh the
   // complete selected record instead of combining different location snapshots.
@@ -320,6 +702,7 @@ onMounted(init);
 onUnmounted(() => {
   unmounted = true;
   selectionController?.abort();
+  routeController?.abort();
   map?.destroy();
 });
 </script>
@@ -451,8 +834,118 @@ onUnmounted(() => {
           </div>
         </div>
       </aside>
-      <section class="map-canvas" aria-label="摊位地图">
+      <section
+        class="map-canvas"
+        :class="{ 'has-active-route': !!routeTarget, 'is-picking-point': pickingOrigin || pickingMyPosition }"
+        aria-label="摊位地图"
+      >
         <div ref="mapNode" class="map-container"></div>
+        <section
+          v-if="routeTarget"
+          class="route-planner-card"
+          aria-label="站内步行路线"
+        >
+          <div class="route-planner-head">
+            <div class="route-planner-title">
+              <span class="route-badge"><Navigation :size="14" />站内步行路线</span>
+              <h2>前往「{{ routeTarget.name }}」</h2>
+              <p v-if="routeTarget.address" class="route-dest-address">
+                {{ routeTarget.address }}
+              </p>
+            </div>
+            <button
+              type="button"
+              class="route-close-btn"
+              aria-label="关闭路线指引"
+              @click="closeRoute"
+            >
+              <X :size="16" />
+            </button>
+          </div>
+
+          <div class="route-origins" role="group" aria-label="选择步行起点">
+            <span class="route-origins-label">起点：</span>
+            <button
+              v-for="preset in originPresets"
+              :key="preset.key"
+              type="button"
+              :class="[
+                'route-origin-chip',
+                { active: activeOrigin?.key === preset.key && !pickingOrigin },
+              ]"
+              @click="selectOrigin(preset.key)"
+            >
+              {{ preset.label }}
+            </button>
+            <button
+              v-if="!mapError"
+              type="button"
+              :class="['route-origin-chip', 'pick-chip', { active: pickingOrigin }]"
+              @click="togglePickOrigin"
+            >
+              <Compass :size="13" />{{ pickingOrigin ? "轻点地图选起点…" : "点图选起点" }}
+            </button>
+          </div>
+
+          <div v-if="routeLoading" class="route-metrics" role="status">
+            正在计算校园步行路线…
+          </div>
+          <div v-else-if="routePlan" class="route-metrics">
+            <strong>
+              {{
+                routePlan.mode === "walking"
+                  ? `步行约 ${routePlan.distanceMeters} 米 · 约 ${routePlan.durationMinutes} 分钟`
+                  : `直线约 ${routePlan.distanceMeters} 米 · 预计步行 ${routePlan.durationMinutes} 分钟（${routePlan.bearing}）`
+              }}
+            </strong>
+            <small>
+              从「{{ activeOrigin?.label || "校区起点" }}」出发 · 无需跳转外部 App
+            </small>
+          </div>
+
+          <details
+            v-if="routePlan?.steps.length"
+            class="route-steps-details"
+          >
+            <summary>
+              <span>查看分段步行指引（{{ routePlan.steps.length }} 段）</span>
+              <ChevronDown :size="15" />
+            </summary>
+            <ol class="route-steps-list">
+              <li v-for="(step, idx) in routePlan.steps" :key="idx">
+                <span>{{ step.instruction }}</span>
+                <small v-if="step.distance">{{ step.distance }}米</small>
+              </li>
+            </ol>
+          </details>
+
+          <div class="route-planner-actions">
+            <RouterLink
+              v-if="routeTarget.stallId"
+              :to="`/stalls/${routeTarget.stallId}`"
+              class="btn btn-secondary"
+            >
+              <Store :size="15" />返回摊位
+            </RouterLink>
+            <button
+              type="button"
+              class="btn btn-ghost"
+              @click="copyRouteDestination"
+            >
+              <Check v-if="routeCopied" :size="15" />
+              <Copy v-else :size="15" />
+              {{ routeCopied ? "已复制位置" : "复制地址" }}
+            </button>
+          </div>
+        </section>
+        <p
+          v-if="pickingMyPosition && !routeTarget"
+          class="map-pick-banner"
+          role="status"
+        >
+          <Compass :size="15" />请在地图上轻点你所在的位置计算距离
+          <button type="button" @click="pickingMyPosition = false">取消</button>
+        </p>
         <div v-if="mapError" class="map-unavailable">
           <MapIcon :size="23" aria-hidden="true" />
           <div>
@@ -470,7 +963,7 @@ onUnmounted(() => {
         <div v-if="mapLoading" class="map-loader">
           <span class="spinner"></span><span>正在铺开烟火地图…</span>
         </div>
-        <div v-if="!mapError" class="map-legend">
+        <div v-if="!mapError && !routeTarget" class="map-legend">
           <span class="legend-dot"></span>出摊中<span
             class="legend-dot muted-dot"
           ></span
@@ -531,11 +1024,16 @@ onUnmounted(() => {
         </div>
       </section>
     </div>
-    <p class="map-footnote">
-      <Clock3
-        :size="12"
-      />营业位置由商家确认更新，出发前请留意最新状态。距离为直线距离，实际路程请以导航为准。
-    </p>
+    <details class="map-footnote-details">
+      <summary>
+        <Clock3 :size="13" />
+        <span>位置更新与距离计算说明</span>
+        <ChevronDown :size="14" />
+      </summary>
+      <p class="map-footnote">
+        营业位置由商家每次出摊确认更新，出发前请留意最新状态；列表距离按直线估算，点击「查看路线」可在站内查看步行路线。
+      </p>
+    </details>
   </div>
 </template>
 <style scoped>
@@ -849,13 +1347,241 @@ onUnmounted(() => {
   flex: 1;
   padding: 8px 12px;
 }
-.map-footnote {
-  margin-top: 15px;
+.map-canvas.is-picking-point .map-container {
+  cursor: crosshair;
+}
+.route-planner-card {
+  position: absolute;
+  left: 18px;
+  top: 18px;
+  z-index: 4;
+  width: min(392px, calc(100% - 84px));
+  max-height: calc(100% - 36px);
+  overflow-y: auto;
+  border-radius: 16px;
+  background: rgba(255, 252, 246, 0.97);
+  backdrop-filter: blur(10px);
+  border: 1px solid #e7d5bd;
+  box-shadow: 0 12px 32px rgba(56, 36, 18, 0.14);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.map-fallback .route-planner-card {
+  position: relative;
+  left: auto;
+  top: auto;
+  width: calc(100% - 32px);
+  max-width: 760px;
+  max-height: none;
+  margin: 14px auto;
+}
+.route-planner-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.route-planner-title {
+  min-width: 0;
+}
+.route-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #b45118;
+  background: #fdead9;
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+.route-planner-title h2 {
+  font-size: 16px;
+  margin: 6px 0 2px;
+  color: #35261a;
+  overflow-wrap: anywhere;
+}
+.route-dest-address {
+  margin: 0;
+  font-size: 12px;
+  color: #7b6651;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.route-close-btn {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  color: #7b6651;
+  background: #f6ede0;
+}
+.route-origins {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
-  color: #a19581;
+}
+.route-origins-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #7d6751;
+}
+.route-origin-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 38px;
+  padding: 6px 11px;
+  border-radius: 999px;
+  border: 1px solid #e4d4be;
+  background: #fffdf9;
+  color: #6b5540;
+  font-size: 12px;
+  font-weight: 500;
+}
+.route-origin-chip.active {
+  background: #d95f18;
+  border-color: #d95f18;
+  color: #fff;
+  font-weight: 600;
+}
+.route-origin-chip.pick-chip {
+  border-style: dashed;
+}
+.route-metrics {
+  background: #fbf3e6;
+  border: 1px solid #ecdac2;
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 13px;
+  color: #6f563e;
+}
+.route-metrics strong {
+  font-size: 14px;
+  color: #8f3e12;
+}
+.route-metrics small {
   font-size: 11px;
+  color: #88725b;
+}
+.route-steps-details {
+  border: 1px solid #eadbc7;
+  border-radius: 12px;
+  background: #fffdf9;
+  padding: 0 12px;
+}
+.route-steps-details summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 44px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: #6c543d;
+}
+.route-steps-details summary::-webkit-details-marker {
+  display: none;
+}
+.route-steps-details[open] summary svg {
+  transform: rotate(180deg);
+}
+.route-steps-list {
+  margin: 0;
+  padding: 2px 0 12px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px dashed #eadbc7;
+}
+.route-steps-list li {
+  font-size: 12px;
+  color: #5b4735;
+  line-height: 1.55;
+}
+.route-steps-list small {
+  margin-left: 6px;
+  color: #937b63;
+}
+.route-planner-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.route-planner-actions .btn {
+  min-height: 44px;
+  flex: 1;
+  font-size: 12px;
+  padding: 8px 12px;
+}
+.map-pick-banner {
+  position: absolute;
+  left: 16px;
+  top: 16px;
+  right: 70px;
+  z-index: 4;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(53, 38, 26, 0.9);
+  color: #fffaf2;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.map-pick-banner button {
+  margin-left: auto;
+  min-height: 34px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-size: 12px;
+}
+.map-footnote-details {
+  margin-top: 14px;
+  border: 1px solid #eadfce;
+  border-radius: 12px;
+  background: #fbf7f0;
+  padding: 0 14px;
+}
+.map-footnote-details summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 44px;
+  cursor: pointer;
+  color: #877560;
+  font-size: 12px;
+  font-weight: 500;
+}
+.map-footnote-details summary::-webkit-details-marker {
+  display: none;
+}
+.map-footnote-details summary span {
+  flex: 1;
+}
+.map-footnote-details[open] summary svg:last-child {
+  transform: rotate(180deg);
+}
+.map-footnote {
+  margin: 0;
+  padding: 0 0 12px;
+  color: #8c7b66;
+  font-size: 12px;
+  line-height: 1.65;
 }
 @media (max-width: 1023px) {
   .map-layout {
@@ -906,6 +1632,38 @@ onUnmounted(() => {
     height: auto;
     min-height: 0;
     box-shadow: none;
+  }
+  .map-canvas.has-active-route {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    height: auto;
+    min-height: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    overflow: visible;
+  }
+  .map-canvas.has-active-route .map-container {
+    position: relative;
+    height: 280px;
+    border-radius: 18px;
+    overflow: hidden;
+    border: 1px solid #e7dcc9;
+    box-shadow: 0 10px 26px rgba(60, 37, 20, 0.07);
+  }
+  .map-canvas.has-active-route .route-planner-card {
+    position: relative;
+    left: auto;
+    top: auto;
+    width: 100%;
+    max-height: none;
+    margin: 0;
+  }
+  .route-origin-chip {
+    min-height: 44px;
+    padding: 8px 13px;
   }
   .map-sidebar {
     border: 0;
@@ -1051,5 +1809,23 @@ onUnmounted(() => {
   border: 3px solid #fff;
   border-radius: 50%;
   box-shadow: 0 0 0 7px #4296d926;
+}
+.route-endpoint-pin {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 800;
+  color: #fff;
+  border: 2.5px solid #fffaf2;
+  box-shadow: 0 4px 12px rgba(48, 28, 12, 0.28);
+}
+.route-start-pin {
+  background: #457b59;
+}
+.route-end-pin {
+  background: #d95f18;
 }
 </style>

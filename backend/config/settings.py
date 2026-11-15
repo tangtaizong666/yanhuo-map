@@ -129,7 +129,8 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'anon': '1200/hour',
         'user': '6000/hour',
-        'auth': '300/hour' if DEMO_MODE and not PRODUCTION else '30/hour',
+        'auth': '600/hour' if DEMO_MODE and not PRODUCTION else '30/hour',
+        'captcha': '600/hour' if DEMO_MODE and not PRODUCTION else '120/hour',
         'upload': '600/hour' if DEMO_MODE and not PRODUCTION else '60/hour',
         'ai_draft': '180/hour' if DEMO_MODE and not PRODUCTION else '30/hour',
     },

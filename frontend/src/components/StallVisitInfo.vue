@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, watch } from "vue";
+import { RouterLink } from "vue-router";
 import {
   AlertCircle,
   Check,
@@ -255,13 +256,16 @@ onUnmounted(reset);
       <figcaption>商家提供的认摊照片 · 非实时画面</figcaption>
     </figure>
     <div class="visit-actions">
-      <a
+      <RouterLink
         v-if="validLocation"
-        :href="routeUrl(stall.latitude, stall.longitude, stall.name)"
-        target="_blank"
-        rel="noopener"
+        :to="
+          routeUrl(stall.latitude, stall.longitude, stall.name, {
+            stallId: stall.id,
+            address: stall.address,
+          })
+        "
         @click="directions"
-        ><Navigation :size="16" />查看路线</a
+        ><Navigation :size="16" />查看路线</RouterLink
       >
       <button
         v-if="condensed"

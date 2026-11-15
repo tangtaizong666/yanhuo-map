@@ -291,6 +291,22 @@ export function confirmedText(value: string | null) {
       ? `${m} 分钟前确认位置`
       : `${Math.floor(m / 60)} 小时前确认位置`;
 }
-export function routeUrl(lat: number, lng: number, name: string) {
-  return `https://uri.amap.com/navigation?to=${lng},${lat},${encodeURIComponent(name)}&mode=walk&coordinate=gaode&callnative=0`;
+export function routeUrl(
+  lat: number,
+  lng: number,
+  name: string,
+  extra?: { stallId?: number | null; address?: string | null },
+) {
+  const params = [
+    "route=1",
+    `to=${lng},${lat}`,
+    `name=${encodeURIComponent(name || "校园取餐点")}`,
+  ];
+  if (extra?.stallId != null && Number.isFinite(extra.stallId)) {
+    params.push(`stall=${extra.stallId}`);
+  }
+  if (extra?.address) {
+    params.push(`addr=${encodeURIComponent(extra.address)}`);
+  }
+  return `/map?${params.join("&")}`;
 }

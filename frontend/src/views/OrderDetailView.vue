@@ -20,7 +20,7 @@ import {
   Wallet,
   X,
 } from "lucide-vue-next";
-import { api, ApiError, formatTime, money, statusText } from "../lib/api";
+import { api, ApiError, formatTime, money, routeUrl, statusText } from "../lib/api";
 import { useSession } from "../stores/session";
 import { notify } from "../lib/notify";
 import ReorderDialog from "../components/ReorderDialog.vue";
@@ -295,7 +295,15 @@ const subtitle = computed(
 );
 const navigationUrl = computed(() =>
   order.value?.pickup_latitude != null && order.value?.pickup_longitude != null
-    ? `https://uri.amap.com/navigation?to=${order.value.pickup_longitude},${order.value.pickup_latitude},${encodeURIComponent(order.value.pickup_address)}&mode=walk&coordinate=gaode&callnative=0`
+    ? routeUrl(
+        order.value.pickup_latitude,
+        order.value.pickup_longitude,
+        order.value.stall_name || "取餐摊位",
+        {
+          stallId: order.value.stall_id,
+          address: order.value.pickup_address,
+        },
+      )
     : "",
 );
 async function load() {
@@ -579,13 +587,11 @@ async function submitReview() {
                   <h3>{{ order.pickup_address }}</h3>
                 </div>
               </div>
-              <a
+              <RouterLink
                 v-if="navigationUrl"
-                :href="navigationUrl"
-                target="_blank"
-                rel="noopener noreferrer"
+                :to="navigationUrl"
                 class="btn btn-secondary"
-                ><Navigation :size="15" /> 路线</a
+                ><Navigation :size="15" /> 路线</RouterLink
               >
             </div>
             <p

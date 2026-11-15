@@ -541,7 +541,7 @@ async function confirmDeleteProduct() {
           return;
         }
         deleteUncertain.value = false;
-        deleteError.value = "当前账号已无该摊位操作权限，无法确认删除结果。";
+        closeDeleteConfirm(true);
         notify("当前账号已无该摊位操作权限，无法确认删除结果。", "error");
         emit("refresh");
         return;

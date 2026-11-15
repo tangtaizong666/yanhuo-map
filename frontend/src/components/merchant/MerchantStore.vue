@@ -249,8 +249,30 @@ async function updateStatus(
     busy.value = "";
   }
 }
+function applyAreaPreset(item: {
+  name: string;
+  latitude: number;
+  longitude: number;
+}) {
+  location.latitude = item.latitude.toFixed(6);
+  location.longitude = item.longitude.toFixed(6);
+  if (!location.address.trim()) {
+    location.address = `${item.name}便民摊位点`;
+  }
+  notify(`已填入「${item.name}」坐标，请补充具体摊位位置描述后保存`, "info");
+}
 async function position() {
   if (busy.value || !session.config) return;
+  if (
+    typeof window !== "undefined" &&
+    window.isSecureContext === false &&
+    session.config.amap_key
+  ) {
+    error.value =
+      "局域网 HTTP 访问下浏览器限制自动定位；已为你展开地图选点，也可点选下方校区常用坐标。";
+    await pickLocation();
+    return;
+  }
   busy.value = "location";
   error.value = "";
   try {
@@ -426,6 +448,24 @@ async function upload(
         >
           在地图上选择位置
         </button>
+        <div
+          v-if="session.config?.areas?.length"
+          class="campus-preset-row"
+          role="group"
+          aria-label="快速填入校区常用坐标"
+        >
+          <span>常用校区点位：</span>
+          <button
+            v-for="item in session.config.areas"
+            :key="item.id"
+            type="button"
+            class="campus-preset-chip"
+            :disabled="!!busy"
+            @click="applyAreaPreset(item)"
+          >
+            {{ item.name.replace(/^哈尔滨理工大学南区[·\s]*/, "") }}
+          </button>
+        </div>
         <div v-if="mapOpen" class="map-picker">
           <div
             ref="mapElement"
@@ -700,6 +740,29 @@ async function upload(
 }
 .map-picker {
   margin-top: 16px;
+}
+.campus-preset-row {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  color: #7c654d;
+}
+.campus-preset-chip {
+  min-height: 44px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid #e4d4be;
+  background: #fdf9f2;
+  color: #6b5239;
+  font-size: 12px;
+  font-weight: 500;
+}
+.campus-preset-chip:hover:not(:disabled) {
+  border-color: #c98b58;
+  background: #f8eedf;
 }
 .map-canvas {
   height: 280px;

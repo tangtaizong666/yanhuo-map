@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   ArrowLeft,
@@ -7,13 +7,14 @@ import {
   Flame,
   Heart,
   MapPin,
+  RefreshCw,
   ShieldCheck,
   Store,
   ClipboardList,
   ChartNoAxesCombined,
   GraduationCap,
 } from "lucide-vue-next";
-import { api } from "../lib/api";
+import { ApiError, api } from "../lib/api";
 import { useSession } from "../stores/session";
 import { notify } from "../lib/notify";
 import { completePendingFollow } from "../lib/discovery";
@@ -31,8 +32,120 @@ const username = ref("");
 const password = ref("");
 const confirmation = ref("");
 const displayName = ref("");
+const phone = ref("");
+const captchaId = ref("");
+const captchaSvg = ref("");
+const captchaInput = ref("");
+const demoCaptchaCode = ref("");
+const captchaLoading = ref(false);
+const verificationCode = ref("");
+const demoSmsCode = ref("");
+const sendingCode = ref(false);
+const smsCooldown = ref(0);
 const busy = ref(false);
 const error = ref("");
+let cooldownTimer: ReturnType<typeof setInterval> | null = null;
+
+function clearCooldown() {
+  if (cooldownTimer) {
+    clearInterval(cooldownTimer);
+    cooldownTimer = null;
+  }
+}
+function startCooldown(seconds: number) {
+  clearCooldown();
+  smsCooldown.value = Math.max(0, Math.floor(seconds));
+  if (smsCooldown.value <= 0) return;
+  cooldownTimer = setInterval(() => {
+    if (smsCooldown.value <= 1) {
+      smsCooldown.value = 0;
+      clearCooldown();
+    } else {
+      smsCooldown.value -= 1;
+    }
+  }, 1000);
+}
+onUnmounted(clearCooldown);
+
+function cleanedPhone() {
+  return phone.value.replace(/[\s-]/g, "").replace(/^\+86/, "");
+}
+
+async function loadCaptcha() {
+  if (captchaLoading.value) return;
+  captchaLoading.value = true;
+  try {
+    const res = await api<{
+      captcha_id: string;
+      svg: string;
+      demo_captcha_code?: string;
+    }>("/auth/captcha");
+    captchaId.value = res.captcha_id || "";
+    captchaSvg.value = res.svg || "";
+    demoCaptchaCode.value = res.demo_captcha_code || "";
+    captchaInput.value = "";
+  } catch {
+    captchaId.value = "";
+    captchaSvg.value = "";
+    demoCaptchaCode.value = "";
+  } finally {
+    captchaLoading.value = false;
+  }
+}
+
+watch(mode, (next) => {
+  if (next === "register" && !captchaSvg.value) {
+    void loadCaptcha();
+  }
+});
+
+async function requestSmsCode() {
+  if (sendingCode.value || busy.value || smsCooldown.value > 0) return;
+  error.value = "";
+  const normalizedPhone = cleanedPhone();
+  if (!/^1[3-9]\d{9}$/.test(normalizedPhone)) {
+    error.value = "请先填写有效的 11 位中国大陆手机号。";
+    return;
+  }
+  const codeText = captchaInput.value.trim().toUpperCase();
+  if (!captchaId.value || !/^[A-Z0-9]{4}$/.test(codeText)) {
+    error.value = "请先填写 4 位图形校验码。";
+    if (!captchaId.value) void loadCaptcha();
+    return;
+  }
+  sendingCode.value = true;
+  try {
+    const res = await api<{
+      sent: boolean;
+      masked_phone: string;
+      cooldown_seconds: number;
+      demo_code?: string;
+    }>("/auth/register/code", {
+      method: "POST",
+      body: {
+        phone: normalizedPhone,
+        captcha_id: captchaId.value,
+        captcha_code: codeText,
+      },
+    });
+    startCooldown(res.cooldown_seconds || 60);
+    demoSmsCode.value = res.demo_code || "";
+    notify(
+      res.demo_code
+        ? `已生成 ${res.masked_phone} 的演示验证码，可点下方一键填入`
+        : `验证码已发送至 ${res.masked_phone}`,
+      "success",
+    );
+  } catch (e) {
+    error.value = (e as Error).message;
+    if (!(e instanceof ApiError && e.status === 429 && e.code === "sms_cooldown")) {
+      void loadCaptcha();
+    }
+  } finally {
+    sendingCode.value = false;
+  }
+}
+
 const merchantLogin = computed(
   () =>
     route.query.role === "merchant" ||
@@ -62,6 +175,15 @@ async function fillDemo(merchant: boolean) {
   username.value = merchant ? "vendor" : "student";
   password.value = "demo12345";
 }
+function fillDemoVerification() {
+  if (!/^1[3-9]\d{9}$/.test(cleanedPhone())) {
+    const suffix = String(Math.floor(10000000 + Math.random() * 89999999));
+    phone.value = `138${suffix}`;
+  }
+  if (demoCaptchaCode.value) {
+    captchaInput.value = demoCaptchaCode.value;
+  }
+}
 async function submit() {
   if (busy.value) return;
   error.value = "";
@@ -69,16 +191,35 @@ async function submit() {
     error.value = "两次输入的密码不一致，请重新确认。";
     return;
   }
+  const normalizedPhone = cleanedPhone();
+  if (mode.value === "register") {
+    if (!/^1[3-9]\d{9}$/.test(normalizedPhone)) {
+      error.value = "请填写有效的 11 位中国大陆手机号完成验证。";
+      return;
+    }
+    if (!/^\d{6}$/.test(verificationCode.value.trim())) {
+      error.value = "请先通过图形校验获取并填写 6 位手机验证码。";
+      return;
+    }
+  }
   busy.value = true;
   session.beginIdentityChange();
   try {
     await api(`/auth/${mode.value}`, {
       method: "POST",
-      body: {
-        username: username.value.trim(),
-        password: password.value,
-        display_name: displayName.value.trim(),
-      },
+      body:
+        mode.value === "register"
+          ? {
+              username: username.value.trim(),
+              password: password.value,
+              display_name: displayName.value.trim(),
+              phone: normalizedPhone,
+              verification_code: verificationCode.value.trim(),
+            }
+          : {
+              username: username.value.trim(),
+              password: password.value,
+            },
     });
     await session.refreshUser();
     session.setConsumerPreview(false);
@@ -238,6 +379,92 @@ async function submit() {
               maxlength="30"
               required
           /></label>
+          <template v-if="mode === 'register'">
+            <label class="field"
+              >手机号<input
+                class="input"
+                type="tel"
+                inputmode="numeric"
+                v-model="phone"
+                autocomplete="tel"
+                placeholder="输入 11 位中国大陆手机号"
+                maxlength="11"
+            /></label>
+            <div class="field verify-field">
+              <span class="verify-label">图形校验码</span>
+              <div class="verify-row">
+                <input
+                  class="input verify-input"
+                  v-model="captchaInput"
+                  aria-label="图形校验码"
+                  placeholder="输入右侧 4 位字符"
+                  maxlength="4"
+                  autocapitalize="characters"
+                  autocomplete="off"
+                />
+                <button
+                  type="button"
+                  class="captcha-box"
+                  :disabled="captchaLoading"
+                  aria-label="刷新图形校验码"
+                  title="点击换一张"
+                  @click="loadCaptcha"
+                >
+                  <img
+                    v-if="captchaSvg"
+                    :src="captchaSvg"
+                    alt="图形校验码图片"
+                    width="132"
+                    height="44"
+                  />
+                  <span v-else class="captcha-fallback">
+                    <RefreshCw :size="14" />点此加载
+                  </span>
+                </button>
+              </div>
+            </div>
+            <div class="field verify-field">
+              <span class="verify-label">手机验证码</span>
+              <div class="verify-row">
+                <input
+                  class="input verify-input"
+                  inputmode="numeric"
+                  v-model="verificationCode"
+                  aria-label="手机验证码"
+                  placeholder="输入 6 位验证码"
+                  maxlength="6"
+                  autocomplete="one-time-code"
+                />
+                <button
+                  type="button"
+                  class="btn btn-secondary send-code-btn"
+                  :disabled="sendingCode || smsCooldown > 0 || busy"
+                  @click="requestSmsCode"
+                >
+                  {{
+                    sendingCode
+                      ? "发送中…"
+                      : smsCooldown > 0
+                        ? `${smsCooldown}s 后重发`
+                        : "获取验证码"
+                  }}
+                </button>
+              </div>
+              <div
+                v-if="demoSmsCode"
+                class="demo-sms-banner"
+                role="status"
+              >
+                <span>演示环境验证码：<strong>{{ demoSmsCode }}</strong></span>
+                <button
+                  type="button"
+                  @click="verificationCode = demoSmsCode"
+                >
+                  一键填入
+                </button>
+              </div>
+            </div>
+          </template>
           <label class="field"
             >密码<input
               class="input"
@@ -295,12 +522,16 @@ async function submit() {
           {{
             merchantLogin
               ? "申请审核、公开展示与交易资格分别核验，注册不会自动开通接单。"
-              : "无需学号或学生证。游客也可以浏览摊位。"
+              : "注册需完成图形校验与手机号验证（一人一号防刷，不收集学号或宿舍号）；游客也可直接浏览摊位。"
           }}
         </p>
         <div v-if="session.config?.demo_mode" class="demo-accounts">
-          <span>演示环境 · 体验账号</span>
-          <div>
+          <span>{{
+            mode === "register"
+              ? "演示环境 · 注册验证辅助"
+              : "演示环境 · 体验账号"
+          }}</span>
+          <div v-if="mode === 'login'">
             <button
               v-if="!merchantLogin"
               type="button"
@@ -309,7 +540,20 @@ async function submit() {
               填入学生账号</button
             ><button type="button" @click="fillDemo(true)">填入商家账号</button>
           </div>
-          <small>两个演示账号的密码均为 demo12345</small>
+          <div v-else>
+            <button
+              v-if="demoCaptchaCode"
+              type="button"
+              @click="fillDemoVerification"
+            >
+              填入测试手机与校验码</button
+            ><button type="button" @click="fillDemo(false)">改用现成学生账号</button>
+          </div>
+          <small>{{
+            mode === "register"
+              ? "演示环境未接入付费短信网关，通过图形校验后将直接生成可核验的 6 位验证码"
+              : "两个演示账号的密码均为 demo12345"
+          }}</small>
         </div>
         <RouterLink to="/ops/login" class="ops-entry-link">
           <ShieldCheck :size="15" /> 平台运营人员？前往管理员登录
@@ -502,7 +746,87 @@ async function submit() {
   margin: 24px 0 0;
 }
 .auth-form .stack {
-  gap: 17px;
+  gap: 15px;
+}
+.verify-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.verify-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: inherit;
+}
+.verify-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+.verify-input {
+  flex: 1;
+  min-width: 0;
+}
+.captcha-box {
+  width: 132px;
+  min-height: 44px;
+  padding: 0;
+  border-radius: 10px;
+  border: 1px solid #e5d2ba;
+  background: #fff6ea;
+  overflow: hidden;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.captcha-box img {
+  display: block;
+  width: 132px;
+  height: 44px;
+}
+.captcha-fallback {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: #8c6a46;
+}
+.send-code-btn {
+  flex-shrink: 0;
+  min-height: 44px;
+  min-width: 116px;
+  padding: 0 14px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.demo-sms-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: #fdf4e5;
+  border: 1px solid #ebd5b3;
+  font-size: 12px;
+  color: #7c5834;
+}
+.demo-sms-banner strong {
+  font-size: 14px;
+  letter-spacing: 1.5px;
+  color: #a94717;
+  font-variant-numeric: tabular-nums;
+}
+.demo-sms-banner button {
+  min-height: 36px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: #fff;
+  border: 1px solid #dfc39d;
+  color: #9b4819;
+  font-size: 12px;
+  font-weight: 600;
 }
 @media (max-width: 760px) {
   .auth-page {

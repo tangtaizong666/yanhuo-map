@@ -46,6 +46,11 @@ export function loadAMap(config: Config) {
 export async function locate(
   config: Config,
 ): Promise<{ lat: number; lng: number }> {
+  if (typeof window !== "undefined" && window.isSecureContext === false) {
+    throw new Error(
+      "局域网 HTTP 访问下浏览器限制自动定位；请点选校区起点，或直接在地图上轻点你的位置。",
+    );
+  }
   const AMap = await loadAMap(config);
   return new Promise((resolve, reject) => {
     const geo = new AMap.Geolocation({

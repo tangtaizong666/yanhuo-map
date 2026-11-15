@@ -4,6 +4,7 @@ import { useRouter } from "vue-router";
 import {
   ArrowUpRight,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   Heart,
   LogOut,
@@ -324,6 +325,12 @@ async function deleteAccount() {
             }}
             <Star :size="11" fill="currentColor"
           /></span>
+          <span
+            v-if="session.user.masked_phone"
+            class="verified-phone-pill"
+          >
+            <ShieldCheck :size="12" />已验证手机 {{ session.user.masked_phone }}
+          </span>
           <div class="profile-stats">
             <button @click="section = 'follows'" :aria-busy="followsLoading">
               <strong>{{
@@ -517,52 +524,62 @@ async function deleteAccount() {
               </div>
             </form>
           </section>
-          <section class="card settings-card">
-            <h3>修改密码</h3>
-            <p class="muted">修改密码后，请重新生成并保存账号恢复码。</p>
-            <form @submit.prevent="changePassword" class="stack">
-              <label class="field"
-                >当前密码<input
-                  type="password"
-                  class="input"
-                  v-model="oldPassword"
-                  autocomplete="current-password"
-                  required /></label
-              ><label class="field"
-                >新密码<input
-                  type="password"
-                  class="input"
-                  v-model="newPassword"
-                  autocomplete="new-password"
-                  minlength="8"
-                  maxlength="128"
-                  required
-                  placeholder="至少 8 位字符" /></label
-              ><label class="field"
-                >再次输入新密码<input
-                  type="password"
-                  class="input"
-                  v-model="passwordConfirm"
-                  autocomplete="new-password"
-                  minlength="8"
-                  required
-              /></label>
-              <div>
-                <button class="btn btn-secondary" :disabled="busy">
-                  更新密码
-                </button>
-              </div>
-            </form>
-          </section>
-          <section class="card settings-card">
-            <h3>账号找回</h3>
-            <p class="muted">
-              先保存一次性恢复码，忘记密码时可用它设置新密码。
-            </p>
-            <RouterLink class="btn btn-secondary" to="/account-security"
-              >管理恢复码</RouterLink
-            >
-          </section></template
+          <details class="card settings-card settings-disclosure">
+            <summary>
+              <span>修改密码<small>更新账号登录密码</small></span>
+              <ChevronDown :size="17" class="settings-chevron" />
+            </summary>
+            <div class="settings-disclosure-body">
+              <p class="muted">修改密码后，请重新生成并保存账号恢复码。</p>
+              <form @submit.prevent="changePassword" class="stack">
+                <label class="field"
+                  >当前密码<input
+                    type="password"
+                    class="input"
+                    v-model="oldPassword"
+                    autocomplete="current-password"
+                    required /></label
+                ><label class="field"
+                  >新密码<input
+                    type="password"
+                    class="input"
+                    v-model="newPassword"
+                    autocomplete="new-password"
+                    minlength="8"
+                    maxlength="128"
+                    required
+                    placeholder="至少 8 位字符" /></label
+                ><label class="field"
+                  >再次输入新密码<input
+                    type="password"
+                    class="input"
+                    v-model="passwordConfirm"
+                    autocomplete="new-password"
+                    minlength="8"
+                    required
+                /></label>
+                <div>
+                  <button class="btn btn-secondary" :disabled="busy">
+                    更新密码
+                  </button>
+                </div>
+              </form>
+            </div>
+          </details>
+          <details class="card settings-card settings-disclosure">
+            <summary>
+              <span>账号找回<small>管理一次性安全恢复码</small></span>
+              <ChevronDown :size="17" class="settings-chevron" />
+            </summary>
+            <div class="settings-disclosure-body">
+              <p class="muted">
+                先保存一次性恢复码，忘记密码时可用它设置新密码。
+              </p>
+              <RouterLink class="btn btn-secondary" to="/account-security"
+                >管理恢复码</RouterLink
+              >
+            </div>
+          </details></template
         >
         <template v-else-if="section === 'feedback'"
           ><div class="section-heading">
@@ -731,6 +748,19 @@ async function deleteAccount() {
   color: #b99564;
   font-size: 10px;
   margin-top: 12px;
+}
+.verified-phone-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 8px auto 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #edf5ea;
+  border: 1px solid #d3e5cd;
+  color: #3f6a45;
+  font-size: 11px;
+  font-weight: 600;
 }
 .profile-stats {
   display: flex;
@@ -950,6 +980,44 @@ async function deleteAccount() {
 .settings-card {
   padding: 28px;
   margin-bottom: 22px;
+}
+.settings-disclosure {
+  padding: 0 24px;
+}
+.settings-disclosure > summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 64px;
+  padding: 14px 0;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 600;
+  color: #3b2d1f;
+}
+.settings-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+.settings-disclosure > summary small {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 400;
+  color: #8b7862;
+}
+.settings-chevron {
+  flex-shrink: 0;
+  color: #9b8268;
+  transition: transform 0.16s ease;
+}
+.settings-disclosure[open] .settings-chevron {
+  transform: rotate(180deg);
+}
+.settings-disclosure-body {
+  padding: 16px 0 24px;
+  border-top: 1px solid #eee4d7;
 }
 .settings-card h3 {
   font-size: 16px;

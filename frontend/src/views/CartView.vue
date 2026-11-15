@@ -641,9 +641,16 @@ function acceptPrice(id: string, item: CartItem) {
             </div>
           </div>
         </div>
-        <p class="cart-local-note">
-          <Info :size="14" />餐袋保存在当前浏览器；订单提交后保存到账号。
-        </p>
+        <details class="cart-rules-disclosure">
+          <summary>
+            <Info :size="14" />
+            <span>餐袋与结算说明</span>
+            <ChevronRight :size="14" class="cart-rules-chevron" />
+          </summary>
+          <p class="cart-local-note">
+            一摊一单独立结算；餐袋不锁定库存，提交时自动核对价格与余量；餐袋保存在当前设备，下单后同步到账号。
+          </p>
+        </details>
       </aside>
     </div>
   </div>
@@ -1227,7 +1234,7 @@ function acceptPrice(id: string, item: CartItem) {
     display: none;
   }
   .cart-local-note {
-    padding: 6px 4px 15px;
+    padding: 0 0 12px;
   }
   .cart-heading {
     padding: 10px 0 23px;
@@ -1383,6 +1390,41 @@ function acceptPrice(id: string, item: CartItem) {
     padding: 4px 12px;
     font-size: 11px;
   }
+}
+.cart-rules-disclosure {
+  margin-top: 10px;
+  border: 1px solid #eadbc6;
+  border-radius: 12px;
+  background: #fbf7ef;
+  padding: 0 13px;
+}
+.cart-rules-disclosure summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 44px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #7d6750;
+  font-weight: 500;
+}
+.cart-rules-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+.cart-rules-disclosure summary span {
+  flex: 1;
+}
+.cart-rules-chevron {
+  transition: transform 0.16s ease;
+}
+.cart-rules-disclosure[open] .cart-rules-chevron {
+  transform: rotate(90deg);
+}
+.cart-rules-disclosure .cart-local-note {
+  margin: 0;
+  padding: 0 0 12px;
+  line-height: 1.65;
 }
 @media (prefers-reduced-motion: reduce) {
   .cart-food-photo img {

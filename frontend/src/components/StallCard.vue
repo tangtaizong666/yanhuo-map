@@ -3,7 +3,6 @@ import { Heart, Star, MapPin, Clock3, ArrowUpRight, Store } from "lucide-vue-nex
 import { confirmedText, statusText, money } from "../lib/api";
 import type { StallSummary as Stall } from "../lib/types";
 import { productAvailable, preparationLabel } from "../lib/availability";
-import ReceivingNotice from "./ReceivingNotice.vue";
 defineProps<{ stall: Stall; compact?: boolean; followBusy?: boolean }>();
 defineEmits<{ follow: [stall: Stall] }>();
 </script>
@@ -58,8 +57,7 @@ defineEmits<{ follow: [stall: Stall] }>();
         <MapPin :size="12" /><span>{{ stall.address }}</span>
       </div>
       <p class="prep-summary">
-        <Clock3 :size="12" />{{ preparationLabel(stall.prep_minutes)
-        }}<small>接单后更新</small>
+        <Clock3 :size="12" />{{ preparationLabel(stall.prep_minutes) }}
       </p>
       </div>
       <div
@@ -95,7 +93,6 @@ defineEmits<{ follow: [stall: Stall] }>();
           }}</span
         >
       </div>
-      <ReceivingNotice class="stall-receiving" :stall="stall" compact />
     </div>
   </article>
 </template>

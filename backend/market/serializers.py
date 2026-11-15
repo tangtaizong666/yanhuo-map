@@ -28,7 +28,10 @@ def public_payment_readiness(stall, context):
 
 def user_data(user):
     if not user or not user.is_authenticated: return None
+    from .recovery_models import VerifiedAccountContact
+    masked_phone = VerifiedAccountContact.objects.filter(user=user).values_list('masked_phone', flat=True).first()
     data = {'id': user.id, 'username': user.username, 'display_name': user.first_name or user.username,
+        'masked_phone': masked_phone,
         'is_merchant': hasattr(user, 'merchant_profile'), 'is_staff': user.is_staff,
         'merchant_application_status': getattr(getattr(user, 'merchant_application', None), 'status', None)}
     if user.is_staff:
@@ -443,9 +446,29 @@ class OrderInput(serializers.Serializer):
 
 
 class RegistrationInput(serializers.Serializer):
-    username = serializers.RegexField(r'^[a-zA-Z0-9_]{3,30}$')
+    username = serializers.RegexField(
+        r'^[a-zA-Z0-9_]{3,30}$',
+        error_messages={'invalid': '账号需为 3–30 位字母、数字或下划线。'},
+    )
     password = serializers.CharField(min_length=8, max_length=128, write_only=True, trim_whitespace=False)
-    display_name = serializers.CharField(max_length=30, required=False, allow_blank=True)
+    display_name = serializers.CharField(
+        min_length=1,
+        max_length=30,
+        trim_whitespace=True,
+        error_messages={'required': '请填写你的昵称。', 'blank': '请填写你的昵称。'},
+    )
+    phone = serializers.CharField(
+        max_length=20,
+        error_messages={'required': '请填写手机号完成验证。', 'blank': '请填写手机号完成验证。'},
+    )
+    verification_code = serializers.RegexField(
+        r'^\d{6}$',
+        error_messages={
+            'required': '请填写 6 位手机验证码。',
+            'blank': '请填写 6 位手机验证码。',
+            'invalid': '请输入 6 位数字验证码。',
+        },
+    )
 
 
 class StallCutoffInput(serializers.Serializer):

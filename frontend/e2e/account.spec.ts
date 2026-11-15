@@ -36,3 +36,30 @@ test('registration form rejects mismatching passwords before submission', async 
   await expect(page.getByRole('alert')).toHaveText('两次输入的密码不一致，请重新确认。')
   expect(registrationRequests).toBe(0)
 })
+
+test('registration requires verified phone code and completes end-to-end in UI', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/login')
+  await page.getByRole('button', { name: '注册', exact: true }).click()
+  const uniqueSuffix = `${Date.now()}`.slice(-8)
+  const username = `e2e_ui_${uniqueSuffix}`
+  await page.getByRole('textbox', { name: '账号', exact: true }).fill(username)
+  await page.getByRole('textbox', { name: '昵称', exact: true }).fill('实名验证同学')
+  await page.getByLabel('密码', { exact: true }).fill('VerifiedCampus!1')
+  await page.getByLabel('确认密码', { exact: true }).fill('VerifiedCampus!1')
+
+  // Attempting to register without phone verification is blocked immediately
+  await page.getByRole('button', { name: '创建账号' }).click()
+  await expect(page.getByRole('alert')).toContainText('11 位中国大陆手机号')
+
+  await page.getByRole('button', { name: '填入测试手机与校验码', exact: true }).click()
+  await page.getByRole('button', { name: '获取验证码', exact: true }).click()
+  await expect(page.locator('.demo-sms-banner')).toBeVisible()
+  await page.locator('.demo-sms-banner').getByRole('button', { name: '一键填入', exact: true }).click()
+  await page.getByRole('button', { name: '创建账号' }).click()
+  await expect(page).toHaveURL(/\/$/)
+  await page.goto('/me')
+  await expect(page.getByRole('heading', { name: '实名验证同学', exact: true })).toBeVisible()
+  await expect(page.locator('.verified-phone-pill')).toContainText(/\*\*\*\*/)
+  await assertNoHorizontalOverflow(page)
+})

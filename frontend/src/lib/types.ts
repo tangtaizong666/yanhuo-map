@@ -27,6 +27,7 @@ export interface User {
   id: number;
   username: string;
   display_name: string;
+  masked_phone?: string | null;
   is_merchant: boolean;
   is_staff: boolean;
   is_superuser?: boolean;

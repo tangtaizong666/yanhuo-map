@@ -127,13 +127,22 @@ watch(
     }
   },
 );
+const mobileFooter = ref(
+  typeof window !== "undefined" ? window.innerWidth <= 767 : false,
+);
+function syncFooterViewport() {
+  mobileFooter.value = window.innerWidth <= 767;
+}
 onMounted(() => {
   void load();
+  syncFooterViewport();
+  window.addEventListener("resize", syncFooterViewport);
   window.addEventListener("focus", refreshIdentity);
   document.addEventListener("visibilitychange", refreshIdentity);
   window.addEventListener("session-changed", identityChanged);
 });
 onUnmounted(() => {
+  window.removeEventListener("resize", syncFooterViewport);
   window.removeEventListener("focus", refreshIdentity);
   document.removeEventListener("visibilitychange", refreshIdentity);
   window.removeEventListener("session-changed", identityChanged);
@@ -245,19 +254,25 @@ onUnmounted(() => {
         · 校园示例环境</span
       >
     </p>
-    <div class="site-footer-links">
-      <RouterLink to="/me">帮助与反馈 <ArrowUpRight :size="13" /></RouterLink>
-      <RouterLink
-        v-if="!session.isAdmin || session.isMerchant"
-        :to="session.isMerchant ? '/merchant' : '/merchant/apply'"
-        >{{ session.isMerchant ? "商家工作台" : "我是商家，申请入驻" }}
-        <ArrowUpRight :size="13"
-      /></RouterLink>
-      <RouterLink :to="session.isAdmin ? '/ops' : '/ops/login'"
-        >{{ session.isAdmin ? "平台管理台" : "平台管理入口" }}
-        <ArrowUpRight :size="13"
-      /></RouterLink>
-    </div>
+    <details class="footer-links-disclosure" :open="!mobileFooter">
+      <summary class="footer-links-summary">
+        <span>更多入口（帮助 / 商家入驻 / 管理）</span>
+        <ChevronDown :size="14" />
+      </summary>
+      <div class="site-footer-links">
+        <RouterLink to="/me">帮助与反馈 <ArrowUpRight :size="13" /></RouterLink>
+        <RouterLink
+          v-if="!session.isAdmin || session.isMerchant"
+          :to="session.isMerchant ? '/merchant' : '/merchant/apply'"
+          >{{ session.isMerchant ? "商家工作台" : "我是商家，申请入驻" }}
+          <ArrowUpRight :size="13"
+        /></RouterLink>
+        <RouterLink :to="session.isAdmin ? '/ops' : '/ops/login'"
+          >{{ session.isAdmin ? "平台管理台" : "平台管理入口" }}
+          <ArrowUpRight :size="13"
+        /></RouterLink>
+      </div>
+    </details>
   </footer>
   <nav v-if="mainNav && consumerShell" class="mobile-nav" aria-label="底部导航">
     <RouterLink
@@ -309,6 +324,12 @@ onUnmounted(() => {
   align-items: center;
   gap: 7px;
 }
+.footer-links-disclosure {
+  display: contents;
+}
+.footer-links-summary {
+  display: none;
+}
 .site-footer-links {
   display: flex;
   flex-wrap: wrap;
@@ -344,9 +365,32 @@ onUnmounted(() => {
     height: 18px;
     font-size: 10px;
   }
+  .footer-links-disclosure {
+    display: block;
+    width: 100%;
+    border-top: 1px dashed #e6d8c5;
+    padding-top: 4px;
+  }
+  .footer-links-summary {
+    list-style: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 44px;
+    cursor: pointer;
+    font-size: 12px;
+    color: #85745f;
+  }
+  .footer-links-summary::-webkit-details-marker {
+    display: none;
+  }
+  .footer-links-disclosure[open] .footer-links-summary svg {
+    transform: rotate(180deg);
+  }
   .site-footer-links {
     width: 100%;
     justify-content: flex-start;
+    padding-bottom: 6px;
   }
   .site-footer-links a {
     margin-left: 0;

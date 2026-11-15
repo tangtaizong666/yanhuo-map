@@ -744,9 +744,12 @@ onMounted(() =>
           </button>
         </article>
       </div>
-      <p class="recent-note">
-        先看看今天的菜单、价格和库存，确认后才加入餐袋。
-      </p>
+      <details class="home-inline-disclosure">
+        <summary>再来一单说明</summary>
+        <p class="recent-note">
+          先看看今天的菜单、价格和库存，确认后才加入餐袋。
+        </p>
+      </details>
     </section>
     <section
       v-if="
@@ -770,6 +773,7 @@ onMounted(() =>
         /></RouterLink>
       </div>
       <MealBudget
+        collapsible
         :budget="mealBudget"
         :sort="mealSort"
         @update:budget="setMealBudget"
@@ -795,14 +799,17 @@ onMounted(() =>
         />
       </div>
     </section>
-    <p v-if="session.config?.demo_mode" class="image-credit-note">
-      美食与夜市照片为示例配图，不代表虚构摊位实拍。<a
-        href="/images/ATTRIBUTION.md"
-        target="_blank"
-        rel="noopener"
-        >图片来源与许可 ↗</a
-      >
-    </p>
+    <details v-if="session.config?.demo_mode" class="home-inline-disclosure credit-disclosure">
+      <summary>示例配图与许可说明</summary>
+      <p class="image-credit-note">
+        美食与夜市照片为示例配图，不代表虚构摊位实拍。<a
+          href="/images/ATTRIBUTION.md"
+          target="_blank"
+          rel="noopener"
+          >图片来源与许可 ↗</a
+        >
+      </p>
+    </details>
     <ReorderDialog
       v-if="reorderOrder"
       :key="reorderOrder.id"
@@ -1573,5 +1580,47 @@ onMounted(() =>
     font-size: 12px;
     text-align: left;
   }
+}
+.home-inline-disclosure {
+  margin-top: 10px;
+  border-radius: 12px;
+  border: 1px solid #ece0ce;
+  background: #fbf6ed;
+  padding: 0 14px;
+}
+.credit-disclosure {
+  margin-top: 22px;
+}
+.home-inline-disclosure summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 44px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  color: #84705a;
+}
+.home-inline-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+.home-inline-disclosure summary::after {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-right: 1.8px solid currentColor;
+  border-bottom: 1.8px solid currentColor;
+  transform: rotate(45deg) translateY(-2px);
+  transition: transform 0.15s ease;
+  opacity: 0.65;
+}
+.home-inline-disclosure[open] summary::after {
+  transform: rotate(-135deg) translateY(-2px);
+}
+.home-inline-disclosure .recent-note,
+.home-inline-disclosure .image-credit-note {
+  margin: 0;
+  padding: 0 0 12px;
 }
 </style>

@@ -13,6 +13,7 @@ import {
   Plus,
   Minus,
   ShoppingBag,
+  ChevronDown,
   ChevronRight,
   Store,
   Phone,
@@ -284,26 +285,43 @@ onUnmounted(() => {
                   >到摊付款</span
                 >
               </div>
-              <div
+              <details
                 v-if="
                   stall.transaction_enabled &&
                   (!mobileLayout ||
                     stall.delivery?.available ||
                     stall.delivery?.mode === 'simulation')
                 "
-                class="stall-delivery-status"
+                class="overview-more-details"
+                :open="!mobileLayout"
               >
-                <MapPin :size="16" /><strong>{{
-                  stall.delivery?.mode === "simulation"
-                    ? "模拟商家配送"
-                    : "商家配送"
-                }}</strong
-                ><span>{{
-                  stall.delivery?.available
-                    ? `配送费 ¥${money(stall.delivery.fee_cents)} · 送至校园交接点`
-                    : "暂未开放"
-                }}</span>
-              </div>
+                <summary>
+                  <span>配送与点单说明</span>
+                  <small>{{
+                    stall.delivery?.available
+                      ? `可送校园交接点 · 配送费 ¥${money(stall.delivery.fee_cents)}`
+                      : "仅自取 · 单次最多 10 份"
+                  }}</small>
+                  <ChevronDown :size="14" class="overview-more-chevron" />
+                </summary>
+                <div class="overview-more-body">
+                  <div class="stall-delivery-status">
+                    <MapPin :size="15" /><strong>{{
+                      stall.delivery?.mode === "simulation"
+                        ? "模拟商家配送"
+                        : "商家配送"
+                    }}</strong
+                    ><span>{{
+                      stall.delivery?.available
+                        ? `配送费 ¥${money(stall.delivery.fee_cents)} · 送至校园交接点`
+                        : "暂未开放 · 请到摊自取"
+                    }}</span>
+                  </div>
+                  <p class="overview-rule-line">
+                    同一摊位一单合计最多 10 份；点餐页显示状态供参考，提交订单时自动核对实时余量与价格。
+                  </p>
+                </div>
+              </details>
             </div>
           </section>
           <ReceivingNotice :stall="stall" />
@@ -368,11 +386,9 @@ onUnmounted(() => {
                     /></RouterLink>
                   </h3>
                   <p>{{ p.description }}</p>
-                  <small v-if="productAvailable(p)">{{
+                  <small v-if="productAvailable(p) && !stall.can_order">{{
                     stall.transaction_enabled
-                      ? stall.can_order
-                        ? "可选餐，提交时核对余量"
-                        : "可看餐点详情，暂不可点单"
+                      ? "可看餐点详情，暂不可点单"
                       : "今天有，到摊选购"
                   }}</small>
                   <div class="product-bottom">
@@ -1368,5 +1384,59 @@ onUnmounted(() => {
     grid-template-columns: 65px 1fr;
     font-size: 11px;
   }
+}
+.overview-more-details {
+  grid-column: 1 / -1;
+  border-top: 1px dashed #e9dcc9;
+  margin-top: 4px;
+  padding-top: 2px;
+}
+.overview-more-details summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: #6f5841;
+}
+.overview-more-details summary::-webkit-details-marker {
+  display: none;
+}
+.overview-more-details summary small {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+  color: #8f775e;
+}
+.overview-more-chevron {
+  flex-shrink: 0;
+  color: #9b8268;
+  transition: transform 0.16s ease;
+}
+.overview-more-details[open] .overview-more-chevron {
+  transform: rotate(180deg);
+}
+.overview-more-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0 8px;
+}
+.overview-more-body .stall-delivery-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+  color: #6b5640;
+}
+.overview-rule-line {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: #8a7660;
 }
 </style>

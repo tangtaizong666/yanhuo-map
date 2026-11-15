@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { RouterLink } from "vue-router";
 import {
   CheckCircle2,
   Copy,
@@ -10,7 +11,7 @@ import {
 } from "lucide-vue-next";
 import type { Order } from "../lib/types";
 import { copyText } from "../lib/engagement";
-import { money } from "../lib/api";
+import { money, routeUrl } from "../lib/api";
 import OrderContactHelp from "./OrderContactHelp.vue";
 const props = defineProps<{ order: Order; syncError?: boolean }>();
 const copied = ref("");
@@ -21,7 +22,15 @@ const phone = computed(() =>
 const navigation = computed(() =>
   Number.isFinite(props.order.pickup_latitude) &&
   Number.isFinite(props.order.pickup_longitude)
-    ? `https://uri.amap.com/navigation?to=${props.order.pickup_longitude},${props.order.pickup_latitude},${encodeURIComponent(props.order.pickup_address)}&mode=walk&coordinate=gaode&callnative=0`
+    ? routeUrl(
+        props.order.pickup_latitude!,
+        props.order.pickup_longitude!,
+        props.order.stall_name || "取餐摊位",
+        {
+          stallId: props.order.stall_id,
+          address: props.order.pickup_address,
+        },
+      )
     : "",
 );
 async function copy() {
@@ -68,12 +77,10 @@ async function copy() {
       商家当前位置有变化。本单仍保留以上位置，请先联系商家确认。
     </p>
     <div class="pickup-card-actions">
-      <a
+      <RouterLink
         v-if="navigation"
-        :href="navigation"
-        target="_blank"
-        rel="noopener noreferrer"
-        ><Navigation :size="16" />路线</a
+        :to="navigation"
+        ><Navigation :size="16" />路线</RouterLink
       ><button type="button" @click="copy"><Copy :size="16" />复制地址</button
       ><a v-if="phone" :href="`tel:${phone}`"><Phone :size="16" />联系商家</a>
     </div>

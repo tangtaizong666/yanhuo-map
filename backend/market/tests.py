@@ -282,9 +282,22 @@ class MarketTests(TestCase):
         self.assertIsNone(client.get('/api/v1/auth/me').json())
         client.get('/api/v1/auth/csrf')
         token = client.cookies['csrftoken'].value
-        response = client.post('/api/v1/auth/register', {'username': 'new_student', 'password': 'AnotherStrong123', 'display_name': '新同学'}, HTTP_X_CSRFTOKEN=token)
+        unverified = client.post('/api/v1/auth/register', {'username': 'new_student', 'password': 'AnotherStrong123', 'display_name': '新同学'}, HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(unverified.status_code, 400)
+        from .registration_verify import issue_captcha
+        captcha_id, captcha_code, _ = issue_captcha()
+        code_res = client.post('/api/v1/auth/register/code', {
+            'phone': '13800138999', 'captcha_id': captcha_id, 'captcha_code': captcha_code,
+        }, HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(code_res.status_code, 200, code_res.data)
+        sms_code = code_res.data['demo_code']
+        response = client.post('/api/v1/auth/register', {
+            'username': 'new_student', 'password': 'AnotherStrong123', 'display_name': '新同学',
+            'phone': '13800138999', 'verification_code': sms_code,
+        }, HTTP_X_CSRFTOKEN=token)
         self.assertEqual(response.status_code, 201, response.data)
         self.assertEqual(response.data['display_name'], '新同学')
+        self.assertEqual(response.data['masked_phone'], '138****8999')
 
     def test_feedback_metrics_and_map_configuration(self):
         self.assertEqual(self.client.post('/api/v1/feedback', {'content': '希望增加无辣选项'}, format='json').status_code, 201)

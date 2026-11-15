@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { RouterLink } from "vue-router";
 import {
   Bike,
   Check,
@@ -43,6 +44,10 @@ const nav = computed(() =>
         props.order.delivery_point_latitude,
         props.order.delivery_point_longitude,
         props.order.delivery_point_name || "校园交接点",
+        {
+          stallId: props.order.stall_id,
+          address: props.order.delivery_point_address,
+        },
       )
     : "",
 );
@@ -144,14 +149,12 @@ const description = computed(
           {{ order.recipient_name }} · {{ order.contact_phone }}
         </p>
       </div>
-      <a
+      <RouterLink
         v-if="nav"
-        :href="nav"
-        target="_blank"
-        rel="noopener noreferrer"
+        :to="nav"
         class="btn btn-secondary"
         aria-label="前往交接点的路线"
-        ><Navigation :size="15" />路线</a
+        ><Navigation :size="15" />路线</RouterLink
       >
     </div>
     <p v-if="order.dispatched_at" class="node-time">

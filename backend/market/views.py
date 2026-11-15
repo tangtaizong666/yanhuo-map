@@ -124,16 +124,38 @@ def login_view(request):
 @permission_classes([AllowAny])
 @throttle_classes([AuthThrottle])
 def register(request):
+    from .recovery_models import VerifiedAccountContact
+    from .registration_verify import (
+        consume_register_code, ensure_phone_available, mask_phone,
+        normalize_phone, phone_digest, verify_register_code,
+    )
     csrf(request)
     form = RegistrationInput(data=request.data)
     form.is_valid(raise_exception=True)
     data = form.validated_data
-    user = User(username=data['username'], first_name=data.get('display_name') or data['username'])
+    phone = normalize_phone(data['phone'])
+    p_hash = phone_digest(phone)
+    verify_register_code(p_hash, data['verification_code'])
+    ensure_phone_available(p_hash)
+    if User.objects.filter(username=data['username']).exists():
+        raise BusinessError('这个用户名已被使用。', 'username_taken', status=400)
+    user = User(username=data['username'], first_name=data['display_name'] or data['username'])
     check_password(data['password'], user)
     user.set_password(data['password'])
     try:
-        with transaction.atomic(): user.save()
-    except IntegrityError: raise BusinessError('这个用户名已被使用。', 'username_taken', status=400)
+        with transaction.atomic():
+            ensure_phone_available(p_hash)
+            user.save()
+            VerifiedAccountContact.objects.create(
+                user=user,
+                phone_hash=p_hash,
+                masked_phone=mask_phone(phone),
+            )
+    except IntegrityError:
+        if VerifiedAccountContact.objects.filter(phone_hash=p_hash, user__is_active=True).exists():
+            raise BusinessError('该手机号已绑定已有账号，请直接登录或使用恢复码找回。', 'phone_taken', status=400)
+        raise BusinessError('这个用户名已被使用。', 'username_taken', status=400)
+    consume_register_code(p_hash)
     login(request, user)
     return Response(user_data(user), status=201)
 
@@ -237,11 +259,12 @@ def account(request):
         Follow.objects.filter(user=user).delete()
         user.orders.update(contact_phone='', recipient_name='', note='')
         from .models import OrderItem
-        from .recovery_models import AccountRecovery
+        from .recovery_models import AccountRecovery, VerifiedAccountContact
         for item in OrderItem.objects.filter(order__user=user).exclude(portions=[]):
             item.portions = [{**portion, 'note': ''} for portion in item.portions]
             item.save(update_fields=['portions'])
         AccountRecovery.objects.filter(user=user).update(code_hash='', password_stamp='', used_at=timezone.now())
+        VerifiedAccountContact.objects.filter(user=user).delete()
         Feedback.objects.filter(user=user).update(contact='')
         MerchantApplication.objects.filter(user=user).update(
             business_name='', stall_name='', contact_phone='', address_note='',

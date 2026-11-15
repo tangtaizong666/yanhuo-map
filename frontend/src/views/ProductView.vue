@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   ArrowUpRight,
   Check,
+  ChevronDown,
   ChevronRight,
   Clock3,
   House,
@@ -311,14 +312,21 @@ onUnmounted(() => {
                 ><small>{{
                   confirmedText(stall.last_confirmed_at)
                 }}</small></span
-              ><a
-                v-if="stall.address"
+              ><RouterLink
+                v-if="
+                  stall.address &&
+                  Number.isFinite(stall.latitude) &&
+                  Number.isFinite(stall.longitude)
+                "
                 class="dish-directions"
-                :href="routeUrl(stall.latitude, stall.longitude, stall.name)"
-                target="_blank"
-                rel="noopener"
+                :to="
+                  routeUrl(stall.latitude, stall.longitude, stall.name, {
+                    stallId: stall.id,
+                    address: stall.address,
+                  })
+                "
                 >路线<ArrowUpRight :size="15"
-              /></a>
+              /></RouterLink>
             </div>
           </div>
 
@@ -339,9 +347,18 @@ onUnmounted(() => {
                 再加这道餐点
               </button>
             </div>
-            <p v-if="canAdd && !addedToCart" class="dish-allowance">
-              同一摊位合计最多 10 份，当前还可加入 {{ capacity }} 份
-            </p>
+            <details
+              v-if="canAdd && !addedToCart"
+              class="dish-rules-disclosure"
+            >
+              <summary>
+                <span>点单须知 · 当前还可加入 {{ capacity }} 份</span>
+                <ChevronDown :size="14" class="dish-rules-chevron" />
+              </summary>
+              <p class="dish-allowance">
+                同一摊位单笔订单合计最多 10 份；提交订单时核对实时库存与价格，自取订单出餐后再付款。
+              </p>
+            </details>
             <div
               class="dish-action-bar"
               :aria-label="
@@ -1038,5 +1055,39 @@ onUnmounted(() => {
   .dish-loading > div {
     min-height: 280px;
   }
+}
+.dish-rules-disclosure {
+  margin: 6px 0 10px;
+  border: 1px solid #eadbc6;
+  border-radius: 12px;
+  background: #fcf7ef;
+  padding: 0 12px;
+}
+.dish-rules-disclosure summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 44px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  color: #7c644b;
+}
+.dish-rules-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+.dish-rules-chevron {
+  flex-shrink: 0;
+  transition: transform 0.16s ease;
+}
+.dish-rules-disclosure[open] .dish-rules-chevron {
+  transform: rotate(180deg);
+}
+.dish-rules-disclosure .dish-allowance {
+  margin: 0;
+  padding: 0 0 10px;
+  line-height: 1.6;
 }
 </style>

@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   AlertCircle,
   Check,
+  ChevronDown,
   ChevronRight,
   Clock3,
   House,
@@ -1016,12 +1017,12 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
           <span>{{ isSimulation ? "模拟应付金额" : "应付金额" }}</span
           ><strong>¥{{ money(total + deliveryFee) }}</strong>
         </div>
-        <div
+        <details
           v-if="isSimulation || isDelivery || stall.wechat_payment?.available"
           class="pay-at-stall"
         >
-          <Wallet :size="22" />
-          <div>
+          <summary>
+            <Wallet :size="19" />
             <strong>{{
               isDelivery
                 ? "先付款，再由商家接单配送"
@@ -1029,19 +1030,20 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
                   ? "餐点做好后，再付款取餐"
                   : "取餐时向商家付款"
             }}</strong>
-            <p>
-              {{
-                isSimulation
-                  ? "这是流程演练。下单后可在订单页尝试模拟付款，再到商家工作台推进订单；不会真实收付款或送货。"
-                  : isDelivery
-                    ? "提交后需在订单页完成微信付款。餐费和配送费一次支付，商家拒单或接单超时将发起全额退款。"
-                    : stall.wechat_payment?.available
-                      ? "商家出餐后，可在订单页微信支付，也可到摊付款。提交订单不会扣款。"
-                      : "到摊扫摊主收款码付款，平台不经手款项。商家确认接单后才开始制作。"
-              }}
-            </p>
-          </div>
-        </div>
+            <ChevronDown :size="15" class="pay-chevron" />
+          </summary>
+          <p>
+            {{
+              isSimulation
+                ? "这是流程演练。下单后可在订单页尝试模拟付款，再到商家工作台推进订单；不会真实收付款或送货。"
+                : isDelivery
+                  ? "提交后需在订单页完成微信付款。餐费和配送费一次支付，商家拒单或接单超时将发起全额退款。"
+                  : stall.wechat_payment?.available
+                    ? "商家出餐后，可在订单页微信支付，也可到摊付款。提交订单不会扣款。"
+                    : "到摊扫摊主收款码付款，平台不经手款项。商家确认接单后才开始制作。"
+            }}
+          </p>
+        </details>
         <p
           v-if="!stall.can_order && unresolved"
           class="error-message"
@@ -1537,25 +1539,42 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
   letter-spacing: -1px;
 }
 .pay-at-stall {
-  display: flex;
-  gap: 13px;
-  padding: 18px 14px;
+  padding: 0 14px;
   background: #fbf1e5;
+  border: 1px solid #eedbc4;
   border-radius: 13px;
-  margin: 25px 0;
+  margin: 20px 0;
   color: #b96935;
+}
+.pay-at-stall summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 46px;
+  cursor: pointer;
+}
+.pay-at-stall summary::-webkit-details-marker {
+  display: none;
 }
 .pay-at-stall svg {
   flex: none;
-  margin-top: 2px;
 }
 .pay-at-stall strong {
   font-size: 13px;
+  flex: 1;
+}
+.pay-chevron {
+  transition: transform 0.16s ease;
+}
+.pay-at-stall[open] .pay-chevron {
+  transform: rotate(180deg);
 }
 .pay-at-stall p {
   font-size: 11px;
-  line-height: 1.9;
-  margin: 6px 0 0;
+  line-height: 1.75;
+  margin: 0;
+  padding: 0 0 13px 29px;
   color: #9c846d;
 }
 .checkout-submit {

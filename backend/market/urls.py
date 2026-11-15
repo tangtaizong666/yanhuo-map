@@ -1,11 +1,13 @@
 from django.urls import path
-from . import ai_catalogue, merchant, operations, ops_api, payment_views, views, recovery, counter
+from . import ai_catalogue, merchant, operations, ops_api, payment_views, registration_verify, views, recovery, counter
 from .proxy import amap_proxy
 from . import discovery_api
 
 urlpatterns = [
     path('health', views.health),
     path('config', views.config), path('auth/me', views.me), path('auth/csrf', views.csrf_token),
+    path('auth/captcha', registration_verify.captcha_view),
+    path('auth/register/code', registration_verify.send_register_code),
     path('auth/login', views.login_view), path('auth/register', views.register), path('auth/logout', views.logout_view),
     path('auth/profile', views.profile), path('auth/password', views.password), path('auth/account', views.account),
     path('auth/recovery', recovery.manage_recovery), path('auth/recovery/reset', recovery.reset_password),
