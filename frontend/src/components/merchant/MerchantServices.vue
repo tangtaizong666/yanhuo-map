@@ -106,26 +106,46 @@ onUnmounted(() => {
     <div class="m-panel-head">
       <div>
         <h2 id="merchant-services-title"><Settings2 :size="20" /> 经营服务</h2>
-        <p class="m-muted">想做哪种生意，打开对应开关就好。开关会自动保存。</p>
+        <p class="m-muted">拨动右侧开关即可开启或暂停对应服务，修改后自动保存。</p>
       </div>
       <span v-if="simulated" class="service-mode"
         ><FlaskConical :size="15" /> 模拟体验</span
       >
     </div>
     <p v-if="simulated" class="service-simulation-note">
-      现在可以体验在线预付、自动接单、一键交餐与分账结算全流程，不会真实扣款或安排配送。
+      当前为练习环境：可完整体验锁价付款、自动接单与配送交接流程，不会真实扣款。
     </p>
-    <p v-if="services" class="service-fee-banner">
-      平台技术服务费率
-      <strong
-        >{{
-          ((services.effective_fee_bps ?? stall.effective_fee_bps ?? 500) / 100)
-            .toFixed(1)
-            .replace(/\.0$/, "")
-        }}%</strong
-      >
-      · 顾客下单在线预付由微信自动核验，订单完结后按特约商户分账自动结算，无需手动点击确认收款。
-    </p>
+    <div v-if="services" class="service-fee-banner">
+      <p style="margin: 0">
+        顾客下单按菜价自动锁死金额，无需手动点收款；每单完结扣除
+        <strong
+          >{{
+            ((services.effective_fee_bps ?? stall.effective_fee_bps ?? 500) / 100)
+              .toFixed(1)
+              .replace(/\.0$/, "")
+          }}%</strong
+        >
+        服务费后自动打入你的收款账户。
+      </p>
+      <details class="m-detail-toggle">
+        <summary>查看这三项开关具体管什么、怎么配合使用</summary>
+        <ul>
+          <li>
+            <strong>付款后自动接单（推荐开）：</strong>顾客微信付完款直接进「制作中」，忙时油手不用点接单也不会超时取消；现场排长队忙不过来时，在接单台点「暂停接单」即可。
+          </li>
+          <li>
+            <strong>线上支付：</strong>{{
+              simulated
+                ? "开启后顾客端可用模拟微信收银台练习锁价付款。"
+                : "正式微信商户号与安全配置由管理员协助办理，你无需填写密钥，只需在「收款账户」登记本人微信或银行卡信息。"
+            }}
+          </li>
+          <li>
+            <strong>外卖配送：</strong>开启后同学可选送到指定校园交接点，下方可随时修改配送费与起送价。
+          </li>
+        </ul>
+      </details>
+    </div>
     <p v-if="error" class="m-alert" role="alert">{{ error }}</p>
     <p v-if="busy === 'loading'" class="m-muted" role="status">
       正在读取经营服务…
@@ -160,9 +180,6 @@ onUnmounted(() => {
               : "手动接单（5 分钟内需确认）"
           }}
         </p>
-        <p class="service-help">
-          夜市高峰推荐开启；现场排长队忙不过来时，可在接单台顶部一键「暂停接单」。
-        </p>
       </article>
       <article class="service-card payment-service">
         <span class="service-icon"><CreditCard :size="24" /></span>
@@ -171,8 +188,8 @@ onUnmounted(() => {
           <p>
             {{
               simulated
-                ? "微信模拟支付 · 学生可以练习付款"
-                : "微信支付 · 收款配置由平台协助开通"
+                ? "微信模拟锁价收款 · 供练习点单付款"
+                : "微信锁价收款 · 按菜价固定金额防逃单"
             }}
           </p>
         </div>
@@ -200,7 +217,7 @@ onUnmounted(() => {
           }}
         </p>
         <p v-if="!simulated" class="service-help">
-          商户核验、微信商户号与安全配置由管理员办理。你无需填写密钥。
+          收款签约由运营协助办理，你无需填写密钥。
         </p>
       </article>
       <article class="service-card delivery-service">

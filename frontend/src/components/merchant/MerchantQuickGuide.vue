@@ -9,6 +9,7 @@ import {
   MapPin,
   PauseCircle,
   Utensils,
+  Wallet,
   X,
 } from "lucide-vue-next";
 
@@ -98,9 +99,9 @@ function jumpTo(path: string) {
           <li v-if="!discoveryOnly">
             <span class="m-guide-num"><BellRing :size="18" /></span>
             <div>
-              <strong>2. 顾客先付款自动进「制作中」，做好点「做好了」</strong>
+              <strong>2. 不用贴个人收款码：系统按菜价自动锁死金额</strong>
               <p>
-                所有线上单必须<strong>先完成微信预付</strong>才会进接单台，杜绝跑单！默认开启<strong>付款后自动接单</strong>，您照单做完点大按钮<strong>做好了</strong>即可。建议在「更多」里打开新单声音提醒。
+                顾客点单时系统按你设的菜价生成<strong>固定金额微信账单</strong>（顾客改不了金额，少一分钱都付不了）；付完自动进「制作中」，做好点<strong>做好了</strong>即可。
               </p>
             </div>
           </li>
@@ -108,9 +109,9 @@ function jumpTo(path: string) {
           <li v-if="!discoveryOnly">
             <span class="m-guide-num"><KeyRound :size="18" /></span>
             <div>
-              <strong>3. 零负担交餐结算：不用点收款，不怕忙忘点</strong>
+              <strong>3. 交餐自动分账到账：不怕忙忘点</strong>
               <p>
-                货款已由微信自动核验！交餐时顺手点卡片上的<strong>已交餐 · 完成</strong>（或输 4 位取餐码核销）；万一忙得没腾出手，<strong>同学点「我已取到餐点」或出餐满 2 小时无争议</strong>也会自动完结并分账结算！
+                交餐顺手点<strong>已交餐 · 完成</strong>（或输 4 位取餐码）；就算忙忘点，<strong>顾客点已取餐或出餐满 2 小时无争议</strong>也会自动完结，把款项打入你在「更多 → 收款与经营数据」登记的账户。
               </p>
             </div>
           </li>
@@ -145,6 +146,13 @@ function jumpTo(path: string) {
           </button>
           <button type="button" @click="jumpTo('/merchant/products')">
             <Utensils :size="16" /> 管理菜品与份数
+          </button>
+          <button
+            v-if="!discoveryOnly"
+            type="button"
+            @click="jumpTo('/merchant/analytics#payout')"
+          >
+            <Wallet :size="16" /> 查收款与登记收款号
           </button>
           <button
             v-if="!discoveryOnly"

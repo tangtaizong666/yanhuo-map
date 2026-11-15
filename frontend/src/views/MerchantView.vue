@@ -32,7 +32,7 @@ const section = computed(() => String(route.params.section || ""));
 const orderWorkspace = computed(() => section.value === "orders" || (section.value === "" && !discoveryOnly.value));
 const discoveryHome = computed(() => section.value === "" && discoveryOnly.value);
 const sectionLabels: Record<string, string> = {
-  orders: "接单台", store: "店铺与营业", analytics: "经营数据", reviews: "顾客评价",
+  orders: "接单台", store: "店铺与营业", analytics: "收款与经营数据", reviews: "顾客评价",
 };
 const current = computed(() => ({ label: sectionLabels[section.value] || nav.value.find(n => n.id === section.value)?.label || "商家工作台" }));
 const activeNav = computed(() => section.value === "" || (orderWorkspace.value && !discoveryOnly.value) ? "" : section.value === "products" ? "products" : "more");
@@ -433,6 +433,22 @@ onUnmounted(() => {
 const reviewRefreshTick = ref(0);
 const guideOpen = ref(false);
 const renewingLocation = ref(false);
+function applyUpdatedStall(updated: any) {
+  if (!updated?.id) return;
+  stalls.value = stalls.value.map((item) => {
+    if (item.id === updated.id) return { ...item, ...updated };
+    if (updated.payout_account) {
+      return {
+        ...item,
+        payout_account: {
+          ...updated.payout_account,
+          mode: item.payout_account?.mode ?? updated.payout_account.mode,
+        },
+      };
+    }
+    return item;
+  });
+}
 async function renewCurrentLocation() {
   if (
     !stall.value ||
@@ -508,13 +524,23 @@ async function renewCurrentLocation() {
             <MerchantOrders v-if="orderWorkspace" :key="`${session.user!.id}:${stall.id}`" :stall="stall" :orders="orders" :orders-ready="ordersReady" :sync-error="error" :loading="refreshing" :initial-filter="String(route.query.filter || 'active')" :counts="orderCounts" @refresh="orderChanged" />
             <MerchantProducts v-else-if="section === 'products'" :key="stall.id" :stall="stall" :discovery-only="discoveryOnly" @refresh="mutationRefresh" />
             <MerchantMore v-else-if="section === 'more'" :stall="stall" :sellable="!!sellable" :discovery-only="discoveryOnly" @guide="guideOpen = true" />
-            <MerchantAnalytics v-else-if="section === 'analytics'" :metrics="metrics" :days="days" :mode="effectiveAnalyticsMode" :can-switch-mode="!!session.config?.services_simulation_enabled || stall.services?.mode === 'simulation'" :error="metricsError" :loading="metricsLoading" @period="changePeriod" @mode="changeAnalyticsMode" />
+            <MerchantAnalytics v-else-if="section === 'analytics'" :stall="stall" :discovery-only="discoveryOnly" :metrics="metrics" :days="days" :mode="effectiveAnalyticsMode" :can-switch-mode="!!session.config?.services_simulation_enabled || stall.services?.mode === 'simulation'" :error="metricsError" :loading="metricsLoading" @period="changePeriod" @mode="changeAnalyticsMode" @stall-updated="applyUpdatedStall" />
             <MerchantReviews v-else-if="section === 'reviews'" :key="stall.id" :stall="stall" :refresh-tick="reviewRefreshTick" @refresh="mutationRefresh" />
-            <MerchantStore v-else-if="section === 'store'" :key="`${session.user!.id}:${stall.id}`" :stall="stall" :orders="orders" :orders-ready="ordersReady" :discovery-only="discoveryOnly" @refresh="mutationRefresh" />
-            <div id="notifications" :class="{ 'm-reminder-settings': section === 'more' }">
-              <h2 v-if="section === 'more' && (!discoveryOnly || hasOrderHistory)">{{ discoveryOnly ? '已有订单提醒' : '新订单提醒' }}</h2>
+            <MerchantStore v-else-if="section === 'store'" :key="`${session.user!.id}:${stall.id}`" :stall="stall" :orders="orders" :orders-ready="ordersReady" :discovery-only="discoveryOnly" @refresh="mutationRefresh" @stall-updated="applyUpdatedStall" />
+            <div id="notifications" :class="{ 'm-reminder-settings m-cat-group': section === 'more' }">
+              <div v-if="section === 'more' && (!discoveryOnly || hasOrderHistory)" class="m-cat-head">
+                <h2>{{ discoveryOnly ? '已有订单提醒' : '新订单声音与通知' }}</h2>
+                <p>打开提示音和系统通知，忙着做餐时也能第一时间听到新订单</p>
+              </div>
               <MerchantAttention :key="session.user!.id" :scope="`${session.user!.id}:${stall.id}`" :orders="orders" :ready="ordersReady" :sync-error="error" :compact-pending="orderWorkspace" :show-controls="section === 'more' && (!discoveryOnly || hasOrderHistory)" :show-tasks="!orderWorkspace" @expired="refresh" @refresh="mutationRefresh" />
               <SessionNotifications v-show="section === 'more' && (!discoveryOnly || hasOrderHistory)" :key="`${session.user!.id}:${stall.id}`" :user-id="session.user!.id" :events="notificationEvents" :ready="ordersReady && !error" />
+              <details v-if="section === 'more' && (!discoveryOnly || hasOrderHistory)" class="m-detail-toggle">
+                <summary>没听到新订单声音？点此查看手机设置说明</summary>
+                <ul>
+                  <li>手机浏览器需先手动点一次上方「开启声音」并保持接单页在后台打开，才能播放提示音。</li>
+                  <li>若手机开了静音键，请调大媒体音量，并允许浏览器发送桌面/横幅通知。</li>
+                </ul>
+              </details>
             </div>
             <button v-if="section === 'more'" class="m-more-logout m-more-final-action" @click="logout"><LogOut :size="18" />退出登录</button>
           </template>

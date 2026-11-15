@@ -1054,6 +1054,18 @@ function tasteValues(groups: Draft["taste_options"]) {
         清除筛选
       </button>
     </div>
+
+    <details v-if="!discoveryOnly" class="m-compact-help" style="margin-top: 14px">
+      <summary>
+        <span>本页用途：改价格、补份数或暂停供应立即生效；顾客下单按此处标价自动锁死金额。</span>
+        <strong>详细说明</strong>
+      </summary>
+      <ul>
+        <li><strong>开摊一键补货：</strong>点开上方「今天补货」可批量给多道菜加份数，卖完一道自动停售防超卖。</li>
+        <li><strong>设口味与加价项：</strong>点「添加商品」或点菜品卡片进编辑，可添加辣度、加蛋加肠等规格，加价自动计入锁价账单。</li>
+        <li><strong>临时来不及做某道菜：</strong>直接点菜品卡片上的「暂停供应」，不改库存也能随时恢复。</li>
+      </ul>
+    </details>
   </section>
   <MerchantPhotoAssist
     :open="photoAssistOpen"

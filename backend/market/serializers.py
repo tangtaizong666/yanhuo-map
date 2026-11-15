@@ -150,11 +150,14 @@ class StallSerializer(serializers.ModelSerializer):
                 session.closes_at > timezone.now()
             ) else None
             cfg = self.context.get('config') or SiteConfiguration.current()
-            result['effective_fee_bps'] = (
+            effective_fee_bps = (
                 instance.merchant.custom_fee_bps
                 if instance.merchant.custom_fee_bps is not None
                 else cfg.platform_fee_bps
             )
+            result['effective_fee_bps'] = effective_fee_bps
+            from .merchant import payout_account_summary
+            result['payout_account'] = payout_account_summary(instance, effective_fee_bps=effective_fee_bps)
             has_location = getattr(instance, 'location', None) is not None
             sellable = any(p.is_active and not p.sale_paused and p.stock > 0 for p in instance.products.all())
             payment = result.get('wechat_payment') or {}

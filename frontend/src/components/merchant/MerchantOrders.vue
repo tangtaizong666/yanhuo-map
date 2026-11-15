@@ -1719,6 +1719,18 @@ onUnmounted(() => {
       加载更多历史订单
     </button>
 
+    <details class="m-compact-help">
+      <summary>
+        <span>本页用途：顾客下单已按菜价锁死付完款；照单做完点「做好了」，交餐点「完成」。</span>
+        <strong>详细说明</strong>
+      </summary>
+      <ul>
+        <li><strong>不用防少付逃单：</strong>线上单均由系统按菜单总价锁死金额收款，未付款草稿不会进接单台。</li>
+        <li><strong>交餐核销与自动完结：</strong>交餐时可点「已交餐 · 完成」或点上方「取餐码查单」输 4 位数字；忙忘点时，顾客确认已取餐或出餐满 2 小时无争议也会自动完结结算。</li>
+        <li><strong>查收款与改收款号：</strong>点底部「更多 → 收款与经营数据」即可查看今日到手净收入并登记收款微信或银行卡。</li>
+      </ul>
+    </details>
+
     <Teleport to="body">
       <dialog
         ref="drawer"

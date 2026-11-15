@@ -68,6 +68,16 @@ class MerchantProfile(models.Model):
     license_valid_until = models.DateField('许可证有效期至', null=True, blank=True)
     wechat_pay_account = models.CharField('独立微信收款配置标识', max_length=64, null=True, blank=True, unique=True,
         help_text='绑定该经营主体微信特约商户号收款配置；订单通过微信服务商分账清算，平台不碰二清资金池。')
+    PAYOUT_CHANNELS = [
+        ('wechat', '微信收款账户（小微/特约商户零钱结算）'),
+        ('bank', '结算银行卡（特约商户银行账户结算）'),
+    ]
+    payout_channel = models.CharField('收款到账方式', max_length=20, choices=PAYOUT_CHANNELS, default='wechat')
+    payout_holder_name = models.CharField('收款人姓名', max_length=60, blank=True)
+    payout_wechat_id = models.CharField('收款微信号或手机号', max_length=60, blank=True)
+    payout_bank_name = models.CharField('结算开户银行', max_length=80, blank=True)
+    payout_bank_last4 = models.CharField('结算银行卡后四位', max_length=4, blank=True)
+    payout_updated_at = models.DateTimeField('收款资料更新时间', null=True, blank=True)
     custom_fee_bps = models.PositiveIntegerField('专属服务费率(基点)', null=True, blank=True,
         validators=[MaxValueValidator(3000)],
         help_text='留空则采用全局平台技术服务费率；100 基点 = 1%，上限 3000 (30%)。')

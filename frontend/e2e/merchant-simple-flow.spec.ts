@@ -237,6 +237,26 @@ async function fixture(
       });
     if (path === "/merchant/stalls/960/pickup-lookup")
       return send(serialized(orders[0]));
+    if (path === "/merchant/stalls/960/payout-account" && request.method() === "PATCH") {
+      const body = request.postDataJSON();
+      state.actions.push({ action: "payout_account", ...body });
+      Object.assign(stall, {
+        payout_account: {
+          channel: body.channel,
+          holder_name: body.holder_name,
+          wechat_id: body.wechat_id || "",
+          bank_name: body.bank_name || "",
+          bank_last4: body.bank_last4 || "",
+          updated_at: new Date().toISOString(),
+          registered: true,
+          platform_bound: false,
+          mode: "live",
+          effective_fee_bps: 500,
+          merchant_share_bps: 9500,
+        },
+      });
+      return send(stall);
+    }
     const matched = path.match(/^\/merchant\/orders\/([^/]+)\/action$/);
     if (matched) {
       const body = request.postDataJSON(),
@@ -507,5 +527,47 @@ test("delivery hides unpaid drafts and keeps dispatch, arrival and handoff as di
     "dispatch",
     "arrive",
   ]);
+  expect(state.unexpected).toEqual([]);
+});
+
+test("categorized more menu and payout card explain locked-amount billing with progressive disclosure", async ({
+  page,
+}) => {
+  const state = await fixture(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/merchant/more");
+  await expect(page.getByRole("region", { name: "收款与账本" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "日常摆摊与店铺设置" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "评价、分享与账号" })).toBeVisible();
+  await page.getByRole("link", { name: /收款与经营数据/ }).click();
+  await expect(page).toHaveURL(/\/merchant\/analytics/);
+
+  const payout = page.getByRole("region", { name: "收款账户与锁价说明" });
+  await expect(payout).toContainText("自动锁死顾客付款金额");
+  const detail = payout.locator("details.m-detail-toggle");
+  await expect(detail).not.toHaveAttribute("open", "");
+  await detail.locator("summary").click();
+  await expect(detail).toContainText("固定金额微信账单");
+
+  await payout.getByRole("button", { name: "登记收款账户" }).click();
+  await payout.getByLabel("收款人真实姓名").fill("李建国");
+  await payout.getByLabel("收款微信号或绑定手机号").fill("laoli_pay88");
+  await payout.getByRole("button", { name: "保存收款账户" }).click();
+
+  await expect(payout).toContainText("微信零钱收款：李建国（laoli_pay88）");
+  expect(state.actions).toEqual([
+    {
+      action: "payout_account",
+      channel: "wechat",
+      holder_name: "李建国",
+      wechat_id: "laoli_pay88",
+      bank_name: "",
+      bank_last4: "",
+    },
+  ]);
+  for (const width of [360, 390, 768, 1440]) {
+    await page.setViewportSize({ width, height: width <= 390 ? 844 : 900 });
+    await assertNoHorizontalOverflow(page);
+  }
   expect(state.unexpected).toEqual([]);
 });

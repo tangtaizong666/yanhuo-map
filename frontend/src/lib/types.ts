@@ -188,10 +188,24 @@ export type StallMap = Omit<
   | "products"
   | "usual_hours"
 >;
+export interface MerchantPayoutAccount {
+  channel: "wechat" | "bank";
+  holder_name: string;
+  wechat_id: string;
+  bank_name: string;
+  bank_last4: string;
+  updated_at: string | null;
+  registered: boolean;
+  platform_bound: boolean;
+  mode: "simulation" | "live";
+  effective_fee_bps: number;
+  merchant_share_bps: number;
+}
 export interface MerchantStall extends Omit<Stall, "products"> {
   location_draft_address?: string;
   products: MerchantProduct[];
   public_phone_enabled: boolean;
+  payout_account?: MerchantPayoutAccount;
   prep_capacity?: number | null;
   prep_active_orders: number;
   receiving_seen_at?: string | null;

@@ -66,7 +66,16 @@ class Command(BaseCommand):
         vendor = User.objects.get(username='vendor')
         merchant, _ = MerchantProfile.objects.get_or_create(user=vendor, defaults={
             'business_name': '校园烟火示例商户（演示）', 'contact_phone': '', 'is_verified': True,
-            'license_number': 'DEMO-ONLY', 'qualification_tier': 'mobile_vendor', 'qualification_note': '演示环境：商户、经营资质与地点均为示例，不能用于实际交易。正式经营资料须由运营核验后公示。'})
+            'license_number': 'DEMO-ONLY', 'qualification_tier': 'mobile_vendor',
+            'payout_channel': 'wechat', 'payout_holder_name': '李建国（演示）', 'payout_wechat_id': 'laoli_demo_pay',
+            'payout_updated_at': timezone.now(),
+            'qualification_note': '演示环境：商户、经营资质与地点均为示例，不能用于实际交易。正式经营资料须由运营核验后公示。'})
+        if merchant.license_number == 'DEMO-ONLY' and not merchant.payout_holder_name:
+            merchant.payout_channel = 'wechat'
+            merchant.payout_holder_name = '李建国（演示）'
+            merchant.payout_wechat_id = 'laoli_demo_pay'
+            merchant.payout_updated_at = timezone.now()
+            merchant.save(update_fields=['payout_channel', 'payout_holder_name', 'payout_wechat_id', 'payout_updated_at'])
         areas = []
         for name, subtitle, lat, lng in [('哈理工南区 · 征仪路正门', '征仪路249号正门夜市疏导区（演示）', 45.71148, 126.63485),
             ('哈理工南区 · 公寓生活区', '南区学生公寓与小吃街周边（演示）', 45.71055, 126.63268), ('哈理工南区 · 体育场便民点', '南侧运动场与测绘路周边（演示）', 45.70982, 126.63392)]:

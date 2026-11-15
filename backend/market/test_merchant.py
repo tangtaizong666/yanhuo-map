@@ -441,6 +441,63 @@ class MerchantWorkspaceTests(TestCase):
         self.assertEqual(counted_block.data['code'], 'product_has_history')
         self.assertTrue(Product.objects.filter(pk=counted.pk).exists())
 
+    def test_payout_account_registration_isolation_and_validation(self):
+        initial = self.client.get('/api/v1/merchant/stalls').data[0]
+        self.assertIn('payout_account', initial)
+        self.assertFalse(initial['payout_account']['registered'])
+        self.assertEqual(initial['payout_account']['merchant_share_bps'], 9500)
+
+        # Public endpoints must never expose merchant payout registration details.
+        public_detail = self.client.get(f'/api/v1/stalls/{self.stall.pk}').data
+        self.assertNotIn('payout_account', public_detail)
+        public_list = self.client.get('/api/v1/stalls').data
+        self.assertTrue(all('payout_account' not in item for item in public_list))
+
+        # Reject full raw bank card numbers (>4 digits) to protect PAN safety.
+        bad_card = self.client.patch(
+            self.base + '/payout-account',
+            {'channel': 'bank', 'holder_name': '李建国', 'bank_name': '中国工商银行', 'bank_last4': '6222021234567890'},
+            format='json',
+        )
+        self.assertEqual(bad_card.status_code, 400)
+        self.assertIn('bank_last4', bad_card.data.get('errors', bad_card.data))
+
+        # Save WeChat payout registration.
+        saved_wx = self.client.patch(
+            self.base + '/payout-account',
+            {'channel': 'wechat', 'holder_name': '李建国', 'wechat_id': 'laoli_hrbust'},
+            format='json',
+        )
+        self.assertEqual(saved_wx.status_code, 200, saved_wx.data)
+        self.assertTrue(saved_wx.data['payout_account']['registered'])
+        self.assertEqual(saved_wx.data['payout_account']['channel'], 'wechat')
+        self.assertEqual(saved_wx.data['payout_account']['holder_name'], '李建国')
+        self.assertEqual(saved_wx.data['payout_account']['wechat_id'], 'laoli_hrbust')
+        self.assertIsNotNone(saved_wx.data['payout_account']['updated_at'])
+
+        # Switching to bank clears stale wechat_id and stores only bank_last4.
+        saved_bank = self.client.patch(
+            self.base + '/payout-account',
+            {'channel': 'bank', 'holder_name': '李建国', 'bank_name': '哈尔滨银行学府支行', 'bank_last4': '8891'},
+            format='json',
+        )
+        self.assertEqual(saved_bank.status_code, 200, saved_bank.data)
+        self.assertEqual(saved_bank.data['payout_account']['channel'], 'bank')
+        self.assertEqual(saved_bank.data['payout_account']['wechat_id'], '')
+        self.assertEqual(saved_bank.data['payout_account']['bank_last4'], '8891')
+        log = AuditLog.objects.filter(action='merchant_payout_account_updated', target=str(self.stall.pk)).order_by('-id').first()
+        self.assertIsNotNone(log)
+        self.assertNotIn('laoli_hrbust', str(log.details))
+
+        # Non-owner cannot modify payout account.
+        self.client.force_authenticate(self.other)
+        denied = self.client.patch(
+            self.base + '/payout-account',
+            {'channel': 'wechat', 'holder_name': '冒充者', 'wechat_id': 'bad_actor'},
+            format='json',
+        )
+        self.assertEqual(denied.status_code, 404)
+
     def test_patch_and_stock_correction_return_404_not_500_when_product_deleted_before_stall_lock(self):
         from .views import merchant_stall as real_merchant_stall
         first = Product.objects.create(stall=self.stall, name='并发删除A', price_cents=700, stock=2)

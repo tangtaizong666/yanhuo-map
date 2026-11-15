@@ -136,6 +136,71 @@ class DeliveryInput(StrictInput):
     point_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), max_length=30, required=False)
 
 
+class PayoutAccountInput(StrictInput):
+    channel = serializers.ChoiceField(choices=['wechat', 'bank'])
+    holder_name = serializers.CharField(max_length=60, trim_whitespace=True)
+    wechat_id = serializers.CharField(max_length=60, allow_blank=True, required=False, default='', trim_whitespace=True)
+    bank_name = serializers.CharField(max_length=80, allow_blank=True, required=False, default='', trim_whitespace=True)
+    bank_last4 = serializers.CharField(max_length=20, allow_blank=True, required=False, default='', trim_whitespace=True)
+
+    def validate_holder_name(self, value):
+        cleaned = value.strip()
+        if len(cleaned) < 2 or any(ord(ch) < 32 for ch in cleaned):
+            raise serializers.ValidationError('请填写不少于 2 个字的收款人真实姓名。')
+        return cleaned
+
+    def validate(self, attrs):
+        channel = attrs['channel']
+        wechat_id = attrs.get('wechat_id', '').strip()
+        bank_name = attrs.get('bank_name', '').strip()
+        bank_last4 = attrs.get('bank_last4', '').strip()
+        if channel == 'wechat':
+            if not re.fullmatch(r'[A-Za-z0-9_.\-+@]{3,60}', wechat_id):
+                raise serializers.ValidationError({'wechat_id': '请填写正确的收款微信号或绑定手机号（3–60 位字母、数字或常用符号）。'})
+            attrs['wechat_id'] = wechat_id
+            attrs['bank_name'] = ''
+            attrs['bank_last4'] = ''
+        else:
+            if len(bank_name) < 2 or any(ord(ch) < 32 for ch in bank_name):
+                raise serializers.ValidationError({'bank_name': '请填写结算开户银行名称（如“中国工商银行”）。'})
+            if not re.fullmatch(r'\d{4}', bank_last4):
+                raise serializers.ValidationError({'bank_last4': '为保护资金安全，请只填写银行卡号后 4 位数字，切勿提交完整卡号。'})
+            attrs['bank_name'] = bank_name
+            attrs['bank_last4'] = bank_last4
+            attrs['wechat_id'] = ''
+        return attrs
+
+
+def payout_account_summary(stall, *, effective_fee_bps=None):
+    from .simulation import eligible
+    merchant = stall.merchant
+    simulated = eligible(stall)
+    if effective_fee_bps is None:
+        cfg = SiteConfiguration.current()
+        effective_fee_bps = merchant.custom_fee_bps if merchant.custom_fee_bps is not None else cfg.platform_fee_bps
+    channel = merchant.payout_channel or 'wechat'
+    has_registration = bool(
+        merchant.payout_holder_name.strip()
+        and (
+            (channel == 'wechat' and merchant.payout_wechat_id.strip())
+            or (channel == 'bank' and merchant.payout_bank_name.strip() and len(merchant.payout_bank_last4.strip()) == 4)
+        )
+    )
+    return {
+        'channel': channel,
+        'holder_name': merchant.payout_holder_name,
+        'wechat_id': merchant.payout_wechat_id,
+        'bank_name': merchant.payout_bank_name,
+        'bank_last4': merchant.payout_bank_last4,
+        'updated_at': merchant.payout_updated_at.isoformat() if merchant.payout_updated_at else None,
+        'registered': has_registration,
+        'platform_bound': bool(merchant.wechat_pay_account),
+        'mode': 'simulation' if simulated else 'live',
+        'effective_fee_bps': effective_fee_bps,
+        'merchant_share_bps': max(0, 10000 - effective_fee_bps),
+    }
+
+
 def service_settings(stall):
     from .admission import capabilities
     from .simulation import eligible
@@ -410,6 +475,50 @@ def profile(request, stall_id):
         if values:
             stall.save(update_fields=list(values))
         audit(request.user, 'stall_profile_updated', stall.id, fields=list(form.validated_data))
+    return Response(StallSerializer(stall, context=merchant_context(request)).data)
+
+
+def _mask_identifier(value: str) -> str:
+    if not value:
+        return ''
+    if len(value) <= 4:
+        return '*' * len(value)
+    return f'{value[:2]}***{value[-2:]}'
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def payout_account(request, stall_id):
+    form = PayoutAccountInput(data=request.data)
+    form.is_valid(raise_exception=True)
+    values = dict(form.validated_data)
+    with transaction.atomic():
+        stall = merchant_stall(stall_id, request.user, locked=True, permission='market.change_stall')
+        require_stall_permission(stall, request.user, 'market.change_merchantprofile')
+        merchant = MerchantProfile.objects.select_for_update(no_key=True).get(pk=stall.merchant_id)
+        merchant.payout_channel = values['channel']
+        merchant.payout_holder_name = values['holder_name']
+        merchant.payout_wechat_id = values['wechat_id']
+        merchant.payout_bank_name = values['bank_name']
+        merchant.payout_bank_last4 = values['bank_last4']
+        merchant.payout_updated_at = timezone.now()
+        merchant.save(update_fields=[
+            'payout_channel',
+            'payout_holder_name',
+            'payout_wechat_id',
+            'payout_bank_name',
+            'payout_bank_last4',
+            'payout_updated_at',
+        ])
+        stall.merchant = merchant
+        audit(
+            request.user,
+            'merchant_payout_account_updated',
+            stall.id,
+            channel=values['channel'],
+            wechat_masked=_mask_identifier(values['wechat_id']),
+            bank_last4=values['bank_last4'],
+        )
     return Response(StallSerializer(stall, context=merchant_context(request)).data)
 
 

@@ -33,6 +33,7 @@ urlpatterns = [
     path('merchant/stalls/<int:stall_id>/location-reports', operations.location_reports),
     path('merchant/stalls/<int:stall_id>/status', views.merchant_status),
     path('merchant/stalls/<int:stall_id>/profile', merchant.profile),
+    path('merchant/stalls/<int:stall_id>/payout-account', merchant.payout_account),
     path('merchant/stalls/<int:stall_id>/delivery', merchant.delivery),
     path('merchant/stalls/<int:stall_id>/services', merchant.services),
     path('merchant/stalls/<int:stall_id>/products', merchant.products),
