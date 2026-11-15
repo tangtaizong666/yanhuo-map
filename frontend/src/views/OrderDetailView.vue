@@ -197,14 +197,25 @@ function applyConfirmedOrder(updated: Order) {
   error.value = "";
   return true;
 }
-const steps = [
-  { key: "pending", label: "已下单", icon: ShoppingBag },
+function clearAutopayQuery() {
+  if (!route.query.autopay) return;
+  const nextQuery = { ...route.query };
+  delete nextQuery.autopay;
+  void router.replace({ path: route.path, query: nextQuery });
+}
+const steps = computed(() => [
+  {
+    key:
+      order.value?.status === "pending_payment" ? "pending_payment" : "pending",
+    label: order.value?.status === "pending_payment" ? "待付款" : "待接单",
+    icon: ShoppingBag,
+  },
   { key: "preparing", label: "制作中", icon: ChefHat },
   { key: "ready", label: "待取餐", icon: Store },
   { key: "completed", label: "已完成", icon: CheckCircle2 },
-];
+]);
 const stepIndex = computed(() =>
-  steps.findIndex((step) => step.key === order.value?.status),
+  steps.value.findIndex((step) => step.key === order.value?.status),
 );
 const terminal = computed(() =>
   ["completed", "cancelled", "rejected"].includes(order.value?.status),
@@ -245,7 +256,8 @@ const heading = computed(() => {
   return (
     (
       {
-        pending: "订单已提交，等待商家接单",
+        pending_payment: "先付好款，让小摊开火备餐",
+        pending: "已付款，等待商家接单",
         preparing: "小摊正忙着，为你做一餐",
         ready: "热乎的餐点，等你来取",
         completed: "这一餐，刚刚好",
@@ -274,17 +286,19 @@ const subtitle = computed(
                   order.value?.payment_status === "refunded"
                 ? "本单暂不提供取餐凭证，请联系商家确认处理结果。"
                 : isDelivery.value
-                  ? "商家自配送至指定交接点。收到餐点后再确认收餐，不会自动签收。"
+                  ? "商家自配送至指定交接点。收到餐点后再确认收餐，送达满 2 小时无争议自动完结。"
                   : order.value?.status === "ready" &&
                       order.value?.payment_status === "paid"
-                    ? "款项已确认，请出示取餐码领取餐点。"
+                    ? "款项已付清，凭 4 位码直接取走；取到后可点「我已取到餐点」。"
                     : (
                         {
+                          pending_payment:
+                            "15 分钟内完成线上付款后自动进入备餐；超时未付款将自动关闭释放库存。",
                           pending:
-                            "商家接单后开始制作，5 分钟未接单将自动取消。",
+                            "款项已付清，等待商家接单；5 分钟未接单将自动取消并原路退款。",
                           preparing:
-                            "请留意订单状态，出餐后会在这里显示取餐码。",
-                          ready: "确认付款后，向商家出示取餐码领取餐点。",
+                            "请留意订单状态，出餐后会在这里显示 4 位取餐码。",
+                          ready: "请出示 4 位取餐码领取餐点。",
                           completed:
                             "把这份好味道记下来，也把你的感受分享给大家。",
                           cancelled: "期待下一次，与你在校园转角相遇。",
@@ -512,7 +526,13 @@ async function submitReview() {
       </div>
       <div class="detail-layout">
         <div class="stack detail-main">
-          <PickupCard v-if="readyPickup" :order="order" :sync-error="!!error" />
+          <PickupCard
+            v-if="readyPickup"
+            :order="order"
+            :sync-error="!!error"
+            :busy="busy || paymentWorking"
+            @confirm-receipt="confirmReceipt"
+          />
           <OrderPreparation
             v-else-if="isDelivery || order.status !== 'ready'"
             :order="order"
@@ -522,6 +542,8 @@ async function submitReview() {
             :order="order"
             :suspended="cancellationUncertain"
             :suspension-busy="busy"
+            :auto-start="route.query.autopay === '1'"
+            @auto-started="clearAutopayQuery"
             @confirm-cancellation="load"
             @changing="paymentChanging"
             @updated="applyConfirmedOrder"
@@ -614,8 +636,7 @@ async function submitReview() {
                   !terminal &&
                   allows(order, 'cancel', true) &&
                   !order.cancel_requested &&
-                  (order.payment_status === 'unpaid' ||
-                    (isDelivery && order.payment_status === 'paid')) &&
+                  ['unpaid', 'paid'].includes(order.payment_status) &&
                   !order.payment_review_required &&
                   !['creating', 'pending', 'reconcile', 'review'].includes(
                     order.payment?.status,
@@ -800,17 +821,13 @@ async function submitReview() {
                       : "退款尚未确认到账，请留意进度"
                     : order.payment_status === "paid"
                       ? order.payment_method === "wechat"
-                        ? "微信支付已核验"
-                        : "商家已确认收到线下款项"
+                        ? "微信支付已核验，无需商家再点确认收款"
+                        : "历史线下款项已确认"
                       : cancelled
                         ? "订单已结束，无需付款"
-                        : order.payment_method === "wechat"
-                          ? isDelivery &&
-                            order.status === "pending_payment" &&
-                            !order.payment
-                            ? "请在付款区完成微信支付"
-                            : "微信付款核对中，请勿重复付款"
-                          : "取餐时付款 · 可用方式见付款区"
+                        : order.status === "pending_payment" && !order.payment
+                          ? "请在上方付款区完成在线预付"
+                          : "微信付款核对中，请勿重复付款"
             }}
           </p>
           <details class="receipt-details">
@@ -874,12 +891,12 @@ async function submitReview() {
         <p class="muted">
           {{
             ["pending", "pending_payment"].includes(order.status)
-              ? isDelivery && order.payment_status === "paid"
+              ? order.payment_status === "paid"
                 ? isSimulation
-                  ? "取消后会模拟退回餐费与配送费，不发生真实资金变动。"
-                  : "商家尚未接单，取消后将申请退回餐费和配送费。退款到账情况以微信确认结果为准。"
-                : "商家尚未接单，可以直接取消。"
-              : "商家可能已经开始制作，需要由商家确认后取消。"
+                  ? "商家尚未开始制作，取消后将模拟原路全额退回款项。"
+                  : "商家尚未接单制作，取消后将自动申请原路全额退款。"
+                : "订单尚未付款，取消后立即关闭并释放库存。"
+              : "商家已接单备餐，须由商家确认是否可退；若餐点已下锅制作，商家可拒绝取消并继续履约。"
           }}
         </p>
         <label class="field"

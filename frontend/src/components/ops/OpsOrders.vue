@@ -87,6 +87,20 @@ function money(cents: number | null | undefined) {
   return `¥${((cents || 0) / 100).toFixed(2)}`;
 }
 
+const settlementLabels: Record<string, string> = {
+  unsettled: "待付款",
+  escrow: "待完结分账",
+  settled: "已分账结算",
+  reversed: "已退款冲正",
+};
+
+const completedByLabels: Record<string, string> = {
+  merchant_quick: "商家一键交餐",
+  merchant_code: "取餐码核销",
+  student_confirm: "顾客确认收餐",
+  auto_timeout: "超时自动完结",
+};
+
 function syncMerchants(rows: any[]) {
   if (!rows?.length) return;
   merchants.value = rows;
@@ -300,9 +314,9 @@ onMounted(() => {
     >
       <div class="o-card-header">
         <div>
-          <h2>商户资金对账单导出（CSV）</h2>
+          <h2>商户资金与分账对账单导出（CSV）</h2>
           <p>
-            按经营主体导出最长 31 天的正式收款、渠道退款、到摊收款及待复核差异明细（含防公式注入保护）。
+            按经营主体导出最长 31 天的线上收款、平台技术服务费、商户分账净额、原路退款冲正及待复核差异明细（含防公式注入保护）。
           </p>
         </div>
       </div>
@@ -463,8 +477,15 @@ onMounted(() => {
                       ? "退款处理中"
                       : ord.payment_status === "refunded"
                         ? "已退款"
-                        : "待付款/到摊付"
+                        : "待线上付款"
               }}
+            </span>
+            <span
+              v-if="ord.settlement_status && ord.settlement_status !== 'unsettled'"
+              class="o-badge"
+              :class="ord.settlement_status === 'settled' ? 'ok' : ''"
+            >
+              {{ settlementLabels[ord.settlement_status] || ord.settlement_status }}
             </span>
             <span v-if="ord.mode === 'simulation'" class="o-badge"
               >演练单</span
@@ -493,6 +514,14 @@ onMounted(() => {
               ord.fulfillment_type === "delivery" ? "定点短距配送" : "到摊自取"
             }}</span
           >
+          <span>
+            分账：服务费 {{ money(ord.platform_fee_cents) }}（{{
+              ((ord.platform_fee_bps ?? 500) / 100).toFixed(1)
+            }}%）· 商户净额 {{ money(ord.merchant_net_cents) }}
+          </span>
+          <span v-if="ord.completed_by">
+            完结：{{ completedByLabels[ord.completed_by] || ord.completed_by }}
+          </span>
           <span>下单：{{ new Date(ord.created_at).toLocaleString("zh-CN") }}</span>
         </div>
 
@@ -507,7 +536,37 @@ onMounted(() => {
           <template v-else-if="detailMap[ord.id]">
             <div class="o-callout">
               <ShieldCheck :size="15" style="vertical-align: -3px" />
-              隐私与防冒领保护：顾客取餐码、微信待支付二维码与商家收款码已在治理台自动脱敏。
+              隐私与防冒领保护：顾客取餐码与微信待支付二维码已在治理台自动脱敏。
+            </div>
+
+            <div class="o-meta-row">
+              <span>实付总额：{{ money(detailMap[ord.id].order.total_cents) }}</span>
+              <span>
+                平台技术服务费：{{
+                  money(detailMap[ord.id].order.platform_fee_cents)
+                }}（{{
+                  ((detailMap[ord.id].order.platform_fee_bps ?? 500) / 100).toFixed(
+                    1,
+                  )
+                }}%）
+              </span>
+              <span>
+                商户分账净额：{{
+                  money(detailMap[ord.id].order.merchant_net_cents)
+                }}
+              </span>
+              <span>
+                分账状态：{{
+                  settlementLabels[detailMap[ord.id].order.settlement_status] ||
+                  detailMap[ord.id].order.settlement_status
+                }}
+              </span>
+              <span v-if="detailMap[ord.id].order.completed_by">
+                完结方式：{{
+                  completedByLabels[detailMap[ord.id].order.completed_by] ||
+                  detailMap[ord.id].order.completed_by
+                }}
+              </span>
             </div>
 
             <div class="o-meta-row">

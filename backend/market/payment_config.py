@@ -95,9 +95,9 @@ def get_payment_client(account_key):
 
 def get_merchant_payment_readiness(merchant):
     unavailable = {'available': False, 'channels': [], 'account_key': '',
-        'reason': '微信支付尚未开通，请使用到摊付款。'}
+        'reason': '该摊位微信支付特约商户收款尚未开通，暂无法在线下单。'}
     if settings.DEMO_MODE:
-        return {**unavailable, 'reason': '示例环境不发起真实微信扣款，请到摊扫摊主收款码付款。'}
+        return {**unavailable, 'reason': '示例环境不发起真实微信扣款，请开启模拟支付进行体验。'}
     if not settings.WECHAT_PAY_ENABLED or not merchant.is_verified:
         return unavailable
     # Qualification covers all online transactions, including pay-at-stall reservations.

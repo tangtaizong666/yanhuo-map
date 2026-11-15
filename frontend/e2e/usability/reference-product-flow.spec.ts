@@ -326,14 +326,14 @@ for (const width of [360, 390]) {
 test("pickup checkout keeps optional drafts and explains unavailable services on demand", async ({
   page,
 }, info) => {
-  const { writes } = await fixture(page, true);
+  const { detail, writes } = await fixture(page, true);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/checkout/77");
   await expect(
-    page.getByRole("button", { name: "提交自取订单", exact: true }),
-  ).toBeEnabled();
+    page.getByRole("button", { name: "去支付 ¥8", exact: true }),
+  ).toBeDisabled();
   await expect(page.getByRole("button", { name: /商家配送/ })).toHaveCount(0);
-  await expect(page.locator(".wechat-method")).toHaveCount(0);
+  await expect(page.locator(".wechat-method")).toContainText("尚未开通");
   await expect(
     page.getByRole("textbox", { name: /联系手机号/ }),
   ).not.toBeVisible();
@@ -341,7 +341,7 @@ test("pickup checkout keeps optional drafts and explains unavailable services on
     page.getByRole("textbox", { name: /整单备注/ }),
   ).not.toBeVisible();
   await expect(
-    page.getByText("取餐时扫摊主本人的收款码付款，平台不经手款项。"),
+    page.getByText("在线预付锁单，付款确认后立即备餐，凭 4 位取餐码到摊即拿。"),
   ).toBeVisible();
   await page.screenshot({
     path: info.outputPath("checkout-compact-full.png"),
@@ -353,7 +353,9 @@ test("pickup checkout keeps optional drafts and explains unavailable services on
   ).toBeVisible();
   await page.getByText("为什么微信支付尚未开通？", { exact: true }).click();
   await expect(
-    page.getByText("商家尚未配置微信支付", { exact: true }),
+    page
+      .locator("#checkout-guidance-reason")
+      .getByText("商家尚未配置微信支付", { exact: true }),
   ).toBeVisible();
   const contact = page.locator(".checkout-contact-card > summary");
   await contact.click();
@@ -365,6 +367,9 @@ test("pickup checkout keeps optional drafts and explains unavailable services on
   await page
     .getByRole("link", { name: "查看椒盐鸡蛋煎饼详情", exact: true })
     .click();
+  detail.wechat_payment.available = true;
+  detail.wechat_payment.channels = ["native"];
+  detail.wechat_payment.reason = "";
   await page.getByRole("link", { name: "去结算", exact: true }).click();
   await expect(contact).toContainText("餐具一套");
   await contact.click();
@@ -375,7 +380,7 @@ test("pickup checkout keeps optional drafts and explains unavailable services on
     "餐具一套",
   );
   await contact.click();
-  await page.getByRole("button", { name: "提交自取订单", exact: true }).click();
+  await page.getByRole("button", { name: "去支付 ¥8", exact: true }).click();
   await expect.poll(() => writes.length).toBe(1);
   expect(writes[0].body).toMatchObject({
     contact_phone: "13812345678",
@@ -427,8 +432,10 @@ for (const mode of ["live", "simulation"])
     await page
       .getByRole("combobox", { name: "校园交接点", exact: true })
       .selectOption("9");
+    const deliveryBtn = mode === "simulation" ? "去模拟支付 ¥10" : "去支付 ¥10";
+    const pickupBtn = mode === "simulation" ? "去模拟支付 ¥8" : "去支付 ¥8";
     await expect(
-      page.getByRole("button", { name: "提交配送订单，去付款", exact: true }),
+      page.getByRole("button", { name: deliveryBtn, exact: true }),
     ).toBeEnabled();
     await expect(page.locator(".checkout-summary")).toContainText("¥10");
     await page
@@ -455,11 +462,11 @@ for (const mode of ["live", "simulation"])
       "到点电话联系",
     );
     await expect(
-      page.getByRole("button", { name: "提交配送订单，去付款", exact: true }),
+      page.getByRole("button", { name: deliveryBtn, exact: true }),
     ).toBeDisabled();
     await page.getByRole("button", { name: /到摊自取/ }).click();
     await expect(
-      page.getByRole("button", { name: "提交自取订单", exact: true }),
+      page.getByRole("button", { name: pickupBtn, exact: true }),
     ).toBeEnabled();
     if (mode === "live") {
       await expect(page.getByRole("button", { name: /商家配送/ })).toHaveCount(

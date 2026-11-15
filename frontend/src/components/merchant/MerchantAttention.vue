@@ -41,6 +41,13 @@ let audio: AudioContext | undefined;
 let disposed = false;
 
 const pending = computed(() => props.orders.filter(acceptReady));
+const paidKitchenOrders = computed(() =>
+  props.orders.filter(
+    (order) =>
+      acceptReady(order) ||
+      (order.status === "preparing" && order.payment_status === "paid"),
+  ),
+);
 const followUp = computed(() => props.orders.filter(needsMerchantFollowUp));
 const cancellations = computed(() =>
   props.orders.filter(
@@ -50,7 +57,7 @@ const cancellations = computed(() =>
   ),
 );
 const activeArrivals = computed(() =>
-  pending.value.filter((order) => arrivals.value.includes(order.id)),
+  paidKitchenOrders.value.filter((order) => arrivals.value.includes(order.id)),
 );
 const nearestExpiry = computed(() => {
   const timestamps = pending.value
@@ -144,20 +151,23 @@ watch(
   () => [props.scope, props.ready, props.orders] as const,
   () => {
     if (!props.ready) return;
-    // A delivery awaiting payment becomes a new actionable arrival only after
-    // verified payment. Seeing its draft earlier must not consume that alert.
-    const currentIds = new Set(pending.value.map((order) => order.id));
+    // Only orders with verified online payment become actionable arrivals.
+    const currentIds = new Set(
+      paidKitchenOrders.value.map((order) => order.id),
+    );
     const seen = seenByStall.get(props.scope);
     if (!seen) {
       // Existing orders remain actionable, but initial loading never pretends they just arrived.
       seenByStall.set(props.scope, currentIds);
       return;
     }
-    const newOrders = pending.value.filter((order) => !seen.has(order.id));
+    const newOrders = paidKitchenOrders.value.filter(
+      (order) => !seen.has(order.id),
+    );
     for (const id of currentIds) seen.add(id);
     arrivals.value = [
       ...arrivals.value.filter((id) =>
-        pending.value.some((order) => order.id === id),
+        paidKitchenOrders.value.some((order) => order.id === id),
       ),
       ...newOrders.map((order) => order.id),
     ];
@@ -290,7 +300,11 @@ onUnmounted(() => {
       data-testid="merchant-new-order-notice"
     >
       <p role="status">
-        刚收到 {{ activeArrivals.length }} 笔新订单，请及时接单。
+        {{
+          activeArrivals.some((order) => order.status === "pending")
+            ? `刚收到 ${activeArrivals.length} 笔已付款新单，请及时处理。`
+            : `刚收到 ${activeArrivals.length} 笔已付款新单，已自动进入「制作中」。`
+        }}
       </p>
       <button
         type="button"

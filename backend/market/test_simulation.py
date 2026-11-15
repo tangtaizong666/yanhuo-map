@@ -59,6 +59,8 @@ class SimulationSetup:
 @override_settings(SERVICES_SIMULATION_ENABLED=True, DEMO_MODE=True, PRODUCTION=False)
 class SimulationTests(SimulationSetup, TestCase):
     def test_delivery_full_flow_requires_actual_receipt(self):
+        self.stall.auto_accept_orders = False
+        self.stall.save(update_fields=['auto_accept_orders'])
         order = self.create()
         self.assertEqual(order.mode, 'simulation')
         self.assertEqual(order.total_cents, 1000)
@@ -78,15 +80,23 @@ class SimulationTests(SimulationSetup, TestCase):
 
     def test_pickup_payment_keeps_ready_gate_and_offline_option(self):
         order = self.create(delivery=False)
-        with self.assertRaises(BusinessError): self.start(order)
-        for action in ('accept', 'ready'): merchant_action(order.pk, self.vendor, action)
+        self.assertEqual(order.status, 'pending_payment')
+        with self.assertRaises(BusinessError): merchant_action(order.pk, self.vendor, 'accept')
         payment = self.start(order)
         simulate_payment(order.pk, self.student, payment.pk, 'failure')
         order.refresh_from_db()
         self.assertEqual(order.payment_status, 'unpaid')
-        self.assertEqual(order.payment_method, 'offline')
-        merchant_action(order.pk, self.vendor, 'confirm_payment')
-        merchant_action(order.pk, self.vendor, 'complete', order.pickup_code)
+        self.assertEqual(order.payment_method, 'wechat')
+        with self.assertRaises(BusinessError):
+            merchant_action(order.pk, self.vendor, 'confirm_payment')
+        second = self.start(order)
+        simulate_payment(order.pk, self.student, second.pk, 'success')
+        order.refresh_from_db()
+        self.assertEqual((order.status, order.payment_status), ('preparing', 'paid'))
+        merchant_action(order.pk, self.vendor, 'ready')
+        merchant_action(order.pk, self.vendor, 'complete_quick')
+        order.refresh_from_db()
+        self.assertEqual((order.status, order.settlement_status), ('completed', 'settled'))
 
     def test_pending_result_does_not_collect_and_recovers_same_intent(self):
         order = self.create(); payment = self.start(order)
@@ -139,6 +149,8 @@ class SimulationTests(SimulationSetup, TestCase):
         order.refresh_from_db(); self.assertEqual(order.payment_status, 'refunded')
 
     def test_user_cancel_and_timeout_refund_full_fee_restore_inventory_once(self):
+        self.stall.auto_accept_orders = False
+        self.stall.save(update_fields=['auto_accept_orders'])
         order = self.create(); self.pay(order)
         order.expires_at = timezone.now()-timedelta(seconds=1); order.save()
         expire_pending_orders(); expire_pending_orders(); sync_payment(order.pk)
@@ -177,7 +189,6 @@ class SimulationTests(SimulationSetup, TestCase):
     def test_live_order_does_not_accept_simulation_channel_or_outcome(self):
         self.stall.is_demo = False; self.stall.save()
         order = self.create(delivery=False)
-        for action in ('accept', 'ready'): merchant_action(order.pk, self.vendor, action)
         with self.assertRaises(BusinessError): self.start(order)
         with self.assertRaises(BusinessError): request_refund(order.pk, self.vendor, '假的退款', 'success')
         self.assertFalse(self.live.called)
@@ -316,13 +327,11 @@ class SimulationTests(SimulationSetup, TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('SERVICES_SIMULATION_ENABLED requires', result.stderr)
 
-    def test_original_cash_demo_keeps_working_without_online_simulator(self):
+    def test_demo_stall_blocks_new_orders_when_online_simulator_disabled(self):
         with override_settings(SERVICES_SIMULATION_ENABLED=False):
-            order = self.create(delivery=False)
-            self.assertEqual(order.mode, 'simulation')
-            for action in ('accept', 'ready', 'confirm_payment'):
-                merchant_action(order.pk, self.vendor, action)
-            merchant_action(order.pk, self.vendor, 'complete', order.pickup_code)
+            with self.assertRaises(BusinessError) as caught:
+                self.create(delivery=False)
+            self.assertEqual(caught.exception.detail['code'], 'payment_unavailable')
             self.api.force_authenticate(self.vendor)
             self.assertEqual(self.api.get('/api/v1/merchant/metrics').data['revenue_cents'], 0)
 
@@ -355,7 +364,7 @@ class SimulationConcurrencyTests(SimulationSetup, TransactionTestCase):
         order = self.create(); payment = self.start(order)
         self.race(*(lambda: simulate_payment(order.pk, self.student, payment.pk, 'success') for _ in range(2)))
         order.refresh_from_db(); self.product.refresh_from_db()
-        self.assertEqual((order.status, order.payment_status), ('pending', 'paid'))
+        self.assertEqual((order.status, order.payment_status), ('preparing', 'paid'))
         self.assertEqual(order.payments.count(), 1); self.assertEqual(self.product.stock, 4)
 
     def test_close_racing_simulated_success_never_loses_capture(self):

@@ -57,19 +57,21 @@ const eventLabels: Record<string, string> = {
 };
 const stats = computed(() => [
   {
-    label: simulated.value ? "模拟收款总额" : "收款总额",
-    value: props.metrics ? `¥${money(props.metrics.revenue_cents)}` : "—",
+    label: simulated.value ? "模拟分账净收入" : "商户分账净收入",
+    value: props.metrics
+      ? `¥${money(props.metrics.merchant_net_cents ?? props.metrics.revenue_cents)}`
+      : "—",
     icon: Wallet,
+  },
+  {
+    label: simulated.value ? "模拟实付总额" : "顾客实付总额",
+    value: props.metrics ? `¥${money(props.metrics.revenue_cents)}` : "—",
+    icon: ReceiptText,
   },
   {
     label: "下单量",
     value: props.metrics?.orders_created ?? "—",
     icon: ShoppingBag,
-  },
-  {
-    label: simulated.value ? "模拟收款客单价" : "收款客单价",
-    value: props.metrics ? `¥${money(props.metrics.average_order_cents)}` : "—",
-    icon: ReceiptText,
   },
   { label: "关注人数", value: props.metrics?.followers ?? "—", icon: Users },
 ]);
@@ -81,14 +83,14 @@ const maxSales = computed(() =>
 );
 const hasPaymentBreakdown = computed(
   () =>
-    typeof props.metrics?.offline_revenue_cents === "number" &&
+    typeof props.metrics?.merchant_net_cents === "number" ||
     typeof props.metrics?.online_revenue_cents === "number",
 );
 function paymentRecordLabel(record: any) {
   const method =
     ((record.mode || props.metrics?.mode) === "simulation" ? "模拟 · " : "") +
-    (record.payment_method === "wechat" ? "微信支付确认" : "到摊收款确认");
-  if (record.payment_status === "refunded") return `${method} · 后续已退款`;
+    (record.payment_method === "wechat" ? "微信预付确认" : "历史线下确认");
+  if (record.payment_status === "refunded") return `${method} · 已原路退款`;
   if (record.payment_status === "refunding") return `${method} · 退款处理中`;
   return method;
 }
@@ -180,7 +182,7 @@ function exportCsv() {
       <div class="returning-stats">
         <div><strong>{{ metrics.pilot_evidence.active_merchant_days }}</strong><span>商户开摊天数</span></div>
         <div><strong>{{ metrics.pilot_evidence.completed_orders }}</strong><span>实际完成订单</span></div>
-        <div><strong>{{ metrics.pilot_evidence.paying_customers }}</strong><span>已确认收款人数</span></div>
+        <div><strong>{{ metrics.pilot_evidence.paying_customers }}</strong><span>已付款完单人数</span></div>
         <div><strong>{{ metrics.pilot_evidence.accept_p50_seconds ?? '—' }}</strong><span>常见接单用时（中位数，秒）</span></div>
         <div><strong>{{ metrics.pilot_evidence.accept_p95_seconds ?? '—' }}</strong><span>忙时接单用时（95% 订单内，秒）</span></div>
         <div><strong>{{ metrics.pilot_evidence.location_reports_confirmed }} / {{ metrics.pilot_evidence.location_reports_received }}</strong><span>核实属实 / 收到的位置反馈</span></div>
@@ -272,24 +274,35 @@ function exportCsv() {
     <section
       v-if="hasPaymentBreakdown"
       class="m-panel m-payment-breakdown"
-      aria-label="款项分类"
+      aria-label="分账结算明细"
     >
       <div>
-        <span>到摊收款</span
-        ><strong>¥{{ money(metrics.offline_revenue_cents) }}</strong
-        ><small>由商家确认收到</small>
+        <span>商户分账净额</span
+        ><strong
+          >¥{{
+            money(metrics.merchant_net_cents ?? metrics.online_revenue_cents)
+          }}</strong
+        ><small
+          >已完结结算 ¥{{ money(metrics.settled_net_cents || 0) }} · 待完结托管
+          ¥{{ money(metrics.escrow_net_cents || 0) }}</small
+        >
       </div>
       <div>
-        <span>微信付款</span
-        ><strong>¥{{ money(metrics.online_revenue_cents) }}</strong
-        ><small>{{
-          simulated ? "模拟支付成功，不涉及真实资金" : "由微信确认支付成功"
-        }}</small>
+        <span>平台技术服务费</span
+        ><strong>¥{{ money(metrics.platform_fee_cents || 0) }}</strong
+        ><small
+          >当前费率
+          {{
+            ((metrics.effective_fee_bps ?? 500) / 100)
+              .toFixed(1)
+              .replace(/\.0$/, "")
+          }}% · 微信自动分账</small
+        >
       </div>
       <div v-if="typeof metrics.refund_cents === 'number'">
         <span>本期原路退款</span
         ><strong>¥{{ money(metrics.refund_cents) }}</strong
-        ><small>按退款完成日期，单独统计</small>
+        ><small>按退款完成日期统计，退款单自动冲正服务费</small>
       </div>
     </section>
     <section class="m-panel">

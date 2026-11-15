@@ -37,7 +37,7 @@ from .reconciliation import confirm_uncreated_payment
 from .services import create_order, merchant_action
 from .test_delivery import DeliverySetup
 from .test_payments import PaymentSetup, payment_result
-from .tests import fixtures, payload
+from .tests import fixtures, pay_order_for_test, payload
 from .wechatpay import GatewayError
 
 
@@ -287,18 +287,15 @@ class MediaAndQrProtectionTests(TestCase):
         other_client.force_login(self.other)
         self.assertEqual(other_client.get(qr1_url).status_code, 404)
 
-        # Ordering student gets 404 while pending/preparing, 200 once ready, and 404 once completed
+        # Ordering student gets 404 in all states now that offline stall-side QR payment is abolished
         student_client = APIClient()
         student_client.force_login(self.student)
         order, _ = create_order(self.student, payload(self.stall, self.product))
         self.assertEqual(student_client.get(qr1_url).status_code, 404)
-        merchant_action(order.pk, self.vendor, 'accept')
+        pay_order_for_test(order)
         self.assertEqual(student_client.get(qr1_url).status_code, 404)
         merchant_action(order.pk, self.vendor, 'ready')
-        ready_read = student_client.get(qr1_url)
-        self.assertEqual(ready_read.status_code, 200)
-        list(ready_read.streaming_content)
-        merchant_action(order.pk, self.vendor, 'confirm_payment')
+        self.assertEqual(student_client.get(qr1_url).status_code, 404)
         merchant_action(order.pk, self.vendor, 'complete', order.pickup_code)
         self.assertEqual(student_client.get(qr1_url).status_code, 404)
 
@@ -421,7 +418,7 @@ class SecurityCapacityAndThrottleHardeningTests(DeliverySetup, TestCase):
 
     def test_pickup_lookup_five_failure_lockout_and_strict_four_digit_exhaustion(self):
         pickup_order, _ = create_order(self.student, payload(self.stall, self.product))
-        merchant_action(pickup_order.pk, self.vendor, 'accept')
+        pay_order_for_test(pickup_order, auto_accept=True)
         merchant_action(pickup_order.pk, self.vendor, 'ready')
         vendor_api = APIClient()
         vendor_api.force_authenticate(self.vendor)
@@ -921,7 +918,7 @@ class DailyQuotaPostgreSQLRaceTests(TransactionTestCase):
 class ComprehensiveAuditRegressionTests(TestCase):
     def setUp(self):
         cache.clear()
-        self.area, self.student, self.vendor, self.stall, self.product = fixtures()
+        self.student, self.other, self.vendor, self.stall, self.product = fixtures()
 
     def test_serve_public_media_blocks_all_qr_path_variants_and_serves_normal_media(self):
         import os
@@ -1010,9 +1007,8 @@ class ComprehensiveAuditRegressionTests(TestCase):
 
     def test_merchant_analytics_excludes_cancelled_top_products_and_tracks_paid_attempts(self):
         completed, _ = create_order(self.student, payload(self.stall, self.product))
-        merchant_action(completed.pk, self.vendor, 'accept')
+        pay_order_for_test(completed)
         merchant_action(completed.pk, self.vendor, 'ready')
-        merchant_action(completed.pk, self.vendor, 'confirm_payment')
         merchant_action(completed.pk, self.vendor, 'complete', completed.pickup_code)
 
         cancelled, _ = create_order(
@@ -1028,10 +1024,11 @@ class ComprehensiveAuditRegressionTests(TestCase):
                 ],
             },
         )
-        merchant_action(cancelled.pk, self.vendor, 'reject', '售罄取消')
+        pay_order_for_test(cancelled, auto_accept=False)
+        merchant_action(cancelled.pk, self.vendor, 'reject', reason='售罄取消')
 
         # Compensated duplicate payment order: order remains paid with two verified paid attempts
-        dup_order, _ = create_order(self.student, payload(self.stall, self.product))
+        dup_order, _ = create_order(self.other, payload(self.stall, self.product))
         now = timezone.now()
         Order.objects.filter(pk=dup_order.pk).update(
             status='completed',
@@ -1078,14 +1075,15 @@ class ComprehensiveAuditRegressionTests(TestCase):
         self.assertEqual(len(top), 1)
         # Only completed + dup_order count (1 + 1 = 2), NOT the rejected 4-item order!
         self.assertEqual(top[0]['quantity'], 2)
-        # Receipts sum offline completed (1x) + 2 verified paid attempts (2x) = 3x product price
-        self.assertEqual(res.data['revenue_cents'], self.product.price_cents * 3)
+        # Gross receipts sum completed (1x) + rejected before refund (4x) + 2 verified paid attempts (2x) = 7x
+        self.assertEqual(res.data['revenue_cents'], self.product.price_cents * 7)
         for row in res.data['recent_payments']:
             if row['id'] == dup_order.pk:
                 self.assertFalse(row['refunded'])
 
     def test_expired_pending_order_rejects_merchant_accept_with_409_order_expired(self):
         order, _ = create_order(self.student, payload(self.stall, self.product))
+        pay_order_for_test(order, auto_accept=False)
         Order.objects.filter(pk=order.pk).update(expires_at=timezone.now() - timedelta(minutes=2))
         with self.assertRaises(BusinessError) as ctx:
             merchant_action(order.pk, self.vendor, 'accept')

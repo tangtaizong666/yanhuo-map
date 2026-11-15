@@ -14,7 +14,7 @@ from rest_framework.test import APIClient
 from .errors import BusinessError
 from .models import Order
 from .services import create_order, merchant_action
-from .tests import fixtures, payload
+from .tests import fixtures, pay_order_for_test, payload
 
 
 @override_settings(
@@ -29,8 +29,8 @@ class PickupCodeDatabaseCacheTests(TransactionTestCase):
         cache.clear()
         self.student, self.other, self.vendor, self.stall, self.product = fixtures()
         self.order, _ = create_order(self.student, payload(self.stall, self.product))
-        for action in ('accept', 'ready', 'confirm_payment'):
-            self.order = merchant_action(self.order.pk, self.vendor, action)
+        pay_order_for_test(self.order)
+        self.order = merchant_action(self.order.pk, self.vendor, 'ready')
         self.key = f'pickup_code_fails:{self.order.pk}'
         self.wrong = '0' * len(self.order.pickup_code)
         if self.wrong == self.order.pickup_code:

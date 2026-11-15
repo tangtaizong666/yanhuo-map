@@ -22,6 +22,10 @@ def filter_status(query, status, config):
             from .admission import new_trade_eligibility_q
             from django.db.models import F
             query = query.filter(new_trade_eligibility_q(), accepting_orders=True, location__isnull=False)
+            if settings.DEMO_MODE and settings.SERVICES_SIMULATION_ENABLED and not settings.PRODUCTION:
+                query = query.filter(Q(is_demo=False) | Q(simulation_payment_enabled=True))
+            else:
+                query = query.filter(is_demo=False)
             query = query.filter(Q(current_session__stop_orders_at__isnull=True) | Q(current_session__stop_orders_at__gt=now))
             query = query.filter(Q(prep_capacity__isnull=True) | Q(prep_active_count__lt=F('prep_capacity')))
         return query

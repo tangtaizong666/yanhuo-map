@@ -46,7 +46,7 @@ async function fixture(page: Page, overrides: Record<string, any> = {}) {
     status: "ready",
     fulfillment_type: "pickup",
     mode: "live",
-    payment_method: "offline",
+    payment_method: "wechat",
     payment_status: "paid",
     payment: null,
     refund: null,
@@ -89,10 +89,11 @@ async function fixture(page: Page, overrides: Record<string, any> = {}) {
               ? ["dispatch", "refund"]
               : order.payment_status === "paid"
                 ? [
+                    "complete_quick",
                     "complete",
                     ...(order.payment_method === "wechat" ? ["refund"] : []),
                   ]
-                : ["confirm_payment"],
+                : [],
   });
   await page.route("https://**/*", (route) => route.abort());
   await page.route("**/api/v1/**", async (route) => {
@@ -131,8 +132,7 @@ async function fixture(page: Page, overrides: Record<string, any> = {}) {
     if (path === "/merchant/orders/handoff-order/action") {
       const body = req.postDataJSON();
       actions.push(body);
-      if (body.action === "confirm_payment") order.payment_status = "paid";
-      if (body.action === "complete") {
+      if (body.action === "complete" || body.action === "complete_quick") {
         order.status = "completed";
         if (loseComplete) {
           loseComplete = false;
@@ -163,7 +163,7 @@ async function openReady(page: Page) {
     .getByRole("group", { name: "订单阶段", exact: true })
     .getByRole("button", { name: /待取餐/ })
     .click();
-  await page.getByRole("button", { name: "核对取餐码", exact: true }).click();
+  await page.getByRole("button", { name: "查看订单 YH-978 详情", exact: true }).click();
   return page.getByRole("dialog", { name: "订单详情", exact: true });
 }
 
@@ -185,7 +185,7 @@ test("handoff facts precede redemption and stay readable at four widths", async 
       "已收金额¥24",
     );
     await expect(drawer.locator(".m-order-payment-check")).toContainText(
-      "到摊已收款",
+      "微信已预付",
     );
     const meal = await drawer.locator(".m-order-meal-check").boundingBox();
     const payment = await drawer
@@ -218,31 +218,29 @@ test("handoff facts precede redemption and stay readable at four widths", async 
   expect(data.unexpected).toEqual([]);
 });
 
-test("pickup lookup keeps amount visible while cash confirmation and redemption remain separate", async ({
+test("pickup lookup pre-fills 4-digit code on prepaid order without manual payment confirmation, and card supports 1-tap complete", async ({
   page,
 }) => {
-  const data = await fixture(page, { payment_status: "unpaid", paid_at: null });
+  const data = await fixture(page, { pickup_code: "1234" });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/merchant/orders");
+  await page
+    .getByRole("group", { name: "订单阶段", exact: true })
+    .getByRole("button", { name: /待取餐/ })
+    .click();
+  await expect(page.getByRole("button", { name: "已交餐 · 完成", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^收款 ¥/ })).toHaveCount(0);
   await page.getByRole("button", { name: "取餐码查单", exact: true }).click();
   await page.getByLabel("4 位取餐码", { exact: true }).fill("1234");
   await page.getByRole("button", { name: "查找待取餐订单" }).click();
   const drawer = page.getByRole("dialog", { name: "订单详情", exact: true });
   await expect(drawer.locator(".m-order-payment-check")).toContainText(
-    "应收金额¥24",
-  );
-  await expect(drawer.getByRole("button", { name: "核销并完成" })).toHaveCount(
-    0,
-  );
-  expect(data.actions).toEqual([]);
-  await drawer.getByRole("button", { name: "收款 ¥24", exact: true }).click();
-  await page
-    .getByRole("dialog", { name: "确认这笔线下收款" })
-    .getByRole("button", { name: "确认收款", exact: true })
-    .click();
-  await expect(drawer.locator(".m-order-payment-check")).toContainText(
     "已收金额¥24",
   );
+  await expect(drawer.locator(".m-order-payment-check")).toContainText(
+    "微信已预付",
+  );
+  await expect(drawer.getByRole("button", { name: /^收款 ¥/ })).toHaveCount(0);
   await expect(
     drawer.getByPlaceholder("输入取餐码", { exact: true }),
   ).toHaveValue("1234");
@@ -250,10 +248,9 @@ test("pickup lookup keeps amount visible while cash confirmation and redemption 
   await drawer.getByRole("button", { name: "核销并完成", exact: true }).click();
   await expect.poll(() => data.order.status).toBe("completed");
   expect(data.actions.map((row) => row.action)).toEqual([
-    "confirm_payment",
     "complete",
   ]);
-  expect(new Set(data.actions.map((row) => row.idempotency_key)).size).toBe(2);
+  expect(new Set(data.actions.map((row) => row.idempotency_key)).size).toBe(1);
   expect(data.lookups).toEqual([{ pickup_code: "1234" }]);
   expect(data.unexpected).toEqual([]);
 });
@@ -425,7 +422,7 @@ test("strict four-digit pickup code lookup, quick clear, usage guide, and narrow
   await page.getByRole("button", { name: "使用说明", exact: true }).click();
   const guide = page.getByRole("dialog", { name: "商家摆摊快速使用说明" });
   await expect(guide).toBeVisible();
-  await expect(guide).toContainText("4 位数字取餐码");
+  await expect(guide).toContainText("4 位取餐码");
   await guide.getByRole("button", { name: "关闭使用说明" }).click();
   await expect(guide).toBeHidden();
 

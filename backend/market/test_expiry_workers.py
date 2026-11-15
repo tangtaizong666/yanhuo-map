@@ -23,7 +23,7 @@ class ExpiryBatchTests(TestCase):
     def test_closed_refunds_do_not_starve_later_expired_orders(self):
         held = create_order(self.student, payload(self.stall, self.product))[0]
         normal = create_order(self.student, payload(self.stall, self.product))[0]
-        Order.objects.filter(pk=held.pk).update(fulfillment_type='delivery', payment_status='paid',
+        Order.objects.filter(pk=held.pk).update(status='pending', fulfillment_type='delivery', payment_status='paid',
             expires_at=timezone.now()-timedelta(days=1))
         payment = PaymentAttempt.objects.create(order=held, merchant=self.stall.merchant,
             account_key='fixture', mchid='fixture', appid='fixture', out_trade_no=uuid.uuid4().hex,
@@ -81,7 +81,7 @@ class ExpiryWorkerConcurrencyTests(TransactionTestCase):
         Order.objects.filter(pk=second.pk).update(expires_at=timezone.now()-timedelta(seconds=1))
         self.assertEqual(self.while_locked(first, lambda: expire_pending_orders(limit=1)), 1)
         first.refresh_from_db(); second.refresh_from_db()
-        self.assertEqual((first.status, second.status), ('pending', 'cancelled'))
+        self.assertEqual((first.status, second.status), ('pending_payment', 'cancelled'))
         self.assertEqual(expire_pending_orders(limit=1), 1)
 
     def test_locked_expiry_backlog_is_visible_even_when_worker_reports_success(self):
@@ -118,7 +118,7 @@ class ExpiryWorkerConcurrencyTests(TransactionTestCase):
         self.assertTrue(created)
         self.assertEqual(new.stall_id, stall.pk)
         old.refresh_from_db()
-        self.assertEqual(old.status, 'pending')
+        self.assertEqual(old.status, 'pending_payment')
 
     def test_two_workers_return_inventory_and_emit_expiry_only_once(self):
         Product.objects.filter(pk=self.product.pk).update(stock=12)

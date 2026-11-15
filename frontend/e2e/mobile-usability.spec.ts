@@ -17,11 +17,14 @@ test.use({ isMobile: true, hasTouch: true });
 
 async function capture(page: Page, info: TestInfo, name: string) {
   await page.evaluate(() => window.scrollTo(0, 0));
-  await page.screenshot({ path: info.outputPath(`${name}-top.png`), animations: 'disabled' });
+  await page.screenshot({
+    path: info.outputPath(`${name}-top.png`),
+    animations: "disabled",
+  });
   await page.screenshot({
     path: info.outputPath(`${name}-full.png`),
     fullPage: true,
-    animations: 'disabled',
+    animations: "disabled",
   });
   const metrics = await page.evaluate(() => {
     const visible = (element: Element) => {
@@ -173,6 +176,13 @@ for (const width of [360, 390])
         },
       );
       expect(prepared.ok(), await prepared.text()).toBeTruthy();
+      const autoAccept = await mutate(
+        merchantContext,
+        `/merchant/stalls/${stall.id}/profile`,
+        { auto_accept_orders: true },
+        "PATCH",
+      );
+      expect(autoAccept.ok(), await autoAccept.text()).toBeTruthy();
       expect(
         (await mutate(merchantContext, "/auth/logout", {})).ok(),
       ).toBeTruthy();
@@ -228,10 +238,7 @@ for (const width of [360, 390])
         "底部导航",
       );
       await page.getByRole("link", { name: /去结算/ }).click();
-      const submit = page.getByRole("button", {
-        name: "提交自取订单",
-        exact: true,
-      });
+      const submit = page.getByRole("button", { name: /^去模拟支付 ¥/ });
       await expect(submit).toBeEnabled();
       await capture(page, info, "s-checkout");
       await page.locator(".checkout-contact-card > summary").click();
@@ -247,12 +254,22 @@ for (const width of [360, 390])
       const created = await createdPromise;
       expect(created.status(), await created.text()).toBe(201);
       const order = await created.json();
-      await expect(page).toHaveURL(new RegExp(`/orders/${order.id}$`));
+      await expect(page).toHaveURL(
+        new RegExp(`/orders/${order.id}(\\?autopay=1)?$`),
+      );
       await expect(
-        page.getByRole("button", { name: "提交自取订单", exact: true }),
+        page.getByRole("button", { name: /^去模拟支付 ¥/ }),
       ).toHaveCount(0);
       await expect(page.locator(".cart-shortcut-count")).toHaveCount(0);
-      await capture(page, info, "s-pending");
+      await expect(page.locator(".simulation-cashier")).toBeVisible();
+      await capture(page, info, "s-cashier");
+      await page
+        .getByRole("button", { name: "模拟支付成功", exact: true })
+        .click();
+      await expect(
+        page.getByRole("heading", { name: "小摊正忙着，为你做一餐" }),
+      ).toBeVisible();
+      await capture(page, info, "s-preparing");
       await page.goto("/orders");
       await expect(
         page.locator(`.order-card[href="/orders/${order.id}"]`),
@@ -267,54 +284,40 @@ for (const width of [360, 390])
         .locator("article.merchant-order")
         .filter({ hasText: order.number });
       await expect(card).toBeVisible();
-      await capture(merchant, info, "m-pending");
-      await assertPrimaryActionVisible(
-        merchant,
-        card.getByRole("button", { name: "接单开始做", exact: true }),
-      );
-      await card
-        .getByRole("button", { name: "接单开始做", exact: true })
-        .click();
-      await merchant
-        .getByRole("group", { name: "订单阶段", exact: true })
-        .getByRole("button", { name: /制作中/ })
-        .click();
       await expect(card.locator(".merchant-order-status")).toHaveText("制作中");
       await capture(merchant, info, "m-preparing");
+      await assertPrimaryActionVisible(
+        merchant,
+        card.getByRole("button", { name: "做好了", exact: true }),
+      );
       await card.getByRole("button", { name: "做好了", exact: true }).click();
       await merchant
         .getByRole("group", { name: "订单阶段", exact: true })
         .getByRole("button", { name: /待取餐/ })
         .click();
       await expect(card.locator(".merchant-order-status")).toHaveText("待取餐");
-      await capture(merchant, info, "m-ready-unpaid");
+      await expect(
+        card.getByRole("button", { name: /^收款 ¥/ }),
+      ).toHaveCount(0);
+      await assertPrimaryActionVisible(
+        merchant,
+        card.getByRole("button", { name: "已交餐 · 完成", exact: true }),
+      );
+      await capture(merchant, info, "m-ready-paid");
       await page.getByRole("button", { name: "刷新订单状态" }).click();
       await expect(page.locator(".pickup-code strong")).toHaveText(/^\d{4}$/);
       await capture(page, info, "s-ready");
-      const code = await page.locator(".pickup-code strong").innerText();
-      await card.getByRole("button", { name: /^收款 ¥/ }).click();
-      await capture(merchant, info, "m-receipt-confirm");
-      await merchant
-        .getByRole("dialog", { name: "确认这笔线下收款" })
-        .getByRole("button", { name: "确认收款", exact: true })
-        .click();
-      await expect(
-        card.getByRole("button", { name: "核对取餐码", exact: true }),
-      ).toBeVisible();
-      await capture(merchant, info, "m-ready-paid");
-      await card
-        .getByRole("button", { name: "核对取餐码", exact: true })
-        .click();
-      const detail = merchant.getByRole("dialog", {
-        name: "订单详情",
-        exact: true,
-      });
-      await detail.getByPlaceholder("输入取餐码").fill(code);
-      await detail
-        .getByRole("button", { name: "核销并完成", exact: true })
-        .click();
-      await expect(card).toHaveCount(0);
-      await page.getByRole("button", { name: "刷新订单状态" }).click();
+      if (width === 360) {
+        await card
+          .getByRole("button", { name: "已交餐 · 完成", exact: true })
+          .click();
+        await expect(card).toHaveCount(0);
+        await page.getByRole("button", { name: "刷新订单状态" }).click();
+      } else {
+        await page
+          .getByRole("button", { name: "我已取到餐点", exact: true })
+          .click();
+      }
       await expect(
         page.getByRole("heading", { name: "这一餐，刚刚好" }),
       ).toBeVisible();
@@ -324,6 +327,10 @@ for (const width of [360, 390])
       ).json();
       expect(finalOrder.status).toBe("completed");
       expect(finalOrder.payment_status).toBe("paid");
+      expect(finalOrder.settlement_status).toBe("settled");
+      expect(finalOrder.completed_by).toBe(
+        width === 360 ? "merchant_quick" : "student_confirm",
+      );
       expect(errors).toEqual([]);
     } finally {
       await merchantContext.close();

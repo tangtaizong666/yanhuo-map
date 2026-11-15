@@ -21,12 +21,14 @@ const props = defineProps<{
   order: Order;
   suspended?: boolean;
   suspensionBusy?: boolean;
+  autoStart?: boolean;
 }>();
 const emit = defineEmits<{
   updated: [order: Order];
   changing: [];
   settled: [];
   confirmCancellation: [];
+  autoStarted: [];
 }>();
 const session = useSession();
 const userId = session.user?.id;
@@ -73,14 +75,9 @@ const refundProblem = computed(
     refundFollowUp.value &&
     ["closed", "abnormal"].includes(props.order.refund?.status || ""),
 );
-const payableStage = computed(() =>
-  isDelivery.value
-    ? props.order.status === "pending_payment"
-    : props.order.status === "ready",
-);
-const deliveryWindowClosing = computed(
+const payableStage = computed(() => props.order.status === "pending_payment");
+const paymentWindowClosing = computed(
   () =>
-    isDelivery.value &&
     props.order.status === "pending_payment" &&
     !!props.order.expires_at &&
     Date.parse(props.order.expires_at) - now.value <= 75000,
@@ -90,70 +87,10 @@ const active = computed(
     !!payment.value &&
     ["creating", "pending", "reconcile"].includes(payment.value.status),
 );
-// Before pickup is ready there is no payment action to take. Keep the payment
-// options visible without giving an unavailable cashier most of the screen.
-const compactPickup = computed(
-  () =>
-    !isDelivery.value &&
-    !props.suspended &&
-    ["pending", "preparing"].includes(props.order.status) &&
-    props.order.payment_status === "unpaid" &&
-    !payment.value &&
-    !props.order.refund &&
-    !props.order.refunds?.length &&
-    !financialFollowUp.value &&
-    !props.order.cancel_requested &&
-    !uncertain.value,
-);
 const review = computed(
   () =>
     props.order.payment_review_required || payment.value?.status === "review",
 );
-const offlineInformation = computed(
-  () =>
-    !isDelivery.value &&
-    !props.suspended &&
-    props.order.payment_status === "unpaid" &&
-    ["pending", "preparing", "ready"].includes(props.order.status) &&
-    !props.order.cancel_requested &&
-    !financialFollowUp.value &&
-    !props.order.refund &&
-    !props.order.refunds?.length &&
-    !active.value &&
-    (!payment.value || payment.value.status === "closed") &&
-    !uncertain.value &&
-    !review.value,
-);
-// The server owns permission; also fail closed if a stale response contains a
-// code alongside a cancellation, rehearsal or unresolved financial state.
-const showStallPaymentQr = computed(
-  () =>
-    props.order.offline_payment_available === true &&
-    props.order.mode === "live" &&
-    props.order.fulfillment_type === "pickup" &&
-    props.order.status === "ready" &&
-    props.order.payment_method === "offline" &&
-    !busy.value &&
-    offlineInformation.value &&
-    (!payment.value || payment.value.status === "closed") &&
-    !!props.order.stall_payment_qr_image,
-);
-// A collection code changed within a day is the usual sign of a swapped image.
-const qrRecentlyChanged = computed(() => {
-  const at = props.order.stall_payment_qr_updated_at;
-  return !!at && Date.now() - new Date(at).getTime() < 24 * 60 * 60 * 1000;
-});
-const qrUpdatedLabel = computed(() => {
-  const at = props.order.stall_payment_qr_updated_at;
-  return at
-    ? new Date(at).toLocaleString("zh-CN", {
-        month: "numeric",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : "";
-});
 const visible = computed(
   () =>
     [
@@ -183,7 +120,7 @@ const canStart = computed(
     allows(props.order, "pay", true) &&
     !props.suspended &&
     payableStage.value &&
-    !deliveryWindowClosing.value &&
+    !paymentWindowClosing.value &&
     props.order.payment_status === "unpaid" &&
     !props.order.cancel_requested &&
     !active.value &&
@@ -389,7 +326,26 @@ function refreshVisible() {
   if (!document.hidden && (active.value || uncertain.value))
     void action("sync");
 }
+let autoTriggered = false;
+function maybeAutoStart() {
+  if (autoTriggered || !props.autoStart) return;
+  if (active.value || props.order.payment_status === "paid") {
+    autoTriggered = true;
+    emit("autoStarted");
+    return;
+  }
+  if (canStart.value && browserSupported.value && !busy.value) {
+    autoTriggered = true;
+    emit("autoStarted");
+    void action("wechat");
+  }
+}
+watch(
+  () => [props.autoStart, canStart.value, browserSupported.value],
+  () => maybeAutoStart(),
+);
 onMounted(() => {
+  maybeAutoStart();
   timer = setInterval(() => {
     now.value = Date.now();
     queryWait.value = Math.ceil(
@@ -415,13 +371,12 @@ onUnmounted(() => {
     v-if="visible"
     id="payment"
     class="card student-payment"
-    :class="{ 'payment-before-pickup': compactPickup }"
     aria-labelledby="payment-heading"
   >
     <header>
       <span class="payment-symbol"><CreditCard :size="23" /></span>
       <div>
-        <h2 id="payment-heading">支付方式</h2>
+        <h2 id="payment-heading">线上付款状态</h2>
         <span v-if="isSimulation" class="payment-mode">模拟 · 不会扣款</span>
       </div>
       <strong>¥{{ money(order.total_cents) }}</strong>
@@ -636,25 +591,17 @@ onUnmounted(() => {
               ? "正在关闭…"
               : isSimulation
                 ? "关闭本次模拟支付"
-                : isDelivery
-                  ? "关闭本次微信支付"
-                  : "关闭微信支付，改为到摊付款"
+                : "关闭本次微信支付"
           }}
         </button>
       </div>
       <p class="payment-footnote">
-        {{
-          isDelivery
-            ? "系统会先核对支付结果。关闭支付不代表取消订单，配送订单仍须在线付款。"
-            : "切换付款方式前，系统会先核对并关闭当前微信支付。"
-        }}
+        系统会先核对支付结果。关闭当前支付会话不代表取消订单，本单仍须在线付款后才进入备餐。
       </p>
     </template>
     <template
       v-else-if="
-        ['pending_payment', 'pending', 'preparing', 'ready'].includes(
-          order.status,
-        ) &&
+        order.status === 'pending_payment' &&
         !suspended &&
         !order.cancel_requested &&
         !financialFollowUp &&
@@ -673,30 +620,19 @@ onUnmounted(() => {
                 ? "微信支付"
                 : "微信支付尚未开通"
           }}</strong
-          ><span class="online-label">线上支付</span>
+          ><span class="online-label">在线预付</span>
           <p>
             {{
-              compactPickup
+              isSimulation
                 ? order.wechat_payment?.available
-                  ? "出餐后可微信付款，现在无需提前支付。"
+                  ? "点击进入模拟收银台，模拟付款成功后自动进入商家制作队列。"
+                  : "商家暂未开启模拟线上支付，可在商家端经营服务中开启。"
+                : order.wechat_payment?.available
+                  ? isDelivery
+                    ? "完成微信付款后，商家开始制作并配送至校园交接点。"
+                    : "完成微信付款后，商家即刻制作，做好后凭 4 位取餐码直接拿走。"
                   : order.wechat_payment?.reason ||
-                    "到摊扫摊主收款码付款，平台不经手款项。"
-                : isSimulation
-                  ? order.wechat_payment?.available
-                    ? isDelivery
-                      ? "点击进入模拟收银台，体验付款后商家接单的流程。"
-                      : "商家出餐后可以模拟微信付款，也可体验到摊付款。"
-                    : "商家暂未开启模拟线上支付。可以联系商家在经营服务中开启。"
-                  : order.wechat_payment?.available
-                    ? isDelivery
-                      ? "请先完成付款，商家确认接单后开始制作并配送至交接点。"
-                      : order.status === "ready"
-                        ? "在线付款后，向商家出示取餐码即可。也可以在取餐时直接向商家付款。"
-                        : "商家出餐后，在这里使用微信付款。现在无需付款。"
-                    : isDelivery
-                      ? "微信支付当前不可用，配送订单不能改为线下付款。请稍后重试或取消订单。"
-                      : order.wechat_payment?.reason ||
-                        "到摊扫摊主收款码付款，平台不经手款项。"
+                    "微信支付当前不可用，请稍后重试或取消本单。"
             }}
           </p>
         </div>
@@ -708,31 +644,21 @@ onUnmounted(() => {
           {{
             busy === "wechat"
               ? "正在创建…"
-              : deliveryWindowClosing
+              : paymentWindowClosing
                 ? "付款时限将至"
-                : order.wechat_payment?.available && !payableStage
-                  ? "出餐后可支付"
-                  : isSimulation
-                    ? "模拟微信付款"
-                    : "微信支付"
+                : isSimulation
+                  ? "去模拟付款"
+                  : "立即微信支付"
           }}
         </button>
       </div>
       <div v-else class="payment-message">
         <div>
-          <strong>{{ isDelivery ? "配送暂时无法付款" : "到摊付款" }}</strong>
-          <p>
-            {{
-              isDelivery
-                ? "该商户当前无法发起线上支付。配送不能改为线下付款，请稍后重试或取消订单。"
-                : order.status === "ready"
-                  ? "请到摊核对餐点和金额，再向摊主本人付款，平台不经手款项。"
-                  : "先等商家出餐，取餐时再向摊主本人付款，无需提前支付。"
-            }}
-          </p>
+          <strong>当前无法发起线上付款</strong>
+          <p>该摊位暂未启用线上收款，请取消本单或稍后重试。</p>
         </div>
       </div>
-      <p v-if="deliveryWindowClosing" class="payment-footnote">
+      <p v-if="paymentWindowClosing" class="payment-footnote">
         剩余时间不足以发起新支付，请取消本单后重新下单。已发起的支付请先核对结果。
       </p>
       <p v-else-if="canStart && !browserSupported" class="payment-footnote">
@@ -740,27 +666,16 @@ onUnmounted(() => {
           inWechat
             ? "请使用手机系统浏览器打开本页；当前尚未接入微信内网页支付。"
             : mobile
-              ? isDelivery
-                ? "该商家暂未开通手机网页支付，请在电脑打开本单使用微信扫码。配送订单不可线下付款。"
-                : "该商家暂未开通手机网页支付。请到摊付款，或在电脑打开本单后使用微信扫码。"
-              : isDelivery
-                ? "请用手机系统浏览器打开本单完成微信付款。配送订单不可线下付款。"
-                : "该商家暂未开通电脑扫码支付。请用手机系统浏览器打开本单，或到摊付款。"
+              ? "该商家暂未开通手机网页支付，请在电脑打开本单使用微信扫码付款。"
+              : "请用手机系统浏览器打开本单完成微信付款。"
         }}
       </p>
-      <p v-else-if="onlineSupported && !compactPickup" class="payment-footnote">
-        <ShieldCheck :size="14" />付款状态以服务端核验结果为准
+      <p v-else-if="onlineSupported" class="payment-footnote">
+        <ShieldCheck :size="14" />付款结果由平台自动核验，无需商家手动确认收款
       </p>
     </template>
     <p v-else-if="order.cancel_requested" class="payment-footnote">
       取消申请正在处理中，暂时不能发起付款。
-    </p>
-    <p v-if="compactPickup && onlineSupported" class="compact-offline-note">
-      {{
-        isSimulation
-          ? "出餐后也可演练商家确认模拟收款，不要支付真实款项。"
-          : "也可出餐后到摊付款，无需提前支付。"
-      }}
     </p>
     <div
       v-if="financialFollowUp && (!active || review || refundFollowUp)"
@@ -785,44 +700,6 @@ onUnmounted(() => {
         }}
       </p>
     </div>
-    <p
-      v-if="onlineSupported && !compactPickup && offlineInformation"
-      class="offline-option"
-    >
-      <ShieldCheck :size="16" /><span
-        ><strong>{{
-          isSimulation ? "也可演练到摊付款" : "也可到摊付款"
-        }}</strong
-        >{{
-          isSimulation
-            ? "由商家确认模拟收款，不要支付真实款项。"
-            : "取餐时扫摊主收款码付款，无需提前支付。"
-        }}</span
-      >
-    </p>
-    <figure v-if="showStallPaymentQr" class="stall-qr">
-      <img
-        :src="order.stall_payment_qr_image"
-        :alt="`${order.stall_name}摊主自有收款码`"
-        loading="lazy"
-        width="220"
-        height="220"
-      />
-      <figcaption>
-        <strong>摊主收款码 · 应付 ¥{{ money(order.total_cents) }}</strong>
-        到摊后扫码付给摊主本人，平台不经手款项。付款后请向摊主出示取餐码，由摊主确认收款。
-        <small
-          v-if="qrUpdatedLabel"
-          :class="{ 'qr-recent': qrRecentlyChanged }"
-          :role="qrRecentlyChanged ? 'alert' : undefined"
-          >{{
-            qrRecentlyChanged
-              ? `收款码在 ${qrUpdatedLabel} 刚更换过，付款前请当面向摊主核对收款人名称。`
-              : `收款码更新于 ${qrUpdatedLabel}`
-          }}</small
-        >
-      </figcaption>
-    </figure>
     <p v-if="error" class="error-message" role="alert">{{ error }}</p>
   </section>
 </template>

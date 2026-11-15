@@ -297,8 +297,8 @@ onUnmounted(() => {
                 ><small>{{
                   stall.transaction_enabled
                     ? stall.delivery?.available
-                      ? "配送需先在线付款"
-                      : "出餐后付款取餐"
+                      ? "下单先付 · 可自取或配送"
+                      : "下单先付 · 凭 4 位码取餐"
                     : "到摊了解购买方式"
                 }}</small></span
               >

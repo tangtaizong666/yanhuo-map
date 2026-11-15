@@ -361,12 +361,12 @@ onUnmounted(() => {
                   ><strong>{{
                     stall.wechat_payment?.available
                       ? stall.wechat_payment.mode === "simulation"
-                        ? "出餐后可模拟付款"
-                        : "出餐后可线上付款"
-                      : "当前不可用"
+                        ? "下单在线模拟预付"
+                        : "下单在线预付"
+                      : "支付暂未开通"
                   }}</strong
                   ><span v-if="!stall.wechat_payment?.available"
-                    >到摊付款</span
+                    >暂不可点单</span
                   >
                 </div>
                 <details
@@ -580,9 +580,9 @@ onUnmounted(() => {
                   stall.transaction_enabled
                     ? stall.wechat_payment?.available
                       ? stall.wechat_payment.mode === "simulation"
-                        ? "线上点单，出餐后可模拟付款或到摊付款自取"
-                        : "线上点单，出餐后微信或到摊付款自取"
-                      : "线上点单，到摊付款自取"
+                        ? "下单在线模拟预付，付款后自动备餐凭 4 位码取餐"
+                        : "下单在线微信预付，付款后备餐凭 4 位码取餐"
+                      : "线上支付尚未就绪，暂不接单"
                     : "仅提供摊位信息，线下到访"
                 }}
               </dd>
@@ -603,10 +603,10 @@ onUnmounted(() => {
                   {{
                     stall.wechat_payment?.available
                       ? stall.wechat_payment.mode === "simulation"
-                        ? "出餐后可在订单页模拟付款"
-                        : "出餐后可在订单页微信付款"
+                        ? "提交订单即拉起模拟收银台，付款确认后进入备餐"
+                        : "提交订单后微信在线预付，付款确认后进入备餐"
                       : stall.wechat_payment?.reason ||
-                        "微信支付当前不可用，取餐时向商家付款"
+                        "该摊位暂未开通线上支付，暂不可线上点单"
                   }}
                 </dd>
                 <dt>商家配送</dt>
@@ -631,12 +631,12 @@ onUnmounted(() => {
             <p class="pickup-description">
               少一点排队，多一点热乎。<br />{{
                 stall.delivery?.available
-                  ? "结算时可选到摊自取或送至校园交接点。"
+                  ? "结算时可选到摊自取或送至校园交接点，下单在线预付即刻备餐。"
                   : stall.wechat_payment?.available
                     ? stall.wechat_payment.mode === "simulation"
-                      ? "出餐后可在订单页模拟付款，不会真实扣款。"
-                      : "出餐后可在订单页微信付款。"
-                    : "取餐时直接向商家付款。"
+                      ? "下单在线模拟预付后立即备餐，凭 4 位码到摊即取。"
+                      : "下单微信预付后立即备餐，凭 4 位码到摊即取。"
+                    : "线上支付开通后即可提前点单。"
               }}
             </p>
             <div class="pickup-details">
@@ -674,7 +674,7 @@ onUnmounted(() => {
             ><button v-else class="btn btn-primary checkout-button" disabled>
               {{ stall.can_order ? "先选几份喜欢的" : "暂时无法点单" }}
             </button>
-            <p class="pickup-footnote">单摊结算 · 出餐后付款 · 凭码取餐</p>
+            <p class="pickup-footnote">单摊结算 · 下单先付 · 凭4位码取餐</p>
           </div>
           <p class="aside-note">
             出发前，记得确认摊位的最新位置。<br />好味道，值得一次恰好的相遇。
@@ -693,7 +693,7 @@ onUnmounted(() => {
           ><small>{{
             stall.delivery?.available
               ? "结算时选择自取或配送 · 配送费另计"
-              : "到摊自取 · 出餐后付款"
+              : "在线预付 · 凭 4 位码取餐"
           }}</small>
         </div>
         <RouterLink

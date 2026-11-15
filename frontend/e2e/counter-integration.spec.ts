@@ -8,7 +8,7 @@ test.skip(
   "Requires an isolated demo server and E2E_ISOLATED=1",
 );
 
-test("real counter API preserves paused stock, rejects stale corrections, and lookup UI completes only after payment", async ({
+test("real counter API preserves paused stock, rejects stale corrections, and lookup UI completes paid pickup orders", async ({
   browser,
   page,
   context,
@@ -141,14 +141,31 @@ test("real counter API preserves paused stock, rejects stale corrections, and lo
     const order = await create(crypto.randomUUID());
     const replay = await write(correctionPath, correction);
     expect(replay).toMatchObject({ replayed: true, product: { stock: 3 } });
-    await write(`/merchant/orders/${order.id}/action`, {
-      action: "accept",
-      prep_minutes: 8,
-      idempotency_key: crypto.randomUUID(),
-    });
+    const paymentStart = await mutate(
+      student,
+      `/orders/${order.id}/payments/wechat`,
+      { channel: "simulation" },
+    );
+    expect(paymentStart.ok(), await paymentStart.text()).toBeTruthy();
+    const paymentIntent = (await paymentStart.json()).payment;
+    const simulated = await mutate(
+      student,
+      `/orders/${order.id}/payments/simulate`,
+      { payment_id: paymentIntent.id, outcome: "success" },
+    );
+    expect(simulated.ok(), await simulated.text()).toBeTruthy();
+    const afterPay = await simulated.json();
+    if (afterPay.status === "pending") {
+      await write(`/merchant/orders/${order.id}/action`, {
+        action: "accept",
+        prep_minutes: 8,
+        idempotency_key: crypto.randomUUID(),
+      });
+    }
     await write(`/merchant/orders/${order.id}/action`, { action: "ready" });
     const ready = await orderSnapshot(order.id);
-    expect(ready.payment_status).toBe("unpaid");
+    expect(ready.payment_status).toBe("paid");
+    expect(ready.settlement_status).toBe("escrow");
     expect(ready.pickup_code).toMatch(/^\d{4}$/);
     await page.goto("/merchant/orders");
     await page.getByLabel("选择管理的摊位").selectOption(String(stall.id));
@@ -165,27 +182,22 @@ test("real counter API preserves paused stock, rejects stale corrections, and lo
     await expect(details).toContainText(product.name);
     expect(await orderSnapshot(order.id)).toMatchObject({
       status: "ready",
-      payment_status: "unpaid",
+      payment_status: "paid",
     });
     await expect(
-      details.getByRole("button", { name: "核销并完成" }),
+      details.getByRole("button", { name: /^收款 ¥/ }),
     ).toHaveCount(0);
-    await details.getByRole("button", { name: "收款 ¥12", exact: true }).click();
-    await page
-      .getByRole("dialog", { name: "确认这笔线下收款" })
-      .getByRole("button", { name: "确认收款", exact: true })
-      .click();
     await expect(
       details.getByRole("button", { name: "核销并完成" }),
     ).toBeVisible();
-    expect(await orderSnapshot(order.id)).toMatchObject({
-      status: "ready",
-      payment_status: "paid",
-    });
     await details.getByRole("button", { name: "核销并完成" }).click();
     await expect
-      .poll(async () => (await orderSnapshot(order.id)).status)
-      .toBe("completed");
+      .poll(async () => await orderSnapshot(order.id))
+      .toMatchObject({
+        status: "completed",
+        settlement_status: "settled",
+        completed_by: "merchant_code",
+      });
     const duplicate = await mutate(
       context,
       `/merchant/orders/${order.id}/action`,
@@ -197,7 +209,7 @@ test("real counter API preserves paused stock, rejects stale corrections, and lo
   } finally {
     for (const id of ids) {
       const order = await orderSnapshot(id);
-      if (order.status === "pending")
+      if (["pending_payment", "pending"].includes(order.status))
         await mutate(student, `/orders/${id}/cancel`, {
           reason: "隔离测试结束",
         });

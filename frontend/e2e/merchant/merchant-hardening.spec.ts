@@ -11,7 +11,7 @@ async function fixture(page: Page, path = "/merchant/orders?filter=all") {
     last_confirmed_at: "2026-10-12T10:00:00+08:00", closes_at: "2026-10-12T20:00:00+08:00",
     stop_orders_at: "2026-10-12T19:30:00+08:00" };
   const make = (id: string, status: string, date: string) => ({ id, number: id, stall_id: stall.id, stall_name: stall.name,
-    mode: "live", fulfillment_type: "pickup", status, payment_method: "offline", payment_status: "paid",
+    mode: "live", fulfillment_type: "pickup", status, payment_method: "wechat", payment_status: "paid",
     payment: null, refund: null, review: null, cancel_requested: false, payment_review_required: false,
     created_at: date, total_cents: 1000, pickup_address: stall.address,
     items: [{ product_id: 1, name: `合成餐点${id}`, image: "", quantity: 1, unit_price_cents: 1000, portions: [] }] });

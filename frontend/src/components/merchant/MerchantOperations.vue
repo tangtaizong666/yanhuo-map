@@ -152,6 +152,7 @@ async function loadReports() {
       <span>{{ stall.last_confirmed_at ? `位置确认 ${formatTime(stall.last_confirmed_at)}` : '位置尚未确认' }}</span>
       <template v-if="state !== 'closed'">
         <span>{{ stall.closes_at ? `预计收摊 ${formatTime(stall.closes_at)}` : '未设置预计收摊时间' }}</span>
+        <span v-if="!discoveryOnly">{{ stall.auto_accept_orders !== false ? '付款自动接单' : '手动接单模式' }}</span>
         <span v-if="stall.stop_orders_at">停止接单 {{ formatTime(stall.stop_orders_at) }}</span>
       </template>
     </p>

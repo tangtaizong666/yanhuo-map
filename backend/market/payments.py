@@ -109,7 +109,7 @@ def _apply_payment(order, payment, data):
             payment.error_code = payment.error_message = ''
             payment.save(update_fields=['last_checked_at', 'error_code', 'error_message'])
             return
-        expected_status = 'pending_payment' if order.fulfillment_type == 'delivery' else 'ready'
+        expected_status = 'pending_payment'
         contradictory = (payment.status == 'closed' or order.status != expected_status
             or order.payment_status != 'unpaid' or order.cancel_requested
             or order.payments.exclude(pk=payment.pk).filter(status__in=PaymentAttempt.ACTIVE_STATUSES + ('paid',)).exists())
@@ -124,30 +124,42 @@ def _apply_payment(order, payment, data):
             audit(None, 'payment_requires_review', order.pk, mode=order.mode, payment_id=str(payment.pk))
             return
         order.payment_method, order.payment_status, order.paid_at = 'wechat', 'paid', paid_at
+        # Re-read under the same stall lock as settings/location writes. The
+        # gateway observation may have taken seconds since the original read.
+        order.stall = Stall.objects.select_for_update(no_key=True).get(pk=order.stall_id)
         if order.fulfillment_type == 'delivery':
-            # Re-read under the same stall lock as settings/location writes. The
-            # gateway observation may have taken seconds since the original read.
-            order.stall = Stall.objects.select_for_update(no_key=True).get(pk=order.stall_id)
             from .delivery import active_points, delivery_window_open, service_enabled, service_approved
             point_open = active_points(order.stall).select_for_update().filter(pk=order.delivery_point_id).exists()
-            # Payment success starts the acceptance clock; it never proves delivery.
-            # Expired/stopped service is compensated without resurrecting fulfilment.
-            # The busy switch stops new reservations, not payment for an already
-            # reserved order. All existing operational/qualification checks remain.
-            if (paid_at > payment.expires_at or not order.stall.can_order(existing_order=True)
-                    or not service_enabled(order.stall) or not service_approved(order.stall)
-                    or not (delivery_window_open(order.stall, now=paid_at) or (paid_at >= order.created_at and paid_at - order.created_at <= timedelta(minutes=16) and delivery_window_open(order.stall, now=order.created_at)))
-                    or not point_open or not order.stall.delivery_points.filter(pk=order.delivery_point_id).exists()):
-                from .services import release_inventory
-                order.status, order.cancel_reason = 'cancelled', '付款时配送服务已暂停，正在全额退款'
-                queue_refund(order, None, '配送服务不可用，全额退款')
-                release_inventory(order)
-            else:
-                order.status = 'pending'
-                accepted_clock_start = timezone.now()
-                order.expires_at = accepted_clock_start + timedelta(minutes=SiteConfiguration.current().pending_minutes)
+            unavailable = (paid_at > payment.expires_at or not order.stall.can_order(existing_order=True)
+                or not service_enabled(order.stall) or not service_approved(order.stall)
+                or not (delivery_window_open(order.stall, now=paid_at) or (paid_at >= order.created_at and paid_at - order.created_at <= timedelta(minutes=16) and delivery_window_open(order.stall, now=order.created_at)))
+                or not point_open or not order.stall.delivery_points.filter(pk=order.delivery_point_id).exists())
+            unavailable_reason = '付款时配送服务已暂停，正在全额退款'
+            refund_reason = '配送服务不可用，全额退款'
+        else:
+            unavailable = paid_at > payment.expires_at or not order.stall.can_order(existing_order=True)
+            unavailable_reason = '付款时摊位已收摊或超时，正在全额原路退款'
+            refund_reason = '摊位已停止营业或付款超时，全额退款'
+        if unavailable:
+            from .services import release_inventory
+            order.status, order.cancel_reason = 'cancelled', unavailable_reason
+            order.settlement_status = 'reversed'
+            queue_refund(order, None, refund_reason)
+            release_inventory(order)
+        else:
+            accepted_clock_start = timezone.now()
+            order.settlement_status = 'escrow'
+            if order.fulfillment_type == 'delivery':
                 order.delivery_eta_min_at = accepted_clock_start + timedelta(minutes=order.stall.delivery_eta_min_minutes)
                 order.delivery_eta_max_at = accepted_clock_start + timedelta(minutes=order.stall.delivery_eta_max_minutes)
+            if order.stall.auto_accept_orders:
+                order.status, order.accepted_at = 'preparing', accepted_clock_start
+                minutes = max(1, min(order.stall.prep_minutes, 180))
+                order.estimated_ready_at = accepted_clock_start + timedelta(minutes=minutes)
+                order.prep_updated_at, order.prep_delay_reason = accepted_clock_start, ''
+            else:
+                order.status = 'pending'
+                order.expires_at = accepted_clock_start + timedelta(minutes=SiteConfiguration.current().pending_minutes)
         order.save()
         audit(None, 'wechat_payment_confirmed', order.pk, mode=order.mode, payment_id=str(payment.pk))
     elif state in ('CLOSED', 'REVOKED'):
@@ -157,7 +169,7 @@ def _apply_payment(order, payment, data):
         payment.save()
         if (order.payment_status == 'unpaid' and not order.payment_review_required
                 and not order.payments.exclude(pk=payment.pk).filter(status__in=PaymentAttempt.ACTIVE_STATUSES + ('paid',)).exists()):
-            order.payment_method = 'wechat' if order.fulfillment_type == 'delivery' else 'offline'
+            order.payment_method = 'wechat'
             order.save(update_fields=['payment_method'])
     elif state in ('NOTPAY', 'USERPAYING', 'ACCEPT', 'PAYERROR'):
         if payment.status in ('paid', 'closed'): raise _invalid()
@@ -233,7 +245,7 @@ def _drive_payment(order_id, user=None, *, operation='query', payer_client_ip=No
                 else: raise
             if not entry:
                 _payment_identity(payment, result)
-                auto_close = (order.fulfillment_type == 'delivery' and order.status == 'pending_payment'
+                auto_close = (order.status == 'pending_payment'
                     and payment.expires_at <= timezone.now())
                 if (operation == 'close' or auto_close) and result.get('trade_state') in ('NOTPAY', 'USERPAYING', 'ACCEPT', 'PAYERROR'):
                     client.close_payment(payment.out_trade_no)
@@ -261,7 +273,7 @@ def _drive_payment(order_id, user=None, *, operation='query', payer_client_ip=No
                 # The same inference is unsafe for a retry of an uncertain request.
                 payment.status = 'closed'
                 _error(payment, failure, unknown=False)
-                order.payment_method = 'wechat' if order.fulfillment_type == 'delivery' else 'offline'
+                order.payment_method = 'wechat'
                 order.save(update_fields=['payment_method'])
             else: _error(payment, failure)
         elif entry:
@@ -292,9 +304,7 @@ def start_payment(order_id, user, channel, payer_client_ip):
         order = _order(order_id, user)
         if (channel == 'simulation') != (order.mode == 'simulation'):
             raise BusinessError('付款入口与订单模式不一致，请刷新后使用对应入口。', 'payment_mode_mismatch', status=400)
-        delivery = order.fulfillment_type == 'delivery'
-        expected_status = 'pending_payment' if delivery else 'ready'
-        if order.status != expected_status or order.payment_status != 'unpaid' or order.cancel_requested or order.payment_review_required:
+        if order.status != 'pending_payment' or order.payment_status != 'unpaid' or order.cancel_requested or order.payment_review_required:
             raise BusinessError('当前订单状态不能发起微信付款，请刷新订单状态。', 'payment_unavailable')
         existing = order.payments.filter(status__in=PaymentAttempt.ACTIVE_STATUSES).first()
         if existing and order.mode == 'live':
@@ -303,21 +313,21 @@ def start_payment(order_id, user, channel, payer_client_ip):
             # They cannot recover/create a charge or reopen its payment entry.
             query_only = bool(online_payment_eligibility_reason(order.stall))
         if not existing:
-            if delivery and order.expires_at <= timezone.now()+timedelta(seconds=75):
+            if order.expires_at <= timezone.now()+timedelta(seconds=75):
                 raise BusinessError('订单剩余付款时间不足，请取消后重新下单。', 'payment_unavailable')
             from .simulation import eligible, payment_readiness
             simulated = order.mode == 'simulation'
             if simulated and not eligible(order.stall):
                 raise BusinessError('模拟服务已关闭，原订单不会转为真实支付。', 'simulation_unavailable')
             if order.stall.is_demo and not simulated:
-                raise BusinessError('示例摊位不支持真实微信支付，请使用到摊付款流程。', 'payment_not_configured', status=503)
+                raise BusinessError('示例摊位仅支持模拟微信支付，当前未开启模拟服务。', 'payment_not_configured', status=503)
             from .admission import online_payment_eligibility_reason
             admission_reason = online_payment_eligibility_reason(order.stall)
             if admission_reason:
                 raise BusinessError(admission_reason, 'payment_unavailable')
             available = payment_readiness(order.stall) if simulated else readiness(order.stall.merchant)
             if not available.get('available'):
-                raise BusinessError(available.get('reason') or '微信支付暂未开通，请使用到摊付款。', 'payment_not_configured', status=503)
+                raise BusinessError(available.get('reason') or '商户尚未开通线上微信收款，暂无法发起支付。', 'payment_not_configured', status=503)
             if channel not in available.get('channels', []):
                 raise BusinessError('当前微信支付方式尚未开放。', 'payment_channel_unavailable', status=400)
             client = None
@@ -331,7 +341,7 @@ def start_payment(order_id, user, channel, payer_client_ip):
                 mchid=f'SIM{order.stall.merchant_id}' if simulated else client.mchid,
                 appid='SIMULATION' if simulated else client.appid,
                 out_trade_no='YH' + secrets.token_hex(15).upper(), channel=channel,
-                amount_cents=order.total_cents, expires_at=order.expires_at if delivery else timezone.now()+timedelta(minutes=15))
+                amount_cents=order.total_cents, expires_at=order.expires_at)
             order.payment_method = 'wechat'
             order.save(update_fields=['payment_method'])
             audit(user, 'wechat_payment_started', order.pk, mode=order.mode)
@@ -439,8 +449,10 @@ def _apply_refund(order, refund, data, *, notification=False):
         _resolve_closed_refunds(order, refund.payment)
         _refresh_money_status(order)
         _cancel_fully_refunded(order)
+        if order.payment_status == 'refunded':
+            order.settlement_status, order.settled_at = 'reversed', None
         # Prepared food is not restocked; completed pickups remain completed.
-        order.save(update_fields=['payment_status', 'status', 'cancel_requested', 'cancel_reason', 'inventory_released'])
+        order.save(update_fields=['payment_status', 'status', 'cancel_requested', 'cancel_reason', 'inventory_released', 'settlement_status', 'settled_at'])
         audit(None, 'wechat_refund_succeeded', order.pk, mode=order.mode, refund_id=str(refund.pk))
     elif state == 'PROCESSING':
         refund.status, order.payment_status = 'processing', 'refunding'
@@ -452,8 +464,10 @@ def _apply_refund(order, refund, data, *, notification=False):
         refund.refresh_from_db()
         _refresh_money_status(order)
         _cancel_fully_refunded(order)
+        if order.payment_status == 'refunded':
+            order.settlement_status, order.settled_at = 'reversed', None
         refund.error_message = '微信已关闭该退款申请，请联系商家核对。'
-        order.save(update_fields=['payment_status', 'status', 'cancel_requested', 'cancel_reason', 'inventory_released'])
+        order.save(update_fields=['payment_status', 'status', 'cancel_requested', 'cancel_reason', 'inventory_released', 'settlement_status', 'settled_at'])
     else:
         refund.status, order.payment_status = 'abnormal', 'refunding'
         refund.error_message = ('模拟退款处理异常，可继续演练退款成功；不会调用微信。' if refund.mode == 'simulation'
@@ -575,7 +589,7 @@ def request_refund(order_id, user, reason, simulation_outcome=None):
         if not existing and order.payment_status == 'refunded':
             existing = PaymentRefund.objects.filter(order=order, status='success').first()
         if not existing:
-            refundable = ('pending', 'preparing', 'ready', 'delivering', 'arrived', 'completed') if order.fulfillment_type == 'delivery' else ('ready', 'completed')
+            refundable = ('pending', 'preparing', 'ready', 'delivering', 'arrived', 'completed') if order.fulfillment_type == 'delivery' else ('pending', 'preparing', 'ready', 'completed')
             if (order.status not in refundable or order.payment_method != 'wechat'
                 or order.payment_status != 'paid' or payment_busy(order)):
                 raise BusinessError('此订单当前不能申请原路退款。', 'refund_unavailable')
@@ -583,7 +597,7 @@ def request_refund(order_id, user, reason, simulation_outcome=None):
             if simulation_outcome is not None:
                 refund.simulation_state = {'success': 'SUCCESS', 'pending': 'PROCESSING', 'failure': 'ABNORMAL'}[simulation_outcome]
                 refund.save(update_fields=['simulation_state'])
-            if order.fulfillment_type == 'delivery' and order.status != 'completed':
+            if (order.fulfillment_type == 'delivery' or order.status == 'pending') and order.status != 'completed':
                 if order.status == 'pending':
                     from .services import release_inventory
                     release_inventory(order)

@@ -53,6 +53,7 @@ const merchantDraft = reactive({
   food_preparation_address: "",
   license_valid_until: "",
   wechat_pay_account: "",
+  custom_fee_percent: "",
   qualification_note: "",
 });
 
@@ -63,6 +64,7 @@ const stallDraft = reactive({
   is_visible: false,
   public_phone_enabled: false,
   transaction_enabled: false,
+  auto_accept_orders: true,
   delivery_approved: false,
   delivery_enabled: false,
   delivery_point_ids: [] as number[],
@@ -127,6 +129,10 @@ function syncDrafts(stall: any) {
   merchantDraft.food_preparation_address = m.food_preparation_address || "";
   merchantDraft.license_valid_until = m.license_valid_until || "";
   merchantDraft.wechat_pay_account = m.wechat_pay_account || "";
+  merchantDraft.custom_fee_percent =
+    m.custom_fee_bps === null || m.custom_fee_bps === undefined
+      ? ""
+      : String(Number((m.custom_fee_bps / 100).toFixed(2)));
   merchantDraft.qualification_note = m.qualification_note || "";
 
   stallDraft.name = stall.name || "";
@@ -135,6 +141,7 @@ function syncDrafts(stall: any) {
   stallDraft.is_visible = !!stall.is_visible;
   stallDraft.public_phone_enabled = !!stall.public_phone_enabled;
   stallDraft.transaction_enabled = !!stall.transaction_enabled;
+  stallDraft.auto_accept_orders = stall.auto_accept_orders !== false;
   stallDraft.delivery_approved = !!stall.delivery_approved;
   stallDraft.delivery_enabled = !!stall.delivery_enabled;
   stallDraft.delivery_point_ids = [...(stall.delivery_point_ids || [])];
@@ -198,6 +205,17 @@ async function saveMerchant(stall: any) {
       license_valid_until: merchantDraft.license_valid_until || null,
       qualification_note: merchantDraft.qualification_note.trim(),
     };
+    const rawFee = String(merchantDraft.custom_fee_percent ?? "").trim();
+    if (!rawFee) {
+      body.custom_fee_bps = null;
+    } else {
+      const pct = Number(rawFee);
+      if (!Number.isFinite(pct) || pct < 0 || pct > 30) {
+        drawerError.value = "专属服务费率须介于 0% 至 30% 之间（留空则沿用全局费率）。";
+        return;
+      }
+      body.custom_fee_bps = Math.round(pct * 100);
+    }
     if (canEditWechatAccount) {
       body.wechat_pay_account = merchantDraft.wechat_pay_account.trim() || null;
     }
@@ -227,6 +245,7 @@ async function saveStall(stall: any) {
       is_visible: stallDraft.is_visible,
       public_phone_enabled: stallDraft.public_phone_enabled,
       transaction_enabled: stallDraft.transaction_enabled,
+      auto_accept_orders: stallDraft.auto_accept_orders,
       delivery_approved: stallDraft.delivery_approved,
       delivery_point_ids: stallDraft.delivery_point_ids,
     };
@@ -429,6 +448,19 @@ onMounted(() => {
           >
           <span>区域：{{ stall.area_name }}</span>
           <span
+            >分账费率：{{
+              ((stall.merchant.effective_fee_bps ?? 500) / 100).toFixed(1)
+            }}%{{
+              stall.merchant.custom_fee_bps !== null &&
+              stall.merchant.custom_fee_bps !== undefined
+                ? "（专属）"
+                : ""
+            }}</span
+          >
+          <span v-if="stall.transaction_eligible">
+            接单：{{ stall.auto_accept_orders !== false ? "付款自动接单" : "手动接单" }}
+          </span>
+          <span
             >上架餐点：{{ stall.active_product_count }}/{{
               stall.product_count
             }}</span
@@ -543,11 +575,11 @@ onMounted(() => {
                   />
                 </label>
                 <label class="o-field">
-                  微信直连收款配置标识（选填）
+                  微信特约商户收款配置标识（选填）
                   <input
                     v-model="merchantDraft.wechat_pay_account"
                     class="o-input"
-                    placeholder="对应服务端商户收款账户 key"
+                    placeholder="对应服务端特约商户账户 key"
                     :disabled="
                       !session.user?.is_superuser &&
                       !session.hasOpsPerm('resolve_payments')
@@ -555,6 +587,18 @@ onMounted(() => {
                   />
                 </label>
                 <label class="o-field">
+                  专属平台服务费率 %（留空沿用全局默认）
+                  <input
+                    v-model="merchantDraft.custom_fee_percent"
+                    type="number"
+                    min="0"
+                    max="30"
+                    step="0.1"
+                    class="o-input"
+                    placeholder="例如 3.5；留空采用全局费率"
+                  />
+                </label>
+                <label class="o-field span-2">
                   公开资质说明
                   <input
                     v-model="merchantDraft.qualification_note"
@@ -627,7 +671,14 @@ onMounted(() => {
                     v-model="stallDraft.transaction_enabled"
                     type="checkbox"
                   />
-                  允许线上自取预定（需持证已核验）
+                  允许线上自取预定（在线预付 · 需持证已核验）
+                </label>
+                <label class="o-check">
+                  <input
+                    v-model="stallDraft.auto_accept_orders"
+                    type="checkbox"
+                  />
+                  付款后自动接单进入制作中（夜市高峰推荐）
                 </label>
                 <label class="o-check">
                   <input

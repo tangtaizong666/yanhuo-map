@@ -179,7 +179,7 @@ async function save(kind: "capacity" | "cutoff") {
         /></label>
         <p>
           关闭时不限单；开启后默认 5
-          单，可调整。待付款、待接单和制作中共用上限，出餐后释放占位。不会取消已接订单。
+          单，可调整。已付款待接单与制作中共用上限，出餐后释放占位。不会取消已接订单。
         </p>
         <button type="submit" :disabled="!!busy">保存备餐上限</button>
       </form>

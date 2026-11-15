@@ -112,6 +112,7 @@ class StallProfileInput(StrictInput):
     payment_qr_image = ImageAddress(allow_protected_qr=True, required=False)
     location_draft_address = serializers.CharField(max_length=200, allow_blank=True, required=False)
     accepting_orders = serializers.BooleanField(required=False)
+    auto_accept_orders = serializers.BooleanField(required=False)
     name = serializers.CharField(max_length=80, required=False)
     description = serializers.CharField(max_length=1000, allow_blank=True, required=False)
     image = ImageAddress(required=False)
@@ -141,15 +142,20 @@ def service_settings(stall):
     from .serializers import public_payment_readiness
     from .delivery import delivery_settings, service_enabled
     simulated = eligible(stall)
+    cfg = SiteConfiguration.current()
+    effective_fee_bps = stall.merchant.custom_fee_bps if stall.merchant.custom_fee_bps is not None else cfg.platform_fee_bps
     return {'mode': 'simulation' if simulated else 'live', 'simulation_available': simulated,
         'online_payment_enabled': stall.simulation_payment_enabled if simulated else public_payment_readiness(stall, {})['available'],
-        'delivery_enabled': service_enabled(stall), 'wechat_payment': public_payment_readiness(stall, {}),
+        'delivery_enabled': service_enabled(stall), 'auto_accept_orders': stall.auto_accept_orders,
+        'effective_fee_bps': effective_fee_bps,
+        'wechat_payment': public_payment_readiness(stall, {}),
         'delivery': delivery_settings(stall, merchant=True), 'capabilities': capabilities(stall)}
 
 
 class ServicesInput(StrictInput):
     online_payment_enabled = serializers.BooleanField(required=False)
     delivery_enabled = serializers.BooleanField(required=False)
+    auto_accept_orders = serializers.BooleanField(required=False)
 
 
 @api_view(['GET', 'PATCH'])
@@ -161,18 +167,28 @@ def services(request, stall_id):
     form.is_valid(raise_exception=True)
     with transaction.atomic():
         stall = merchant_stall(stall_id, request.user, locked=True, permission='market.change_stall')
-        if not eligible(stall):
+        values = dict(form.validated_data)
+        sim_keys = {'online_payment_enabled', 'delivery_enabled'} & set(values)
+        if sim_keys and not eligible(stall):
             raise BusinessError('快捷开关目前用于模拟经营；正式服务需由运营完成接入后启用。', 'simulation_unavailable')
-        values = form.validated_data
         from .admission import pickup_eligibility_reason
         admission_reason = pickup_eligibility_reason(stall)
-        if any(value is True for value in values.values()) and admission_reason:
+        if any(values.get(k) is True for k in sim_keys) and admission_reason:
             raise BusinessError(admission_reason, 'stall_unavailable')
         if values.get('delivery_enabled') is True:
             prepare_stall(stall)
+        update_fields = []
         for key, value in values.items():
-            setattr(stall, 'simulation_payment_enabled' if key == 'online_payment_enabled' else 'simulation_delivery_enabled', value)
-        stall.save(update_fields=['simulation_payment_enabled', 'simulation_delivery_enabled'])
+            if key == 'auto_accept_orders':
+                attr = 'auto_accept_orders'
+            elif key == 'online_payment_enabled':
+                attr = 'simulation_payment_enabled'
+            else:
+                attr = 'simulation_delivery_enabled'
+            setattr(stall, attr, value)
+            update_fields.append(attr)
+        if update_fields:
+            stall.save(update_fields=update_fields)
         audit(request.user, 'simulation_services_updated', stall.pk, **values)
     return Response(service_settings(stall))
 
@@ -645,12 +661,27 @@ def metrics(request):
         effective_paid_at=Coalesce('paid_at', Subquery(latest_paid_attempt.values('paid_at')[:1]))
     )
     payments = list(payment_orders.order_by('-effective_paid_at', '-pk').values(
-        'id', 'number', 'total_cents', 'effective_paid_at', 'stall_name',
+        'id', 'number', 'total_cents', 'platform_fee_bps', 'platform_fee_cents', 'merchant_net_cents',
+        'settlement_status', 'effective_paid_at', 'stall_name',
         'payment_method', 'payment_status', refund_status=Subquery(latest_refund.values('status')[:1]),
         refunded_at=Subquery(latest_refund.values('completed_at')[:1]))[:20])
     for payment in payments:
         payment['paid_at'] = payment.pop('effective_paid_at')
         payment['refunded'] = payment['payment_status'] == 'refunded'
+    split_sums = query.filter(payment_status='paid', paid_at__gte=start, paid_at__lte=now).aggregate(
+        platform_fee_cents=Sum('platform_fee_cents', default=0),
+        merchant_net_cents=Sum('merchant_net_cents', default=0),
+    )
+    settled_net_cents = query.filter(
+        payment_status='paid', settlement_status='settled', settled_at__gte=start, settled_at__lte=now
+    ).aggregate(cents=Sum('merchant_net_cents', default=0))['cents']
+    escrow_net_cents = query.filter(
+        payment_status='paid', settlement_status='escrow'
+    ).aggregate(cents=Sum('merchant_net_cents', default=0))['cents']
+    today_split = query.filter(payment_status='paid', paid_at__gte=today_start, paid_at__lte=now).aggregate(
+        platform_fee_cents=Sum('platform_fee_cents', default=0),
+        merchant_net_cents=Sum('merchant_net_cents', default=0),
+    )
     from .pilot_metrics import evidence
     return Response({'mode': mode, 'period_days': days, 'stall_views': views, 'orders_created': total, 'orders_completed': completed,
         'pilot_evidence': evidence(query, stall_query, start, now, mode),
@@ -664,11 +695,17 @@ def metrics(request):
         'expired_orders': recent_events.filter(type='order_expired').count(),
         'stale_stalls': sum(s.effective_status(site_config) == 'stale' for s in stall_query),
         **net_receipts(gross, refund_cents),
+        'platform_fee_cents': split_sums['platform_fee_cents'],
+        'merchant_net_cents': split_sums['merchant_net_cents'],
+        'settled_net_cents': settled_net_cents,
+        'escrow_net_cents': escrow_net_cents,
         'average_order_cents': round(revenue / paid_count) if paid_count else 0,
         'followers': Follow.objects.filter(stall__in=stall_query).count(),
         'products_active': products.filter(is_active=True).count(),
         'products_sold_out': products.filter(is_active=True, stock=0).count(),
         'today': {**net_receipts(today_gross, today_refunded),
+            'platform_fee_cents': today_split['platform_fee_cents'],
+            'merchant_net_cents': today_split['merchant_net_cents'],
             'orders_created': recent.filter(created_at__gte=today_start).count(),
             'orders_completed': fulfilled.filter(completed_at__gte=today_start).count()},
         'series': series, 'top_products': list(top), 'recent_payments': payments,

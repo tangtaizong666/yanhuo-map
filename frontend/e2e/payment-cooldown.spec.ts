@@ -7,7 +7,7 @@ const replacement = { ...owner, id: 882, username: 'cooldown_other', display_nam
 function order(cooldown: number) {
   return {
     id: 'cooldown-fixture', number: 'COOLDOWN-ONLY', stall_id: 881,
-    stall_name: '支付冷却测试摊位', status: 'ready', mode: 'live',
+    stall_name: '支付冷却测试摊位', status: 'pending_payment', mode: 'live',
     fulfillment_type: 'pickup', payment_method: 'wechat', payment_status: 'unpaid',
     payment_review_required: false, payment_query_after_seconds: cooldown,
     allowed_actions: ['sync_payment', 'close_payment'],
@@ -15,7 +15,7 @@ function order(cooldown: number) {
     payment: { id: 'cooldown-attempt', status: 'pending', channel: 'native',
       code_url: '', h5_url: '', expires_at: '2026-10-03T07:00:00Z', next_query_at: null },
     refund: null, payment_can_close: true, total_cents: 1450,
-    created_at: '2026-10-03T06:00:00Z', pickup_code: '123456',
+    created_at: '2026-10-03T06:00:00Z', expires_at: '2026-10-03T06:15:00Z', pickup_code: '1234',
     pickup_address: '测试取餐点', pickup_latitude: 45.7, pickup_longitude: 126.6,
     current_address: '测试取餐点', location_changed: false, note: '', contact_phone: '',
     cancel_requested: false, cancel_reason: '', review: null,
@@ -60,7 +60,7 @@ async function fixture(page: Page, cooldown: number) {
       if (match[1] === 'sync') await state.beforeSync?.()
       if (match[1] === 'close') {
         state.order.payment.status = 'closed'
-        state.order.payment_method = 'offline'
+        state.order.payment_method = 'wechat'
         state.order.payment_can_close = false
         state.order.allowed_actions = ['pay', 'cancel']
         queryDeadline = 0
@@ -71,7 +71,7 @@ async function fixture(page: Page, cooldown: number) {
     return send({ detail: `Unexpected fixture API: ${path}` }, 500)
   })
   await page.goto(`/orders/${state.order.id}`)
-  await expect(page.getByRole('heading', { name: '支付方式', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '线上付款状态', exact: true })).toBeVisible()
   return state
 }
 
@@ -148,11 +148,11 @@ test('automatic payment polling respects the server cooldown then resumes', asyn
 test('closing an existing payment remains available during query cooldown', async ({ page }) => {
   const state = await fixture(page, 60)
   await expect(page.getByRole('button', { name: '60 秒后可再次核对' })).toBeDisabled()
-  const close = page.getByRole('button', { name: '关闭微信支付，改为到摊付款', exact: true })
+  const close = page.getByRole('button', { name: '关闭本次微信支付', exact: true })
   await expect(close).toBeEnabled()
   await close.click()
   await expect.poll(() => state.calls).toEqual(['close'])
-  await expect(page.getByRole('button', { name: '微信支付', exact: true })).toBeEnabled()
+  await expect(page.getByRole('button', { name: '立即微信支付', exact: true })).toBeEnabled()
   expect(state.unexpected).toEqual([])
 })
 
@@ -170,7 +170,7 @@ test('a late payment response cannot restore the previous account order after id
   state.user = replacement
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   await expect(page.getByRole('alert')).toContainText('当前账号无权查看此订单')
-  await expect(page.getByRole('heading', { name: '支付方式', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: '线上付款状态', exact: true })).toHaveCount(0)
   release()
   await expect.poll(() => state.order.payment_status).toBe('paid')
   await state.advanceClock(20_000)

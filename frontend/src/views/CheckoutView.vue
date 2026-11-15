@@ -308,6 +308,13 @@ const firstProblem = computed<CheckoutProblem | null>(() => {
       productId: taste.product.id,
       reason: `${taste.product.name}的口味选项已变更，请重新选择。`,
     };
+  if (!stall.value.wechat_payment?.available)
+    return {
+      target: "stall",
+      reason:
+        stall.value.wechat_payment?.reason ||
+        "该摊位暂未开启线上支付，暂时无法提交订单。",
+    };
   if (!isDelivery.value) return null;
   if (!stall.value.delivery?.available)
     return {
@@ -536,6 +543,7 @@ async function submit() {
     locationRefreshNeeded.value ||
     !items.value.length ||
     !stall.value?.can_order ||
+    !stall.value?.wechat_payment?.available ||
     tastesChanged.value ||
     unavailableItems.value ||
     !deliveryCanSubmit.value
@@ -573,12 +581,15 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
     forgetSubmission();
     if (unchangedDraft && !cart.count(stallId)) drafts.clear(stallId);
     notify(
-      order.fulfillment_type === "delivery"
-        ? "配送订单已创建，请完成微信付款"
-        : "订单已提交，正在等待商家接单",
+      order.mode === "simulation"
+        ? "订单已创建，请完成模拟付款"
+        : "订单已创建，请完成微信付款",
       "success",
     );
-    await router.replace(`/orders/${order.id}`);
+    await router.replace({
+      path: `/orders/${order.id}`,
+      query: order.status === "pending_payment" ? { autopay: "1" } : undefined,
+    });
   } catch (e) {
     if (!isCurrentPage()) {
       // Identity verification may unmount this page before the first write is
@@ -1025,22 +1036,18 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
             <Wallet :size="19" />
             <strong>{{
               isDelivery
-                ? "先付款，再由商家接单配送"
-                : stall.wechat_payment?.available
-                  ? "餐点做好后，再付款取餐"
-                  : "取餐时向商家付款"
+                ? "在线预付后，即刻备餐配送"
+                : "在线预付锁单，凭 4 位码即取"
             }}</strong>
             <ChevronDown :size="15" class="pay-chevron" />
           </summary>
           <p>
             {{
               isSimulation
-                ? "这是流程演练。下单后可在订单页尝试模拟付款，再到商家工作台推进订单；不会真实收付款或送货。"
+                ? "点击下方去支付后将直接拉起模拟收银台；模拟付款成功后自动进入商家制作队列，不会发生真实资金变动。"
                 : isDelivery
-                  ? "提交后需在订单页完成微信付款。餐费和配送费一次支付，商家拒单或接单超时将发起全额退款。"
-                  : stall.wechat_payment?.available
-                    ? "商家出餐后，可在订单页微信支付，也可到摊付款。提交订单不会扣款。"
-                    : "到摊扫摊主收款码付款，平台不经手款项。商家确认接单后才开始制作。"
+                  ? "餐费与配送费一次在线支付；商家拒单或超时未接将自动全额原路退款。"
+                  : "线上付款确认后商家自动接单备餐，无需商家手动点收款；出餐后凭 4 位取餐码直接拿走。"
             }}
           </p>
         </details>
@@ -1128,6 +1135,7 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
               editingLocked ||
               locationRefreshNeeded ||
               !stall.can_order ||
+              !stall.wechat_payment?.available ||
               !deliveryCanSubmit ||
               tastesChanged ||
               unavailableItems
@@ -1135,26 +1143,26 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
           >
             {{
               busy
-                ? "正在提交…"
+                ? "正在创建订单…"
                 : unresolved
                   ? "请先确认原订单结果"
                   : locationChanged
                     ? priceChanged
-                      ? "确认新位置与新金额并提交"
-                      : "确认新位置并提交"
+                      ? "确认新位置与新金额去支付"
+                      : "确认新位置去支付"
                     : priceChanged
-                      ? "确认新价格并提交"
-                      : isDelivery
-                        ? "提交配送订单，去付款"
-                        : "提交自取订单"
+                      ? "确认新价格去支付"
+                      : isSimulation
+                        ? `去模拟支付 ¥${money(total + deliveryFee)}`
+                        : `去支付 ¥${money(total + deliveryFee)}`
             }}<ChevronRight :size="18" />
           </button>
         </div>
         <p class="summary-note">
           {{
             isDelivery
-              ? "付款成功后开始等待接单。5 分钟未接单自动取消并发起退款；接单后取消须商家处理。联系方式仅用于本单履约。"
-              : "5 分钟未接单将自动取消。接单前可直接取消，接单后须向商家申请。"
+              ? "15 分钟内完成付款有效；开始制作前可随时秒退，商家下锅制作后取消须协商处理。联系方式仅用于本单履约。"
+              : "15 分钟内完成付款有效；商家开始制作前可直接秒退，下锅备餐后取消须商家确认。"
           }}
         </p>
       </aside>

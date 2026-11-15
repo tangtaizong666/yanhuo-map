@@ -149,7 +149,11 @@ class MerchantFollowupContractTests(TestCase):
             self.payment(order, status='pending', channel=channel, transaction_id=None,
                 code_url='weixin://wxpay/private-entry', h5_url='https://wx.tenpay.com/private-entry')
             orders.append(order)
+        payable = self.order(status='pending_payment', payment_status='unpaid')
+        self.payment(payable, status='pending', channel='native', transaction_id=None,
+            code_url='weixin://wxpay/private-entry', h5_url='https://wx.tenpay.com/private-entry')
         rows = self.rows()
+        self.assertNotIn(str(payable.pk), rows)
         for row in rows.values():
             self.assertTrue(row['wechat_payment']['available'])
             self.assertEqual(row['pickup_code'], '')
@@ -162,8 +166,12 @@ class MerchantFollowupContractTests(TestCase):
         self.assertTrue(student.data['wechat_payment']['available'])
         self.assertEqual(student.data['pickup_code'], '')
         self.assertTrue(student.data['financial_hold_reason'])
-        self.assertNotIn('complete', student.data['allowed_actions'])
-        self.assertEqual(student.data['payment']['code_url'], 'weixin://wxpay/private-entry')
+        self.assertNotIn('confirm_receipt', student.data['allowed_actions'])
+        self.assertEqual(student.data['payment']['code_url'], '')
+        payable_student = self.api.get(f'/api/v1/orders/{payable.pk}')
+        self.assertEqual(payable_student.status_code, 200)
+        self.assertEqual(payable_student.data['pickup_code'], '')
+        self.assertEqual(payable_student.data['payment']['code_url'], 'weixin://wxpay/private-entry')
         payment_readiness.assert_called()
         self.gateway.assert_not_called()
 

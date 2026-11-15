@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CreditCard, Wallet, Clock3, ChevronDown } from "lucide-vue-next";
+import { CreditCard, ShieldCheck, ChevronDown } from "lucide-vue-next";
 import { computed } from "vue";
 import type { PaymentReadiness } from "../lib/types";
 
@@ -11,13 +11,6 @@ const onlineSupported = computed(
   () =>
     props.readiness?.mode === "simulation" ||
     props.readiness?.supported !== false,
-);
-const offlinePickup = computed(
-  () =>
-    !props.delivery &&
-    onlineSupported.value &&
-    !props.readiness?.available &&
-    props.readiness?.mode !== "simulation",
 );
 </script>
 
@@ -31,67 +24,38 @@ const offlinePickup = computed(
       <p>
         {{
           !onlineSupported
-            ? "该商户提供找摊与菜品信息，暂不接受线上订单。"
+            ? "该商户仅提供找摊与菜品展示，暂不接受线上订单。"
             : delivery
-              ? "配送先付款，付款成功后商家才会接单。"
-              : "先下单，商家出餐后再付款。"
+              ? "在线预付餐费与配送费，付款确认后立即进入备餐与配送。"
+              : "在线预付锁单，付款确认后立即备餐，凭 4 位取餐码到摊即拿。"
         }}
       </p>
     </header>
-    <div
-      v-if="onlineSupported && !offlinePickup"
-      class="method-row wechat-method"
-    >
+    <div v-if="onlineSupported" class="method-row wechat-method">
       <span class="method-icon"><CreditCard :size="22" /></span>
       <div class="method-copy">
         <h3>
           {{ readiness?.mode === "simulation" ? "模拟微信支付" : "微信支付" }}
-          <span>线上支付</span>
+          <span>线上担保预付</span>
         </h3>
         <p>
           {{
             readiness?.mode === "simulation"
               ? readiness.available
-                ? "模拟付款，不会真实扣款。"
+                ? "提交后自动拉起模拟收银台，不会真实扣款。"
                 : "模拟线上支付暂未开启。"
               : readiness?.available
-                ? delivery
-                  ? "提交后在订单页主动付款。"
-                  : "出餐后在订单页付款。"
-                : delivery
-                  ? "微信支付尚未开通，暂时无法提交配送订单。"
-                  : "暂不能在线扣款，到摊扫摊主收款码付款。"
+                ? "提交后直接发起微信支付，商家无需手动确认收款。"
+                : "微信支付尚未开通，暂时无法提交线上订单。"
           }}
         </p>
       </div>
       <span class="method-state" :class="{ available: readiness?.available }">{{
-        readiness?.available
-          ? delivery
-            ? "下单后支付"
-            : "出餐后可支付"
-          : "尚未开通"
+        readiness?.available ? "下单即付" : "尚未开通"
       }}</span>
     </div>
-    <div
-      v-if="!delivery && onlineSupported"
-      class="method-row offline-method"
-      :class="{ 'single-method': offlinePickup }"
-    >
-      <span class="method-icon"><Wallet :size="22" /></span>
-      <div class="method-copy">
-        <h3>到摊付款</h3>
-        <p>
-          {{
-            readiness?.mode === "simulation"
-              ? "可演练商家确认模拟收款后取餐。"
-              : "取餐时扫摊主本人的收款码付款，平台不经手款项。"
-          }}
-        </p>
-      </div>
-      <span v-if="!offlinePickup" class="method-state available">可使用</span>
-    </div>
     <p v-if="!onlineSupported" class="payment-timing">
-      找到摊位后，请现场向摊主确认餐点和付款方式。
+      找到摊位后，请现场向摊主选购餐点。
     </p>
     <details v-else-if="!readiness?.available" class="payment-explanation">
       <summary>
@@ -103,22 +67,22 @@ const offlinePickup = computed(
       </summary>
       <p>
         {{
-          readiness?.reason || "该商家暂未开通微信支付，到摊扫摊主收款码付款。"
+          readiness?.reason || "该商家暂未完成微信特约商户收款配置，暂时无法接收线上预付订单。"
         }}
       </p>
       <p>
         {{
           readiness?.mode === "simulation"
-            ? "商家打开“店铺 → 经营服务 → 线上支付”即可试跑。"
-            : "微信支付开通后会在这里显示可用状态，提交订单本身不会扣款。"
+            ? "商家打开“店铺 → 经营服务 → 线上支付”即可恢复演练点单。"
+            : "平台统一采用线上预付与自动分账结算，未开通线上支付时暂不开放线上点单。"
         }}
       </p>
     </details>
     <p v-else class="payment-timing">
-      <Clock3 :size="15" />{{
+      <ShieldCheck :size="15" />{{
         delivery
-          ? "餐费与配送费一起支付；提交后仍需主动完成付款。"
-          : "提交订单不会扣款，无需现在付款。"
+          ? "付款后商家自动/快速接单；开始制作前可秒退，下锅制作后需协商取消。"
+          : "付款后即刻备餐防跑单；接单制作前可随时秒退，出餐后凭 4 位码直接取走。"
       }}
     </p>
   </section>

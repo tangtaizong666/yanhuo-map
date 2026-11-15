@@ -20,7 +20,7 @@ from .models import (BusinessSession, Event, Feedback, MerchantApplication, Merc
     Order, Product, RestockBatch, SiteConfiguration, Stall, StallLocation, pickup_code)
 from .operations import review_application
 from .services import cancel_order, create_order, merchant_action
-from .tests import fixtures, payload
+from .tests import fixtures, pay_order_for_test, payload
 
 
 @override_settings(DEMO_MODE=True, SERVICES_SIMULATION_ENABLED=False, PRODUCTION=False)
@@ -97,7 +97,8 @@ class OperationsTests(TestCase):
         self.assertEqual(self.stall.current_session.last_confirmed_at, confirmed)
         self.assertTrue(self.stall.can_order(existing_order=True))
         with self.assertRaises(BusinessError): create_order(self.other, payload(self.stall, self.product))
-        for action in ('accept', 'ready', 'confirm_payment', 'complete'):
+        pay_order_for_test(order, auto_accept=False)
+        for action in ('accept', 'ready', 'complete'):
             merchant_action(order.pk, self.vendor, action, order.pickup_code)
         order.refresh_from_db()
         self.assertEqual(order.status, 'completed')
@@ -411,6 +412,7 @@ class OperationsTests(TestCase):
         from .simulation import prepare_stall
         self.stall.is_demo = True
         self.stall.simulation_payment_enabled = True
+        self.stall.auto_accept_orders = False
         self.stall.simulation_delivery_enabled = True
         self.stall.save()
         point = prepare_stall(self.stall)

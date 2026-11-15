@@ -13,16 +13,25 @@ from django.utils import timezone
 class SiteConfiguration(models.Model):
     stale_minutes = models.PositiveIntegerField('位置过期分钟数', default=60)
     pending_minutes = models.PositiveIntegerField('接单超时分钟数', default=5)
+    platform_fee_bps = models.PositiveIntegerField('平台技术服务费率(基点)', default=500,
+        validators=[MaxValueValidator(3000)],
+        help_text='微信服务商分账模式技术服务费率，100 基点 = 1%，默认 500 (5.0%)，上限 3000 (30.0%)。')
+    auto_complete_ready_minutes = models.PositiveIntegerField('待取餐超时自动完结分钟数', default=120,
+        validators=[MinValueValidator(15), MaxValueValidator(1440)],
+        help_text='已付款并出餐/送达后无退款争议时，超时自动完结并触发分账结算的分钟数。')
     class Meta:
         verbose_name = verbose_name_plural = '运营参数'
     def save(self, *args, **kwargs):
         self.pk = 1
         self.stale_minutes = max(1, min(self.stale_minutes, 1440))
         self.pending_minutes = max(1, min(self.pending_minutes, 60))
+        self.platform_fee_bps = max(0, min(self.platform_fee_bps, 3000))
+        self.auto_complete_ready_minutes = max(15, min(self.auto_complete_ready_minutes, 1440))
         super().save(*args, **kwargs)
     @classmethod
     def current(cls):
-        return cls.objects.filter(pk=1).first() or cls(stale_minutes=60, pending_minutes=5)
+        return cls.objects.filter(pk=1).first() or cls(
+            stale_minutes=60, pending_minutes=5, platform_fee_bps=500, auto_complete_ready_minutes=120)
 
 
 class Area(models.Model):
@@ -58,7 +67,10 @@ class MerchantProfile(models.Model):
     food_preparation_address = models.CharField('实际加工制作地址', max_length=200, blank=True)
     license_valid_until = models.DateField('许可证有效期至', null=True, blank=True)
     wechat_pay_account = models.CharField('独立微信收款配置标识', max_length=64, null=True, blank=True, unique=True,
-        help_text='仅绑定该经营主体自有商户号；密钥由部署配置管理。')
+        help_text='绑定该经营主体微信特约商户号收款配置；订单通过微信服务商分账清算，平台不碰二清资金池。')
+    custom_fee_bps = models.PositiveIntegerField('专属服务费率(基点)', null=True, blank=True,
+        validators=[MaxValueValidator(3000)],
+        help_text='留空则采用全局平台技术服务费率；100 基点 = 1%，上限 3000 (30%)。')
     def save(self, *args, **kwargs):
         self.wechat_pay_account = self.wechat_pay_account or None
         super().save(*args, **kwargs)
@@ -115,6 +127,7 @@ class Stall(models.Model):
     payment_qr_updated_at = models.DateTimeField('收款码更新时间', null=True, blank=True)
     location_draft_address = models.CharField('待核验位置草稿', max_length=200, blank=True)
     accepting_orders = models.BooleanField('接收新订单', default=True)
+    auto_accept_orders = models.BooleanField('付款后自动接单', default=True)
     prep_capacity = models.PositiveSmallIntegerField('同时备餐订单上限', null=True, blank=True,
         validators=[MinValueValidator(1), MaxValueValidator(100)])
     receiving_seen_at = models.DateTimeField('接单页最近成功同步', null=True, blank=True)
@@ -267,22 +280,47 @@ def pickup_code(taken=()):
     raise BusinessError('当前摊位待取餐订单已达上限，请先核销已完成订单后再接新单。', 'pickup_code_exhausted', status=409)
 
 
+def compute_order_split(total_cents, fee_bps):
+    bps = max(0, min(int(fee_bps or 0), 3000))
+    fee_cents = min(int(total_cents), (int(total_cents) * bps + 5000) // 10000)
+    return bps, fee_cents, max(0, int(total_cents) - fee_cents)
+
+
 class Order(models.Model):
     mode = models.CharField(max_length=10, default='live', choices=[('live', '正式'), ('simulation', '模拟')])
     STATUSES = [('pending_payment', '待付款'), ('pending', '待接单'), ('preparing', '制作中'), ('ready', '待取餐'),
         ('delivering', '配送中'), ('arrived', '已到交接点'),
         ('completed', '已完成'), ('cancelled', '已取消'), ('rejected', '已拒单')]
+    SETTLEMENT_STATUSES = [
+        ('unsettled', '待付款'),
+        ('escrow', '待完结分账'),
+        ('settled', '已分账结算'),
+        ('reversed', '已退款冲正'),
+    ]
+    COMPLETED_BY_CHOICES = [
+        ('', '未完结'),
+        ('merchant_quick', '商家一键交餐'),
+        ('merchant_code', '取餐码核销'),
+        ('student_confirm', '顾客确认收餐'),
+        ('auto_timeout', '超时自动完结'),
+    ]
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     number = models.CharField(max_length=40, unique=True, default=order_number)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='orders')
     stall = models.ForeignKey(Stall, on_delete=models.PROTECT, related_name='orders')
     stall_name = models.CharField(max_length=80)
     stall_image = models.CharField(max_length=500, blank=True)
-    status = models.CharField(max_length=15, choices=STATUSES, default='pending', db_index=True)
+    status = models.CharField(max_length=15, choices=STATUSES, default='pending_payment', db_index=True)
     payment_status = models.CharField(max_length=10, default='unpaid', choices=[('unpaid', '未收款'), ('paid', '已收款'), ('refunding', '退款中'), ('refunded', '已退款')])
-    payment_method = models.CharField(max_length=10, default='offline', choices=[('offline', '到摊付款'), ('wechat', '微信支付')])
+    payment_method = models.CharField(max_length=10, default='wechat', choices=[('offline', '历史线下收款'), ('wechat', '微信支付')])
     payment_review_required = models.BooleanField('支付异常待核对', default=False)
     total_cents = models.PositiveIntegerField()
+    platform_fee_bps = models.PositiveIntegerField('平台服务费率(基点)', default=500)
+    platform_fee_cents = models.PositiveIntegerField('平台技术服务费(分)', default=0)
+    merchant_net_cents = models.PositiveIntegerField('商户分账净额(分)', default=0)
+    settlement_status = models.CharField('分账结算状态', max_length=16, choices=SETTLEMENT_STATUSES, default='unsettled')
+    settled_at = models.DateTimeField('分账结算时间', null=True, blank=True)
+    completed_by = models.CharField('完结方式', max_length=20, blank=True, default='', choices=COMPLETED_BY_CHOICES)
     fulfillment_type = models.CharField(max_length=10, default='pickup', choices=[('pickup', '到摊自取'), ('delivery', '商家配送')])
     delivery_fee_cents = models.PositiveIntegerField(default=0)
     delivery_point = models.ForeignKey(DeliveryPoint, null=True, blank=True, on_delete=models.PROTECT)

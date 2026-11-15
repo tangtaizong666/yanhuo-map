@@ -72,7 +72,7 @@ class QualificationTierTests(TestCase):
         self.merchant.is_verified = False
         self.assertIn('核验', self.merchant.online_trade_reason())
 
-    def test_vendor_qr_only_shown_on_unpaid_offline_orders(self):
+    def test_vendor_qr_never_exposed_on_online_orders(self):
         self.merchant.qualification_tier = 'storefront'
         self.merchant.save()
         qr_url = f'/media/merchants/{self.stall.pk}/qr-storefront.jpg'
@@ -81,8 +81,10 @@ class QualificationTierTests(TestCase):
         self.assertNotIn('payment_qr_image', StallSerializer(self.stall, context={}).data)
         order, _ = create_order(self.student, payload(self.stall, self.product))
         self.assertEqual(OrderSerializer(order).data['stall_payment_qr_image'], '')
+        self.assertFalse(OrderSerializer(order).data['offline_payment_available'])
         order.status = 'ready'
-        self.assertEqual(OrderSerializer(order).data['stall_payment_qr_image'], qr_url)
+        self.assertEqual(OrderSerializer(order).data['stall_payment_qr_image'], '')
+        self.assertFalse(OrderSerializer(order).data['offline_payment_available'])
         order.payment_status = 'paid'
         self.assertEqual(OrderSerializer(order).data['stall_payment_qr_image'], '')
         order.payment_status, order.status = 'unpaid', 'cancelled'

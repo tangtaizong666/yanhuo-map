@@ -16,7 +16,7 @@ async function fixture(page: Page) {
     ] }, services: { mode: 'live' } }
   const order: any = { id: '00000000-0000-4000-8000-000000000713', number: '713', stall_id: 713,
     stall_name: stall.name, status: 'preparing', mode: 'live', fulfillment_type: 'pickup',
-    payment_method: 'offline', payment_status: 'unpaid', payment: null, refund: null, review: null,
+    payment_method: 'wechat', payment_status: 'paid', payment: null, refund: null, review: null,
     cancel_requested: false, payment_review_required: false, total_cents: 1000, pickup_code: '1234',
     pickup_address: '校园南门', note: '', contact_phone: '',
     created_at: new Date().toISOString(), expires_at: new Date(Date.now()+240000).toISOString(),
@@ -41,8 +41,7 @@ async function fixture(page: Page) {
     if (path === `/merchant/orders/${order.id}/action`) {
       const body = req.postDataJSON(); state.actions.push(body)
       if (body.action === 'ready') order.status = 'ready'
-      if (body.action === 'confirm_payment') order.payment_status = 'paid'
-      if (body.action === 'complete') order.status = 'completed'
+      if (body.action === 'complete' || body.action === 'complete_quick') order.status = 'completed'
       if (state.loseAction) { state.loseAction = false; return route.abort('failed') }
       return send({ ...order })
     }
@@ -104,19 +103,18 @@ test('merchant action retries preserve the original key after reload; payment an
   await expect.poll(() => state.actions.length).toBe(2)
   expect(state.actions[1]).toEqual(state.actions[0])
   expect(state.actions[0].idempotency_key.length).toBeGreaterThan(7)
-  expect(state.order.payment_status).toBe('unpaid')
+  expect(state.order.payment_status).toBe('paid')
   await page.getByRole('group', { name: '订单阶段' }).getByRole('button', { name: /待取餐/ }).click()
-  await page.getByRole('button', { name: '收款 ¥10', exact: true }).click()
-  await page.getByRole('button', { name: '确认收款', exact: true }).click()
-  await page.getByRole('button', { name: '核对取餐码', exact: true }).click()
+  await expect(page.getByRole('button', { name: /^收款 ¥/ })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '已交餐 · 完成', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '查看订单 713 详情', exact: true }).click()
   await expect(page.getByPlaceholder('输入取餐码', { exact: true })).toBeVisible()
   expect(state.order.status).toBe('ready')
-  expect(state.order.payment_status).toBe('paid')
   await page.getByPlaceholder('输入取餐码', { exact: true }).fill('1234')
   await page.getByRole('button', { name: '核销并完成', exact: true }).click()
   await expect.poll(() => state.order.status).toBe('completed')
-  expect(state.actions.map(row => row.action)).toEqual(['ready', 'ready', 'confirm_payment', 'complete'])
-  expect(new Set(state.actions.slice(1).map(row => row.idempotency_key)).size).toBe(3)
+  expect(state.actions.map(row => row.action)).toEqual(['ready', 'ready', 'complete'])
+  expect(new Set(state.actions.slice(1).map(row => row.idempotency_key)).size).toBe(2)
   expect(state.unexpected).toEqual([])
 })
 

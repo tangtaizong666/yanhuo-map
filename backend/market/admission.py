@@ -23,7 +23,6 @@ def has_admission_text(value):
 
 
 def simulated_orders(stall):
-    # Offline demo pickup predates the optional online simulator and stays usable.
     return bool(stall.is_demo and settings.DEMO_MODE and not settings.PRODUCTION)
 
 
@@ -77,8 +76,10 @@ def merchant_trade_reason(merchant):
 def pickup_eligibility_reason(stall):
     """Durable qualification; excludes opening hours, position and busy switches."""
     if stall.is_demo:
-        if not simulated_orders(stall): return '示例摊位不能开展真实交易。'
-        if not stall.merchant.is_verified: return '示例商户尚未通过模拟交易核验。'
+        if not settings.DEMO_MODE or settings.PRODUCTION:
+            return '示例摊位不能开展真实交易。'
+        if not stall.merchant.is_verified:
+            return '示例商户尚未通过模拟交易核验。'
     else:
         reason = merchant_trade_reason(stall.merchant)
         if reason: return reason
@@ -87,8 +88,16 @@ def pickup_eligibility_reason(stall):
 
 
 def pickup_unavailable_reason(stall, config=None, *, existing_order=False):
-    reason = public_listing_reason(stall) or pickup_eligibility_reason(stall)
-    if reason: return reason
+    if not existing_order:
+        reason = public_listing_reason(stall) or pickup_eligibility_reason(stall)
+        if reason: return reason
+        if stall.is_demo:
+            if not settings.SERVICES_SIMULATION_ENABLED:
+                return '模拟线上支付未启用，示例摊位暂不接收线上订单。'
+            if not stall.simulation_payment_enabled:
+                return '商家暂未开启线上收款，当前无法在线下单。'
+    elif stall.is_demo and (not settings.DEMO_MODE or settings.PRODUCTION):
+        return '示例摊位不能开展真实交易。'
     status = stall.effective_status(config)
     if status == 'stale': return '位置确认已过期，请等待商家重新确认。'
     if status == 'closed': return '摊位已收摊，暂不接收新订单。'

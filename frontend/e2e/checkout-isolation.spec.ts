@@ -135,9 +135,22 @@ async function fixture(browser: Browser, context: BrowserContext) {
           const orders = await (await api.get("/api/v1/orders")).json();
           for (const order of orders) {
             if (
-              order.status === "pending" &&
+              ["pending_payment", "pending"].includes(order.status) &&
               order.items.every((item: any) => item.product_id === product.id)
             ) {
+              if (
+                order.payment &&
+                ["creating", "pending", "reconcile"].includes(
+                  order.payment.status,
+                )
+              ) {
+                const closed = await cleanupMutation(
+                  api,
+                  `/orders/${order.id}/payments/close`,
+                  {},
+                );
+                expect(closed.ok(), await closed.text()).toBeTruthy();
+              }
               const cancelled = await cleanupMutation(
                 api,
                 `/orders/${order.id}/cancel`,
@@ -268,7 +281,7 @@ for (const lateResponse of ["success", "price_changed"] as const) {
       }
       held = await holdRealOrderResponse(page);
       await page
-        .getByRole("button", { name: "提交自取订单", exact: true })
+        .getByRole("button", { name: /^去模拟支付 ¥/ })
         .click();
       const original = await held.upstream;
       expect(original.status).toBe(lateResponse === "success" ? 201 : 409);
@@ -298,7 +311,7 @@ for (const lateResponse of ["success", "price_changed"] as const) {
         times: 1,
       });
       await page
-        .getByRole("button", { name: "提交自取订单", exact: true })
+        .getByRole("button", { name: /^去模拟支付 ¥/ })
         .click();
       const networkAlert = page
         .getByRole("alert")
@@ -375,7 +388,7 @@ test("leaving checkout ignores a late success and returning can retry the commit
     await f.start(page);
     held = await holdRealOrderResponse(page);
     await page
-      .getByRole("button", { name: "提交自取订单", exact: true })
+      .getByRole("button", { name: /^去模拟支付 ¥/ })
       .click();
     const original = await held.upstream;
     expect(original.status).toBe(201);
@@ -433,7 +446,12 @@ test("leaving checkout ignores a late success and returning can retry the commit
       original.request.idempotency_key,
     );
     expect((await response.json()).id).toBe(original.body.id);
-    await expect(page).toHaveURL(new RegExp(`/orders/${original.body.id}$`));
+    await expect(page).toHaveURL(
+      new RegExp(`/orders/${original.body.id}(\\?autopay=1)?$`),
+    );
+    await expect(
+      page.getByText("微信支付 · 模拟收银台", { exact: true }),
+    ).toBeVisible();
     const orders = await (
       await context.request.get(`${baseURL}/api/v1/orders`)
     ).json();

@@ -7,7 +7,7 @@ from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction, connection
-from django.db.models import Case, Count, IntegerField, Q, Value, When
+from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Q, Value, When
 from django.db.models.expressions import RawSQL
 from django.middleware.csrf import get_token
 from django.http import JsonResponse
@@ -85,8 +85,11 @@ def config(request):
     if not settings.DEMO_MODE: areas = areas.filter(is_demo=False)
     get_token(request)
     from .simulation import enabled
+    cfg = SiteConfiguration.current()
     return Response({'demo_mode': settings.DEMO_MODE, 'services_simulation_enabled': enabled(), 'brand': settings.BRAND_NAME,
-        'stale_minutes': SiteConfiguration.current().stale_minutes, 'public_base_url': settings.PUBLIC_BASE_URL,
+        'stale_minutes': cfg.stale_minutes, 'platform_fee_bps': cfg.platform_fee_bps,
+        'auto_complete_ready_minutes': cfg.auto_complete_ready_minutes,
+        'public_base_url': settings.PUBLIC_BASE_URL,
         'amap_key': settings.AMAP_KEY if settings.AMAP_SECURITY_CODE else '', 'amap_proxy': settings.AMAP_PROXY,
         'areas': AreaSerializer(areas, many=True).data, 'user': user_data(request.user)})
 
@@ -386,10 +389,27 @@ def review(request, order_id):
     return Response(OrderSerializer(order, context={'request': request}).data, status=201)
 
 
+def _merchant_visible_orders(query):
+    from .models import PaymentAttempt, PaymentRefund
+    from .list_api import UNRESOLVED_REFUNDS
+    return query.annotate(
+        _has_uncertain_payment=Exists(PaymentAttempt.objects.filter(
+            order_id=OuterRef('pk'), status__in=('reconcile', 'review'))),
+        _has_unresolved_refund=Exists(PaymentRefund.objects.filter(
+            order_id=OuterRef('pk'), status__in=UNRESOLVED_REFUNDS, resolved_at__isnull=True)),
+    ).exclude(
+        status='pending_payment',
+        payment_status='unpaid',
+        payment_review_required=False,
+        _has_uncertain_payment=False,
+        _has_unresolved_refund=False,
+    )
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def merchant_orders(request):
-    query = owned_or_permitted(order_query(), request.user, 'market.view_order')
+    query = _merchant_visible_orders(owned_or_permitted(order_query(), request.user, 'market.view_order'))
     if request.query_params.get('stall'):
         stall_id = serializers.IntegerField(min_value=1).run_validation(request.query_params['stall'])
         query = query.filter(stall_id=stall_id)
@@ -399,7 +419,7 @@ def merchant_orders(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def merchant_order_detail(request, order_id):
-    query = owned_or_permitted(order_query(), request.user, 'market.view_order')
+    query = _merchant_visible_orders(owned_or_permitted(order_query(), request.user, 'market.view_order'))
     if request.query_params.get('stall'):
         stall_id = serializers.IntegerField(min_value=1).run_validation(request.query_params['stall'])
         query = query.filter(stall_id=stall_id)
@@ -477,7 +497,7 @@ def merchant_status(request, stall_id):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def merchant_order_action(request, order_id):
-    action = serializers.ChoiceField(choices=['accept', 'update_prep', 'reject', 'ready', 'confirm_payment', 'complete', 'approve_cancel', 'deny_cancel', 'dispatch', 'arrive', 'report_delivery_issue', 'resolve_delivery_issue']).run_validation(request.data.get('action'))
+    action = serializers.ChoiceField(choices=['accept', 'update_prep', 'reject', 'ready', 'complete_quick', 'complete', 'approve_cancel', 'deny_cancel', 'dispatch', 'arrive', 'report_delivery_issue', 'resolve_delivery_issue']).run_validation(request.data.get('action'))
     code = serializers.CharField(max_length=4, allow_blank=True).run_validation(request.data.get('pickup_code', ''))
     reason = serializers.CharField(max_length=200, allow_blank=True).run_validation(request.data.get('reason', ''))
     options = {}

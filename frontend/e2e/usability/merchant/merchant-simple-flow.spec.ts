@@ -8,7 +8,7 @@ async function fixture(page: Page, discoveryOnly = false) {
   const stall = {
     id: 1971, name: "校园饭摊", products: [product], reviews: [], image: "",
     address: "南门橙色棚", area_name: "南门", latitude: 30, longitude: 120,
-    status: "open", session_status: "open", accepting_orders: true, prep_minutes: 10,
+    status: "open", session_status: "open", accepting_orders: true, auto_accept_orders: false, prep_minutes: 10,
     transaction_enabled: !discoveryOnly, is_visible: true, can_order: !discoveryOnly,
     activation: { has_location: true, has_sellable_products: true, steps: [] },
     services: { mode: "live" }, last_confirmed_at: new Date().toISOString(),
@@ -17,7 +17,7 @@ async function fixture(page: Page, discoveryOnly = false) {
   };
   const order = (id: string, status: string, extra: Record<string, unknown> = {}) => ({
     id, number: id.toUpperCase(), stall_id: stall.id, stall_name: stall.name, mode: "live", status,
-    fulfillment_type: "pickup", payment_method: "offline", payment_status: "unpaid",
+    fulfillment_type: "pickup", payment_method: "wechat", payment_status: "paid",
     payment: null, refund: null, review: null, cancel_requested: false, payment_review_required: false,
     financial_hold_reason: "", total_cents: 1200, items_total_cents: 1200,
     pickup_address: stall.address, note: "", contact_phone: "",
@@ -30,7 +30,7 @@ async function fixture(page: Page, discoveryOnly = false) {
     order("new-order", "pending"),
     order("cook-pickup", "preparing"),
     order("cook-delivery", "preparing", { fulfillment_type: "delivery", estimated_ready_at: new Date(Date.now() - 60000).toISOString(), prep_delay_reason: "正在补做，请再等五分钟" }),
-    order("ready-pickup", "ready", { allowed_actions: ["confirm_payment"] }),
+    order("ready-pickup", "ready", { allowed_actions: ["complete_quick", "complete"] }),
     order("ready-delivery", "ready", { fulfillment_type: "delivery", payment_method: "wechat", payment_status: "paid", allowed_actions: ["dispatch"], delivery_point_name: "南门交接点", delivery_point_address: "橙色棚旁" }),
     order("finished-order", "completed"),
     order("cancelled-order", "cancelled"),

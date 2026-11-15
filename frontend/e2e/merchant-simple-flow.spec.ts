@@ -52,6 +52,7 @@ async function fixture(
     session_status: "open",
     prep_minutes: 10,
     accepting_orders: true,
+    auto_accept_orders: false,
     transaction_enabled: true,
     is_visible: true,
     activation: { has_location: true, has_sellable_products: true },
@@ -69,8 +70,8 @@ async function fixture(
     mode: "live",
     status,
     fulfillment_type: "pickup",
-    payment_method: "offline",
-    payment_status: "unpaid",
+    payment_method: "wechat",
+    payment_status: status === "pending_payment" ? "unpaid" : status === "cancelled" ? "refunded" : "paid",
     payment: null,
     refund: null,
     review: null,
@@ -165,11 +166,11 @@ async function fixture(
                 : order.status === "delivering"
                   ? ["arrive", "report_delivery_issue", "refund"]
                   : order.status === "arrived"
-                    ? ["complete", "report_delivery_issue", "refund"]
+                    ? ["complete_quick", "complete", "report_delivery_issue", "refund"]
                     : order.status === "ready"
                       ? order.payment_status === "paid"
-                        ? ["complete"]
-                        : ["confirm_payment"]
+                        ? ["complete_quick", "complete", "refund"]
+                        : []
                       : [];
     return { ...order, allowed_actions: allowed };
   }
@@ -252,8 +253,7 @@ async function fixture(
         order.status = "ready";
         order.ready_at = new Date().toISOString();
       }
-      if (body.action === "confirm_payment") order.payment_status = "paid";
-      if (body.action === "complete") order.status = "completed";
+      if (body.action === "complete" || body.action === "complete_quick") order.status = "completed";
       if (body.action === "approve_cancel") {
         order.status = "cancelled";
         order.cancel_requested = false;
@@ -333,7 +333,7 @@ test("three clear queues keep dishes, portions and the primary action visible on
   expect(state.unexpected).toEqual([]);
 });
 
-test("accept, cook, collect payment and verify pickup remain four separate actions", async ({
+test("accept, cook and verify pickup remain distinct actions on prepaid orders", async ({
   page,
 }) => {
   const state = await fixture(page);
@@ -344,12 +344,11 @@ test("accept, cook, collect payment and verify pickup remain four separate actio
   await page.getByRole("button", { name: "做好了", exact: true }).click();
   await expect.poll(() => state.orders[0].status).toBe("ready");
   await stage(page, "待取餐").click();
-  await page.getByRole("button", { name: "收款 ¥24", exact: true }).click();
-  expect(state.orders[0].payment_status).toBe("unpaid");
-  await page.getByRole("button", { name: "确认收款", exact: true }).click();
-  await expect.poll(() => state.orders[0].payment_status).toBe("paid");
+  await expect(page.getByRole("button", { name: /^收款 ¥/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "已交餐 · 完成", exact: true })).toBeVisible();
+  expect(state.orders[0].payment_status).toBe("paid");
   expect(state.orders[0].status).toBe("ready");
-  await page.getByRole("button", { name: "核对取餐码", exact: true }).click();
+  await page.getByRole("button", { name: "查看订单 SIMPLE-ORDER 详情", exact: true }).click();
   const drawer = page.getByRole("dialog", { name: "订单详情", exact: true });
   await drawer.getByPlaceholder("输入取餐码", { exact: true }).fill("1234");
   await drawer.getByRole("button", { name: "核销并完成", exact: true }).click();
@@ -357,10 +356,9 @@ test("accept, cook, collect payment and verify pickup remain four separate actio
   expect(state.actions.map((row) => row.action)).toEqual([
     "accept",
     "ready",
-    "confirm_payment",
     "complete",
   ]);
-  expect(new Set(state.actions.map((row) => row.idempotency_key)).size).toBe(4);
+  expect(new Set(state.actions.map((row) => row.idempotency_key)).size).toBe(3);
   expect(state.unexpected).toEqual([]);
 });
 
@@ -396,7 +394,7 @@ test("lost final pickup response can be confirmed from history without an empty 
   state.loseAction = "complete";
   await page.goto("/merchant/orders");
   await stage(page, "待取餐").click();
-  await page.getByRole("button", { name: "核对取餐码", exact: true }).click();
+  await page.getByRole("button", { name: "查看订单 SIMPLE-ORDER 详情", exact: true }).click();
   const drawer = page.getByRole("dialog", { name: "订单详情", exact: true });
   await drawer.getByPlaceholder("输入取餐码", { exact: true }).fill("1234");
   await drawer.getByRole("button", { name: "核销并完成", exact: true }).click();
@@ -431,14 +429,14 @@ test("cancellations and unresolved finances stay visible across all queues", asy
   await expect(page.locator(".merchant-order")).toContainText("付款需人工核对");
   await expect(page.getByRole("button", { name: /^收款 ¥/ })).toHaveCount(0);
   await expect(
-    page.getByRole("button", { name: "核对取餐码", exact: true }),
+    page.getByRole("button", { name: "已交餐 · 完成", exact: true }),
   ).toHaveCount(0);
   await page.getByRole("button", { name: /1 笔取消申请/ }).click();
   await page.getByRole("button", { name: "处理取消申请", exact: true }).click();
   const drawer = page.getByRole("dialog", { name: "订单详情", exact: true });
   await expect(drawer).toContainText("临时有事");
-  await drawer.getByRole("button", { name: "同意取消", exact: true }).click();
-  await page.getByRole("button", { name: "确认取消订单", exact: true }).click();
+  await drawer.getByRole("button", { name: "同意取消并全额退款", exact: true }).click();
+  await page.getByRole("button", { name: "同意取消并退款", exact: true }).click();
   await expect.poll(() => state.orders[0].status).toBe("cancelled");
   await expect(drawer).not.toBeVisible();
   await page.getByRole("button", { name: /款项 \/ 配送问题/ }).click();
@@ -486,14 +484,12 @@ test("history opens its tools and collapsed search filters remain visible withou
   expect(state.unexpected).toEqual([]);
 });
 
-test("delivery keeps payment, dispatch, arrival and handoff as distinct states", async ({
+test("delivery hides unpaid drafts and keeps dispatch, arrival and handoff as distinct states", async ({
   page,
 }) => {
   const state = await fixture(page, "delivery");
   await page.goto("/merchant/orders");
-  await expect(page.locator(".merchant-order")).toContainText(
-    "等待顾客付款，暂不制作",
-  );
+  await expect(page.locator(".merchant-order").filter({ hasText: "DELIVERY-WAIT" })).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "接单开始做", exact: true }),
   ).toHaveCount(0);

@@ -6,7 +6,7 @@ from rest_framework.test import APIClient
 
 from .models import Order
 from .services import cancel_order, create_order, expire_pending_orders, merchant_action
-from .tests import fixtures, payload
+from .tests import fixtures, pay_order_for_test, payload
 
 
 # Historical multi-order fixtures exercise summary ordering and privacy, not admission.
@@ -35,10 +35,11 @@ class ActiveOrderSummaryTests(TestCase):
     def test_ready_priority_counts_privacy_and_customer_isolation(self):
         self.create(self.other)
         pending = self.create()
+        pay_order_for_test(pending, auto_accept=False)
         preparing = self.create()
+        pay_order_for_test(preparing)
         ready = self.create()
-        merchant_action(preparing.pk, self.vendor, 'accept')
-        merchant_action(ready.pk, self.vendor, 'accept')
+        pay_order_for_test(ready)
         merchant_action(ready.pk, self.vendor, 'ready')
         data = self.summary()
         self.assertEqual(data['counts'], {'pending_payment': 0, 'pending': 1, 'preparing': 1, 'ready': 1, 'delivering': 0, 'arrived': 0, 'total': 3})
@@ -55,10 +56,10 @@ class ActiveOrderSummaryTests(TestCase):
         rejected = self.create()
         completed = self.create()
         cancel_order(cancelled.pk, self.student, '')
+        pay_order_for_test(rejected, auto_accept=False)
         merchant_action(rejected.pk, self.vendor, 'reject', reason='售罄')
-        merchant_action(completed.pk, self.vendor, 'accept')
+        pay_order_for_test(completed)
         merchant_action(completed.pk, self.vendor, 'ready')
-        merchant_action(completed.pk, self.vendor, 'confirm_payment')
         merchant_action(completed.pk, self.vendor, 'complete', code=completed.pickup_code)
         self.assertEqual(self.summary()['counts']['total'], 0)
         self.assertIsNone(self.summary()['order'])

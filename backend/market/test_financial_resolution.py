@@ -35,6 +35,9 @@ class ResolutionSetup(PaymentSetup):
         self.operator = User.objects.create_user('finance-operator', password='FinancialTest123!', is_staff=True)
         self.operator.user_permissions.add(Permission.objects.get(codename='resolve_payments'))
 
+    def pay(self):
+        return self.pay_ready()
+
     def paid_gateway(self):
         def query(number):
             payment = PaymentAttempt.objects.get(out_trade_no=number)
@@ -188,6 +191,7 @@ class FinancialResolutionTests(ResolutionSetup, TestCase):
         return actor
 
     def test_readonly_operator_has_no_mutation_capabilities_in_list_or_pickup_lookup(self):
+        self.pay()
         self.permission_actor('view_order')
         listed = self.api.get('/api/v1/merchant/orders')
         self.assertEqual(listed.status_code, 200)
@@ -198,7 +202,7 @@ class FinancialResolutionTests(ResolutionSetup, TestCase):
         self.assertEqual(lookup.data['allowed_actions'], [])
         self.assertFalse(lookup.data['payment_can_close'])
         self.assertEqual(lookup.data['pickup_code'], '')
-        denied = self.api.post(f'/api/v1/merchant/orders/{self.order.pk}/action', {'action': 'confirm_payment'})
+        denied = self.api.post(f'/api/v1/merchant/orders/{self.order.pk}/action', {'action': 'complete_quick'})
         self.assertEqual(denied.status_code, 404)
 
     def test_change_order_operator_response_does_not_advertise_refund_permission(self):

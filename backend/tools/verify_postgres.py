@@ -117,13 +117,16 @@ def main():
         run([sys.executable, 'manage.py', 'test', *(sys.argv[1:] or ['market']), '--verbosity', '2', '--noinput'], timeout=1200)
         run([sys.executable, 'manage.py', 'seed_demo'])
         smoke = """from django.contrib.auth.models import User
-from market.models import Stall, Product
+from market.models import Stall
 from market.services import create_order, merchant_action
+from market.tests import pay_order_for_test
 import uuid
 u=User.objects.get(username='student'); v=User.objects.get(username='vendor')
 s=Stall.objects.get(name='老李烤冷面'); p=s.products.first()
 o,_=create_order(u,{'stall_id':s.pk,'items':[{'product_id':p.pk,'quantity':2,'expected_price_cents':p.price_cents}],'note':'恢复演练','contact_phone':'','idempotency_key':str(uuid.uuid4())})
-for action in ['accept','ready','confirm_payment','complete']: merchant_action(o.pk,v,action,o.pickup_code)
+pay_order_for_test(o)
+merchant_action(o.pk,v,'ready')
+merchant_action(o.pk,v,'complete',o.pickup_code)
 print('Disposable completed order ready for backup verification.')"""
         run([sys.executable, 'manage.py', 'shell', '-c', smoke])
         dump = TEMP/'verified.dump'

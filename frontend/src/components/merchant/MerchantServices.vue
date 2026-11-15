@@ -6,6 +6,7 @@ import {
   FlaskConical,
   RefreshCw,
   Settings2,
+  Zap,
 } from "lucide-vue-next";
 import { api } from "../../lib/api";
 import { notify } from "../../lib/notify";
@@ -112,13 +113,57 @@ onUnmounted(() => {
       >
     </div>
     <p v-if="simulated" class="service-simulation-note">
-      现在可以练习收款和送餐流程，不会真实扣款，也不会安排真实配送。
+      现在可以体验在线预付、自动接单、一键交餐与分账结算全流程，不会真实扣款或安排配送。
+    </p>
+    <p v-if="services" class="service-fee-banner">
+      平台技术服务费率
+      <strong
+        >{{
+          ((services.effective_fee_bps ?? stall.effective_fee_bps ?? 500) / 100)
+            .toFixed(1)
+            .replace(/\.0$/, "")
+        }}%</strong
+      >
+      · 顾客下单在线预付由微信自动核验，订单完结后按特约商户分账自动结算，无需手动点击确认收款。
     </p>
     <p v-if="error" class="m-alert" role="alert">{{ error }}</p>
     <p v-if="busy === 'loading'" class="m-muted" role="status">
       正在读取经营服务…
     </p>
     <div v-if="services" class="service-grid">
+      <article class="service-card auto-accept-service">
+        <span class="service-icon"><Zap :size="24" /></span>
+        <div class="service-copy">
+          <h3>付款后自动接单</h3>
+          <p>
+            开启后顾客完成线上付款即自动进入「制作中」，防忙时油手漏单超时
+          </p>
+        </div>
+        <button
+          class="service-toggle"
+          role="switch"
+          aria-label="付款后自动接单"
+          :aria-checked="services.auto_accept_orders !== false"
+          :disabled="!!busy || deliveryBusy"
+          @click="
+            request({
+              auto_accept_orders: !(services.auto_accept_orders !== false),
+            })
+          "
+        >
+          <span aria-hidden="true" />
+        </button>
+        <p class="service-state">
+          {{
+            services.auto_accept_orders !== false
+              ? "已开启自动接单（推荐）"
+              : "手动接单（5 分钟内需确认）"
+          }}
+        </p>
+        <p class="service-help">
+          夜市高峰推荐开启；现场排长队忙不过来时，可在接单台顶部一键「暂停接单」。
+        </p>
+      </article>
       <article class="service-card payment-service">
         <span class="service-icon"><CreditCard :size="24" /></span>
         <div class="service-copy">
@@ -297,6 +342,20 @@ onUnmounted(() => {
 .delivery-service .service-icon {
   background: #fff0de;
   color: #b7753e;
+}
+.auto-accept-service .service-icon {
+  background: #fdf2dc;
+  color: #a65c1b;
+}
+.service-fee-banner {
+  color: #5b4834;
+  background: #f8f3e8;
+  border: 1px solid #eadcc6;
+  padding: 12px 15px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.75;
+  margin: 0 0 16px;
 }
 .service-copy h3 {
   margin: 0 0 7px;

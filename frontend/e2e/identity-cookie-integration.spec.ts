@@ -65,7 +65,7 @@ test("the real session rejects an old account write even when its successful ide
       .click();
     await page.getByRole("link", { name: "去结算", exact: true }).click();
     await expect(
-      page.getByRole("button", { name: "提交自取订单", exact: true }),
+      page.getByRole("button", { name: /^去模拟支付 ¥/ }),
     ).toBeEnabled();
     await page.locator(".checkout-contact-card > summary").click();
     await page
@@ -110,7 +110,7 @@ test("the real session rejects an old account write even when its successful ide
         response.request().method() === "POST",
     );
     await page
-      .getByRole("button", { name: "提交自取订单", exact: true })
+      .getByRole("button", { name: /^去模拟支付 ¥/ })
       .click();
     const rejected = await writeResponse;
     const rejection = await rejected.json();

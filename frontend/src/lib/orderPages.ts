@@ -22,17 +22,21 @@ export function matchesOrderFilter(
   filter: string,
   merchant = false,
 ): boolean {
-  const active = activeStatuses.includes(order.status);
+  const unpaidDraft =
+    merchant &&
+    order.status === "pending_payment" &&
+    order.payment_status === "unpaid";
+  const active = !unpaidDraft && activeStatuses.includes(order.status);
   const followup = merchant
     ? needsMerchantFollowUp(order)
     : needsFinancialFollowUp(order);
-  if (filter === "all") return true;
+  if (filter === "all") return !unpaidDraft;
   if (filter === "active") return active;
   if (filter === "followup") return followup;
   if (filter === "attention") return active || followup;
   if (filter === "cancelled")
     return ["cancelled", "rejected"].includes(order.status);
-  return order.status === filter;
+  return !unpaidDraft && order.status === filter;
 }
 export function countOrders(rows: Order[], merchant = false): OrderCounts {
   return {

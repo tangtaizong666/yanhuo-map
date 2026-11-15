@@ -329,7 +329,7 @@ onMounted(() => {
           <span>订单号：{{ row.order_number }}</span>
           <span>
             结算方式：{{
-              row.order_payment_method === "wechat" ? "微信支付" : "到摊付款"
+              row.order_payment_method === "wechat" ? "微信支付" : "历史线下收款"
             }}（¥{{ (row.order_total_cents / 100).toFixed(2) }}）
           </span>
           <span>下单至完单耗时：{{ formatFulfillment(row.fulfillment_seconds) }}</span>

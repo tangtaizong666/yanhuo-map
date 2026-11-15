@@ -210,7 +210,16 @@ async function mountOpsFixture(page: Page) {
     if (path === "/ops/overview") {
       return send({
         permissions: fullPerms,
-        config: { stale_minutes: 60, pending_minutes: 15 },
+        config: { stale_minutes: 60, pending_minutes: 15, platform_fee_bps: 500, auto_complete_ready_minutes: 120 },
+        revenue: {
+          gmv_cents: 12800,
+          settled_platform_fee_cents: 640,
+          settled_merchant_net_cents: 12160,
+          escrow_cents: 2400,
+          refunded_cents: 800,
+          settled_orders_count: 8,
+          auto_completed_count: 1,
+        },
         runtime: {
           status: "ok",
           workers: [{ name: "expire_orders", healthy: true, seconds_since_success: 8, processed_last_batch: 0, failure_count: 0 }],
@@ -376,6 +385,8 @@ test("dedicated /ops/login rejects non-admin credentials, logs in admin, and fit
   await page.getByRole("button", { name: "进入平台管理台" }).click();
   await expect(page).toHaveURL(/\/ops$/);
   await expect(page.getByRole("heading", { name: "治理总览", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "平台服务商分账营收总览" })).toBeVisible();
+  await expect(page.getByText("¥128.00")).toBeVisible();
 
   for (const width of [360, 390, 768, 1440]) {
     await page.setViewportSize({ width, height: 900 });

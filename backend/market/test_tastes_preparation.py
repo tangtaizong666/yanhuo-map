@@ -17,7 +17,7 @@ from .errors import BusinessError
 from .models import AuditLog, Order, PreparationRequest, Product
 from .serializers import OrderInput
 from .services import cancel_order, create_order, merchant_action
-from .tests import fixtures, payload
+from .tests import fixtures, pay_order_for_test, payload
 
 
 @override_settings(DEMO_MODE=True, SERVICES_SIMULATION_ENABLED=False)
@@ -45,6 +45,10 @@ class TastesPreparationTests(TestCase):
         response = self.api.post('/api/v1/orders', data or self.data(), format='json')
         self.assertEqual(response.status_code, 201, response.data)
         return Order.objects.get(pk=response.data['id'])
+
+    def create_paid(self, data=None):
+        order = self.create(data)
+        return pay_order_for_test(order, auto_accept=False)
 
     def action(self, order, action, **fields):
         self.api.force_authenticate(self.vendor)
@@ -156,7 +160,7 @@ class TastesPreparationTests(TestCase):
         self.assertEqual(order.items.get().portions, self.portions())
 
     def test_accept_populates_estimate_with_default_and_student_can_read_it(self):
-        order = self.create()
+        order = self.create_paid()
         result = self.action(order, 'accept')
         self.assertEqual(result.status_code, 200, result.data)
         order.refresh_from_db()
@@ -168,7 +172,7 @@ class TastesPreparationTests(TestCase):
         self.assertEqual(student['prep_delay_reason'], '')
 
     def test_accept_custom_minutes_and_key_retry_never_reset_eta(self):
-        order = self.create()
+        order = self.create_paid()
         key = uuid.uuid4().hex
         first = self.action(order, 'accept', prep_minutes=25, idempotency_key=key)
         self.assertEqual(first.status_code, 200, first.data)
@@ -183,14 +187,14 @@ class TastesPreparationTests(TestCase):
         self.assertEqual(self.action(order, 'accept', prep_minutes=25).data['code'], 'invalid_transition')
 
     def test_update_estimate_is_required_reason_and_idempotent_not_a_new_order_state(self):
-        order = self.create()
+        order = self.create_paid()
         self.action(order, 'accept')
         key = uuid.uuid4().hex
         first = self.action(order, 'update_prep', prep_minutes=15, reason='还需等这一锅出餐', idempotency_key=key)
         self.assertEqual(first.status_code, 200, first.data)
         order.refresh_from_db()
         self.assertEqual(order.estimated_ready_at-order.prep_updated_at, timedelta(minutes=15))
-        self.assertEqual((order.status, order.payment_status, order.prep_delay_reason), ('preparing', 'unpaid', '还需等这一锅出餐'))
+        self.assertEqual((order.status, order.payment_status, order.prep_delay_reason), ('preparing', 'paid', '还需等这一锅出餐'))
         with patch('market.services.timezone.now', return_value=timezone.now()+timedelta(minutes=5)):
             again = self.action(order, 'update_prep', prep_minutes=15, reason='还需等这一锅出餐', idempotency_key=key)
         self.assertEqual(again.data['estimated_ready_at'], first.data['estimated_ready_at'])
@@ -198,7 +202,7 @@ class TastesPreparationTests(TestCase):
         self.assertEqual(self.action(order, 'update_prep', prep_minutes=16, reason='换时间', idempotency_key=key).data['code'], 'idempotency_conflict')
 
     def test_preparation_validation_rejects_out_of_bounds_missing_reason_and_key(self):
-        order = self.create()
+        order = self.create_paid()
         for minutes in (0, 181, 'abc', None):
             result = self.action(order, 'accept', prep_minutes=minutes)
             self.assertEqual(result.status_code, 400)
@@ -210,7 +214,7 @@ class TastesPreparationTests(TestCase):
         self.assertEqual(PreparationRequest.objects.count(), 0)
 
     def test_preparation_updates_require_owner_and_preparing_without_pending_cancellation(self):
-        order = self.create()
+        order = self.create_paid()
         fields = {'prep_minutes': 5, 'reason': '新预估', 'idempotency_key': uuid.uuid4().hex}
         self.assertEqual(self.action(order, 'update_prep', **fields).data['code'], 'invalid_transition')
         self.action(order, 'accept')
@@ -225,7 +229,7 @@ class TastesPreparationTests(TestCase):
         self.assertEqual(self.action(order, 'update_prep', **fields).data['code'], 'invalid_transition')
 
     def test_prep_replay_after_ready_returns_current_order_without_undoing_ready(self):
-        order = self.create()
+        order = self.create_paid()
         self.action(order, 'accept')
         fields = {'prep_minutes': 5, 'reason': '新预估', 'idempotency_key': uuid.uuid4().hex}
         first = self.action(order, 'update_prep', **fields)
@@ -233,11 +237,10 @@ class TastesPreparationTests(TestCase):
         replay = self.action(order, 'update_prep', **fields)
         self.assertEqual((replay.status_code, replay.data['status']), (200, 'ready'))
         self.assertEqual(replay.data['estimated_ready_at'], first.data['estimated_ready_at'])
-        self.action(order, 'confirm_payment')
         self.assertEqual(self.action(order, 'complete', pickup_code=order.pickup_code).data['status'], 'completed')
 
     def test_payment_review_blocks_estimate_change_without_changing_money_or_stock(self):
-        order = self.create()
+        order = self.create_paid()
         self.action(order, 'accept')
         order.refresh_from_db()
         original_estimate = order.estimated_ready_at
@@ -245,7 +248,7 @@ class TastesPreparationTests(TestCase):
         result = self.action(order, 'update_prep', prep_minutes=15, reason='等一锅', idempotency_key='payment-review-check')
         self.assertEqual(result.data['code'], 'payment_requires_review')
         order.refresh_from_db()
-        self.assertEqual((order.estimated_ready_at, order.total_cents, order.payment_status), (original_estimate, 1600, 'unpaid'))
+        self.assertEqual((order.estimated_ready_at, order.total_cents, order.payment_status), (original_estimate, 1600, 'paid'))
         self.assertEqual(PreparationRequest.objects.count(), 0)
         self.assertEqual(Product.objects.get(pk=self.product.pk).stock, 3)
 
@@ -275,6 +278,7 @@ class TastesPreparationConcurrencyTests(TransactionTestCase):
 
     def test_same_accept_request_has_one_estimate_and_audit(self):
         order, _ = create_order(self.student, payload(self.stall, self.product))
+        pay_order_for_test(order, auto_accept=False)
         task = lambda: self.action(order, 'accept', prep_minutes=20, idempotency_key='same-accept-request')
         a, b = self.race(task, task)
         self.assertEqual(a, b)
@@ -284,6 +288,7 @@ class TastesPreparationConcurrencyTests(TransactionTestCase):
 
     def test_same_update_request_changes_estimate_only_once(self):
         order, _ = create_order(self.student, payload(self.stall, self.product))
+        pay_order_for_test(order, auto_accept=False)
         merchant_action(order.pk, self.vendor, 'accept')
         task = lambda: self.action(order, 'update_prep', reason='等一锅', prep_minutes=15, idempotency_key='same-update-request')
         a, b = self.race(task, task)
@@ -294,6 +299,7 @@ class TastesPreparationConcurrencyTests(TransactionTestCase):
 
     def test_ready_and_estimate_race_cannot_revert_ready(self):
         order, _ = create_order(self.student, payload(self.stall, self.product))
+        pay_order_for_test(order, auto_accept=False)
         merchant_action(order.pk, self.vendor, 'accept')
         a, b = self.race(lambda: self.action(order, 'ready'), lambda: self.action(order, 'update_prep',
             reason='快好了', prep_minutes=5, idempotency_key='ready-update-race'))

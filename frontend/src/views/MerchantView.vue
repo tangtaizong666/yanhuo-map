@@ -62,15 +62,33 @@ const effectiveAnalyticsMode = computed<"live" | "simulation">(() =>
 const discoveryOnly = computed(() => !!stall.value && !hasPickupEligibility(stall.value));
 const hasOrderHistory = computed(() => orders.value.length > 0 || (orderCounts.value.all || 0) > 0);
 const pending = computed(
-  () => orders.value.filter((o) => o.status === "pending").length,
+  () =>
+    orders.value.filter(
+      (o) =>
+        ["pending", "preparing"].includes(o.status) &&
+        o.payment_status === "paid",
+    ).length,
 );
 const notificationEvents = computed(() =>
-  orders.value.filter(acceptReady).map((order) => ({
-    id: `${order.id}:pending`,
-    title: "有新订单待接单",
-    body: `${stall.value?.name || "你的摊位"}有一笔新订单，请打开工作台查看。`,
-    url: "/merchant/orders?filter=pending",
-  })),
+  orders.value
+    .filter(
+      (order) =>
+        acceptReady(order) ||
+        (order.status === "preparing" && order.payment_status === "paid"),
+    )
+    .map((order) => ({
+      id: `${order.id}:paid-arrival`,
+      title:
+        order.status === "preparing" ? "新订单已自动接单备餐" : "有新订单待接单",
+      body:
+        order.status === "preparing"
+          ? `${stall.value?.name || "你的摊位"}收到一笔已付款新单，已自动进入制作中。`
+          : `${stall.value?.name || "你的摊位"}有一笔已付款新单待接单，请打开工作台查看。`,
+      url:
+        order.status === "preparing"
+          ? "/merchant/orders?filter=preparing"
+          : "/merchant/orders?filter=pending",
+    })),
 );
 const clock = ref(Date.now());
 const locationDue = computed(() => {

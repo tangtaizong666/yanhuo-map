@@ -35,7 +35,7 @@ class LicensePaymentTests(PaymentSetup, TestCase):
                 self.gateway.query_payment.assert_not_called()
                 self.gateway.close_payment.assert_not_called()
         self.order.refresh_from_db()
-        self.assertEqual((self.order.payment_status, self.order.payment_method), ('unpaid', 'offline'))
+        self.assertEqual((self.order.payment_status, self.order.payment_method), ('unpaid', 'wechat'))
 
     def test_complete_license_valid_through_today_can_start_payment(self):
         self.incomplete(license_valid_until=timezone.localdate())
@@ -59,7 +59,7 @@ class LicensePaymentTests(PaymentSetup, TestCase):
                 self.assertEqual(result.data['payment']['status'], 'closed')
                 payment = PaymentAttempt.objects.filter(order=self.order).first()
                 self.assertEqual(payment.error_code, 'TRADE_ADMISSION_REVOKED')
-                self.assertEqual(result.data['payment_method'], 'offline')
+                self.assertEqual(result.data['payment_method'], 'wechat')
                 self.gateway.create_payment.assert_not_called()
         self.assertEqual(PaymentAttempt.objects.filter(order=self.order, status='closed').count(), 2)
 
@@ -94,7 +94,7 @@ class LicensePaymentTests(PaymentSetup, TestCase):
         closed = self.api.post(f'/api/v1/orders/{self.order.pk}/payments/close', {})
         self.assertEqual(closed.status_code, 200, closed.data)
         self.assertEqual(closed.data['payment']['status'], 'closed')
-        self.assertTrue(closed.data['offline_payment_available'])
+        self.assertFalse(closed.data['offline_payment_available'])
         self.gateway.close_payment.assert_called_once()
         self.gateway.create_payment.assert_not_called()
 
@@ -122,8 +122,6 @@ class LicensePaymentTests(PaymentSetup, TestCase):
         self.assertEqual(result.status_code, 201, result.data)
         self.assertEqual(result.data['mode'], 'simulation')
         order_id = result.data['id']
-        for action in ('accept', 'ready'):
-            merchant_action(order_id, self.vendor, action)
         simulated = self.api.post(f'/api/v1/orders/{order_id}/payments/wechat', {'channel': 'simulation'})
         self.assertEqual(simulated.status_code, 200, simulated.data)
         self.assertEqual(simulated.data['payment']['mode'], 'simulation')

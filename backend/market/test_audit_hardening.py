@@ -18,7 +18,7 @@ from .media_policy import public_image
 from .models import AuditLog, BusinessSession, Order, PaymentAttempt, PaymentRefund, Product, Stall, StallLocation
 from .security_models import AuthenticationFailureBucket, MerchantOrderOperation
 from .services import create_order, cancel_order, merchant_action
-from .tests import fixtures, payload
+from .tests import fixtures, pay_order_for_test, payload
 
 
 @override_settings(PASSWORD_HASHERS=['django.contrib.auth.hashers.MD5PasswordHasher'])
@@ -110,11 +110,12 @@ class ReservationBudgetTests(TestCase):
         cancelled, _ = create_order(self.student, payload(self.stall, self.product))
         cancel_order(cancelled.pk, self.student, '正常取消')
         completed, _ = create_order(self.student, payload(self.stall, self.product))
-        for action in ('accept', 'ready', 'confirm_payment', 'complete'):
+        pay_order_for_test(completed, auto_accept=False)
+        for action in ('accept', 'ready', 'complete'):
             merchant_action(completed.pk, self.vendor, action, code=completed.pickup_code)
         next_order, created = create_order(self.student, payload(self.stall, self.product))
         self.assertTrue(created)
-        self.assertEqual(next_order.status, 'pending')
+        self.assertEqual(next_order.status, 'pending_payment')
         completed.refresh_from_db()
         self.assertEqual((completed.status, completed.payment_status), ('completed', 'paid'))
 
@@ -159,16 +160,17 @@ class MerchantOperationReplayTests(TestCase):
     def setUp(self):
         self.student, self.other, self.vendor, self.stall, self.product = fixtures()
         self.order, _ = create_order(self.student, payload(self.stall, self.product))
+        pay_order_for_test(self.order, auto_accept=False)
 
     def test_entire_pickup_flow_replays_without_duplicate_audit(self):
-        for action in ('accept', 'ready', 'confirm_payment', 'complete'):
+        for action in ('accept', 'ready', 'complete'):
             key = 'operation-'+action
             code = self.order.pickup_code if action == 'complete' else ''
             first = merchant_action(self.order.pk, self.vendor, action, code=code, idempotency_key=key)
             second = merchant_action(self.order.pk, self.vendor, action, code=code, idempotency_key=key)
             self.assertEqual(first.status, second.status)
             self.assertEqual(AuditLog.objects.filter(action='order_'+action, target=str(self.order.pk)).count(), 1)
-        self.assertEqual(MerchantOrderOperation.objects.count(), 4)
+        self.assertEqual(MerchantOrderOperation.objects.count(), 3)
 
     def test_identity_and_fingerprint_checked_before_replay(self):
         merchant_action(self.order.pk, self.vendor, 'accept', idempotency_key='same-request')

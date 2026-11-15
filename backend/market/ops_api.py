@@ -17,7 +17,7 @@ from django.contrib.auth import authenticate, get_user_model, login
 from django.core import signing
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Exists, F, IntegerField, OuterRef, Q, Subquery
+from django.db.models import Count, Exists, F, IntegerField, OuterRef, Q, Subquery, Sum
 from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -141,6 +141,8 @@ def _raise_django_validation(exc: DjangoValidationError):
 class ConfigUpdateInput(StrictInput):
     stale_minutes = serializers.IntegerField(min_value=1, max_value=1440, required=False)
     pending_minutes = serializers.IntegerField(min_value=1, max_value=60, required=False)
+    platform_fee_bps = serializers.IntegerField(min_value=0, max_value=3000, required=False)
+    auto_complete_ready_minutes = serializers.IntegerField(min_value=15, max_value=1440, required=False)
 
 
 class AssistedApplicationInput(StrictInput):
@@ -180,6 +182,7 @@ class MerchantUpdateInput(StrictInput):
     food_preparation_address = serializers.CharField(max_length=200, allow_blank=True, required=False)
     license_valid_until = serializers.DateField(allow_null=True, required=False)
     wechat_pay_account = serializers.CharField(max_length=64, allow_blank=True, allow_null=True, required=False)
+    custom_fee_bps = serializers.IntegerField(min_value=0, max_value=3000, allow_null=True, required=False)
 
 
 class StallLocationInput(StrictInput):
@@ -203,6 +206,8 @@ class StallGovernanceInput(StrictInput):
     is_visible = serializers.BooleanField(required=False)
     public_phone_enabled = serializers.BooleanField(required=False)
     transaction_enabled = serializers.BooleanField(required=False)
+    auto_accept_orders = serializers.BooleanField(required=False)
+    simulation_payment_enabled = serializers.BooleanField(required=False)
     delivery_approved = serializers.BooleanField(required=False)
     delivery_enabled = serializers.BooleanField(required=False)
     delivery_point_ids = serializers.ListField(
@@ -505,7 +510,9 @@ def _can_view_merchant_sensitive(user) -> bool:
     )
 
 
-def _serialize_merchant(merchant: MerchantProfile, *, include_sensitive: bool = True):
+def _serialize_merchant(merchant: MerchantProfile, *, include_sensitive: bool = True, default_fee_bps: int | None = None):
+    platform_bps = SiteConfiguration.current().platform_fee_bps if default_fee_bps is None else default_fee_bps
+    effective_fee_bps = merchant.custom_fee_bps if merchant.custom_fee_bps is not None else platform_bps
     return {
         'id': merchant.pk,
         'user_id': merchant.user_id,
@@ -521,6 +528,8 @@ def _serialize_merchant(merchant: MerchantProfile, *, include_sensitive: bool = 
         'food_preparation_address': merchant.food_preparation_address if include_sensitive else '',
         'license_valid_until': merchant.license_valid_until.isoformat() if merchant.license_valid_until else None,
         'wechat_pay_account': (merchant.wechat_pay_account or '') if include_sensitive else '',
+        'custom_fee_bps': merchant.custom_fee_bps,
+        'effective_fee_bps': effective_fee_bps,
         'trade_reason': merchant_trade_reason(merchant),
         'sensitive_redacted': not include_sensitive,
     }
@@ -538,7 +547,11 @@ def _serialize_stall_governance(
     return {
         'id': stall.pk,
         'merchant_id': stall.merchant_id,
-        'merchant': _serialize_merchant(stall.merchant, include_sensitive=include_merchant_sensitive),
+        'merchant': _serialize_merchant(
+            stall.merchant,
+            include_sensitive=include_merchant_sensitive,
+            default_fee_bps=cfg.platform_fee_bps,
+        ),
         'area_id': stall.area_id,
         'area_name': stall.area.name,
         'name': stall.name,
@@ -548,6 +561,8 @@ def _serialize_stall_governance(
         'is_visible': stall.is_visible,
         'public_phone_enabled': stall.public_phone_enabled,
         'accepting_orders': stall.accepting_orders,
+        'auto_accept_orders': stall.auto_accept_orders,
+        'simulation_payment_enabled': stall.simulation_payment_enabled,
         'transaction_enabled': stall.transaction_enabled,
         'transaction_eligible': new_trade_eligible(stall),
         'delivery_approved': stall.delivery_approved,
@@ -632,7 +647,7 @@ def overview(request):
         with transaction.atomic():
             cfg = SiteConfiguration.objects.select_for_update().filter(pk=1).first() or SiteConfiguration(pk=1)
             changed = []
-            for key in ('stale_minutes', 'pending_minutes'):
+            for key in ('stale_minutes', 'pending_minutes', 'platform_fee_bps', 'auto_complete_ready_minutes'):
                 if key in data and getattr(cfg, key) != data[key]:
                     setattr(cfg, key, data[key])
                     changed.append(key)
@@ -645,8 +660,15 @@ def overview(request):
                     fields=changed,
                     stale_minutes=cfg.stale_minutes,
                     pending_minutes=cfg.pending_minutes,
+                    platform_fee_bps=cfg.platform_fee_bps,
+                    auto_complete_ready_minutes=cfg.auto_complete_ready_minutes,
                 )
-        return Response({'stale_minutes': cfg.stale_minutes, 'pending_minutes': cfg.pending_minutes})
+        return Response({
+            'stale_minutes': cfg.stale_minutes,
+            'pending_minutes': cfg.pending_minutes,
+            'platform_fee_bps': cfg.platform_fee_bps,
+            'auto_complete_ready_minutes': cfg.auto_complete_ready_minutes,
+        })
 
     cfg = SiteConfiguration.current()
     perms = ops_permissions_map(request.user)
@@ -717,6 +739,42 @@ def overview(request):
         else []
     )
 
+    mode_orders = Order.objects.filter(mode=mode)
+    period_paid = mode_orders.filter(payment_status='paid', paid_at__gte=start, paid_at__lte=now).aggregate(
+        paid_orders=Count('pk'),
+        gmv_cents=Sum('total_cents', default=0),
+        platform_fee_cents=Sum('platform_fee_cents', default=0),
+        merchant_net_cents=Sum('merchant_net_cents', default=0),
+    )
+    period_settled = mode_orders.filter(
+        payment_status='paid', settlement_status='settled', settled_at__gte=start, settled_at__lte=now
+    ).aggregate(
+        settled_orders=Count('pk'),
+        settled_platform_fee_cents=Sum('platform_fee_cents', default=0),
+        settled_merchant_net_cents=Sum('merchant_net_cents', default=0),
+    )
+    escrow_snapshot = mode_orders.filter(payment_status='paid', settlement_status='escrow').aggregate(
+        escrow_orders=Count('pk'),
+        escrow_total_cents=Sum('total_cents', default=0),
+        escrow_platform_fee_cents=Sum('platform_fee_cents', default=0),
+        escrow_merchant_net_cents=Sum('merchant_net_cents', default=0),
+    )
+    period_refunded = PaymentRefund.objects.filter(
+        order__mode=mode, status='success', completed_at__gte=start, completed_at__lte=now
+    ).aggregate(
+        refunded_orders=Count('order_id', distinct=True),
+        refunded_cents=Sum('amount_cents', default=0),
+    )
+    revenue_ledger = {
+        'mode': mode,
+        'days': days,
+        'platform_fee_bps': cfg.platform_fee_bps,
+        **period_paid,
+        **period_settled,
+        **escrow_snapshot,
+        **period_refunded,
+    }
+
     return Response(
         {
             'permissions': perms,
@@ -724,8 +782,11 @@ def overview(request):
             'config': {
                 'stale_minutes': cfg.stale_minutes,
                 'pending_minutes': cfg.pending_minutes,
+                'platform_fee_bps': cfg.platform_fee_bps,
+                'auto_complete_ready_minutes': cfg.auto_complete_ready_minutes,
             },
             'runtime': operations_status(),
+            'revenue': revenue_ledger,
             'summary': {
                 'stalls_total': len(all_stalls),
                 'stalls_visible': visible_count,
@@ -907,7 +968,7 @@ def stalls_governance(request):
         raise BusinessError('交易资格筛选无效。', 'invalid_eligibility', status=400)
 
     merchants = [
-        _serialize_merchant(m, include_sensitive=include_sensitive)
+        _serialize_merchant(m, include_sensitive=include_sensitive, default_fee_bps=cfg.platform_fee_bps)
         for m in MerchantProfile.objects.select_related('user').order_by('id')
     ]
     areas = [
@@ -1060,6 +1121,9 @@ def update_stall(request, stall_id):
             if reason:
                 raise BusinessError(f'不能授予交易或配送权限：{reason}', 'qualification_incomplete', status=400)
 
+        if 'simulation_payment_enabled' in data and not stall.is_demo and data['simulation_payment_enabled']:
+            raise BusinessError('正式摊位不能开启模拟微信支付。', 'invalid_simulation_switch', status=400)
+
         changed = []
         for field in (
             'name',
@@ -1067,6 +1131,8 @@ def update_stall(request, stall_id):
             'is_visible',
             'public_phone_enabled',
             'transaction_enabled',
+            'auto_accept_orders',
+            'simulation_payment_enabled',
             'delivery_approved',
             'delivery_enabled',
         ):

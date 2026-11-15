@@ -430,7 +430,7 @@ print('RESULT ' + json.dumps({{'order_status': order.status, 'released': order.i
                                   for row in WorkerHeartbeat.objects.all()}},
                               'operations': operations_status()}}))
 """)
-            require(state['order_status'] == 'pending' and not state['released']
+            require(state['order_status'] == 'pending_payment' and not state['released']
                     and state['stock'] == pending['stock_reserved'],
                     'Queued order changed before restart verification completed')
             fresh = all(state['heartbeats'].get(item['heartbeat_name'], {}).get('last_success_epoch', 0)
@@ -447,7 +447,7 @@ from datetime import timedelta
 from django.utils import timezone
 from market.models import Order, Product
 order = Order.objects.get(pk={pending['order_id']!r})
-assert order.status == 'pending' and not order.inventory_released
+assert order.status == 'pending_payment' and not order.inventory_released
 assert Product.objects.get(pk={pending['product_id']!r}).stock == {pending['stock_reserved']!r}
 expires_at = timezone.now() + timedelta(seconds=2)
 Order.objects.filter(pk=order.pk).update(expires_at=expires_at)

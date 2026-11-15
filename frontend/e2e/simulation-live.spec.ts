@@ -58,6 +58,13 @@ async function prepare(student: BrowserContext, merchant: BrowserContext) {
     "PATCH",
   );
   expect(services.ok(), await services.text()).toBeTruthy();
+  const manualAccept = await mutate(
+    merchant,
+    `/merchant/stalls/${stall.id}/profile`,
+    { auto_accept_orders: false },
+    "PATCH",
+  );
+  expect(manualAccept.ok(), await manualAccept.text()).toBeTruthy();
   const fresh = await (
     await student.request.get(`${baseURL}/api/v1/stalls/${stall.id}`)
   ).json();
@@ -68,6 +75,7 @@ async function prepare(student: BrowserContext, merchant: BrowserContext) {
   expect(product).not.toHaveProperty("stock");
   return {
     stall: fresh,
+    originalAutoAccept: stall.auto_accept_orders ?? true,
     product,
     originalStock: (await merchantProduct(merchant, stall.id, product.id)).stock,
     credentials,
@@ -89,11 +97,13 @@ test("live simulation: two devices complete checkout, failed/pending/retried pay
     viewport: { width: 390, height: 900 },
   });
   const merchant = await merchantContext.newPage();
+  let restoredStallId: number | null = null;
+  let restoredAutoAccept = true;
   try {
-    const { stall, product, credentials, originalStock } = await prepare(
-      context,
-      merchantContext,
-    );
+    const { stall, originalAutoAccept, product, credentials, originalStock } =
+      await prepare(context, merchantContext);
+    restoredStallId = stall.id;
+    restoredAutoAccept = originalAutoAccept;
     await page.goto("/login");
     await login(page, credentials.username, credentials.password);
     await page.goto(`/stalls/${stall.id}`);
@@ -121,28 +131,26 @@ test("live simulation: two devices complete checkout, failed/pending/retried pay
         r.request().method() === "POST" && r.url().endsWith("/api/v1/orders"),
     );
     await page
-      .getByRole("button", { name: "提交配送订单，去付款", exact: true })
+      .getByRole("button", { name: /^去模拟支付 ¥/ })
       .click();
     const response = await responsePromise;
     expect(response.status(), await response.text()).toBe(201);
     const created = await response.json();
     expect(created.mode).toBe("simulation");
     expect(created.status).toBe("pending_payment");
-    await page
-      .getByRole("button", { name: "模拟微信付款", exact: true })
-      .click();
+    await expect(page.locator(".simulation-cashier")).toBeVisible();
     await page.getByText("试试其他付款情况", { exact: true }).click();
     await page
       .getByRole("button", { name: "模拟支付失败", exact: true })
       .click();
     await expect(
-      page.getByRole("button", { name: "模拟微信付款", exact: true }),
+      page.getByRole("button", { name: "去模拟付款", exact: true }),
     ).toBeEnabled();
     const failed = await getOrder(context, created.id);
     expect(failed.payment_status).toBe("unpaid");
     expect(failed.payment.status).toBe("closed");
     await page
-      .getByRole("button", { name: "模拟微信付款", exact: true })
+      .getByRole("button", { name: "去模拟付款", exact: true })
       .click();
     await page.getByText("试试其他付款情况", { exact: true }).click();
     await page
@@ -218,6 +226,8 @@ test("live simulation: two devices complete checkout, failed/pending/retried pay
     const done = await getOrder(context, created.id);
     expect(done.status).toBe("completed");
     expect(done.mode).toBe("simulation");
+    expect(done.settlement_status).toBe("settled");
+    expect(done.platform_fee_cents).toBeGreaterThan(0);
     const merchantOrders = await (
       await merchantContext.request.get(
         `${baseURL}/api/v1/merchant/orders?stall=${stall.id}&pagination=cursor&filter=completed`,
@@ -240,6 +250,14 @@ test("live simulation: two devices complete checkout, failed/pending/retried pay
       fullPage: true,
     });
   } finally {
+    if (restoredStallId !== null) {
+      await mutate(
+        merchantContext,
+        `/merchant/stalls/${restoredStallId}/profile`,
+        { auto_accept_orders: restoredAutoAccept },
+        "PATCH",
+      ).catch(() => {});
+    }
     await merchantContext.close();
   }
 });
@@ -250,8 +268,13 @@ test("live simulation: full refund failure and recovery keep one refund and rest
   page,
 }) => {
   const merchant = await browser.newContext({ baseURL });
+  let restoredStallId: number | null = null;
+  let restoredAutoAccept = true;
   try {
-    const { stall, product, credentials, originalStock } = await prepare(context, merchant);
+    const { stall, originalAutoAccept, product, credentials, originalStock } =
+      await prepare(context, merchant);
+    restoredStallId = stall.id;
+    restoredAutoAccept = originalAutoAccept;
     expect((await mutate(context, "/auth/login", credentials)).ok()).toBe(true);
     const liveBefore = await (
       await merchant.request.get(
@@ -337,6 +360,14 @@ test("live simulation: full refund failure and recovery keep one refund and rest
     ).toBeVisible();
     await expect(page.locator(".receipt-total")).toContainText("模拟 · 已退款");
   } finally {
+    if (restoredStallId !== null) {
+      await mutate(
+        merchant,
+        `/merchant/stalls/${restoredStallId}/profile`,
+        { auto_accept_orders: restoredAutoAccept },
+        "PATCH",
+      ).catch(() => {});
+    }
     await merchant.close();
   }
 });

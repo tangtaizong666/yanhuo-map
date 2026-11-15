@@ -1,17 +1,17 @@
 import { expect, test, type Page } from '@playwright/test';
-import QRCode from 'qrcode';
 
 // All API traffic is fulfilled in this browser. No development orders are written.
 function order(status = 'pending'): any {
   return {
     id: 'sync-order', number: 'SYNC-ORDER', stall_id: 987, stall_name: '状态验证小摊',
-    mode: 'live', fulfillment_type: 'pickup', status, payment_status: status === 'completed' ? 'paid' : 'unpaid',
-    payment_method: 'offline', payment_review_required: false, payment: null, refund: null,
-    offline_payment_available: status === 'ready', stall_payment_qr_image: '/media/order-sync/collection-test.svg',
+    mode: 'live', fulfillment_type: 'pickup', status, payment_status: status === 'pending_payment' ? 'unpaid' : 'paid',
+    payment_method: 'wechat', payment_review_required: false, payment: null, refund: null,
+    offline_payment_available: false, stall_payment_qr_image: '',
     wechat_payment: { available: false, reason: '未开通', channels: [] }, total_cents: 1600,
     created_at: new Date().toISOString(), pickup_code: '1234', pickup_address: '南门取餐点',
     contact_phone: '', merchant_contact_phone: '13800138000', note: '', cancel_requested: false,
-    cancel_reason: '', review: null, allowed_actions: ['pending', 'preparing', 'ready'].includes(status) ? ['cancel'] : [],
+    cancel_reason: '', review: null,
+    allowed_actions: status === 'ready' ? ['confirm_receipt', 'cancel'] : ['pending', 'preparing'].includes(status) ? ['cancel'] : [],
     items: [{ product_id: 987, name: '招牌烤冷面', image: '/images/food-cold-noodles.jpg', unit_price_cents: 1600, quantity: 1 }],
   };
 }
@@ -24,8 +24,6 @@ async function fixture(page: Page, initial = order()) {
   const mutationHeld = new Promise<void>(resolve => { markMutationHeld = resolve; });
   const mutationGate = new Promise<void>(resolve => { mutationRelease = resolve; });
   await page.route('https://**/*', route => route.abort());
-  const code = await QRCode.toString('UI-TEST-ONLY-NO-PAYMENT', { type: 'svg' });
-  await page.route('**/media/order-sync/collection-test.svg', route => route.fulfill({ contentType: 'image/svg+xml', body: code }));
   await page.route('**/api/v1/**', async route => {
     const request = route.request(), path = new URL(request.url()).pathname.replace('/api/v1', '');
     const send = (body: any, status = 200) => route.fulfill({ status, json: body });
@@ -61,6 +59,9 @@ async function fixture(page: Page, initial = order()) {
       state.writes.push(path);
       state.order = { ...state.order, review: { ...request.postDataJSON(), created_at: new Date().toISOString() } };
       return send(state.reviewResponse ?? state.order, 201);
+    }
+    if (path === '/orders/sync-order/payments/sync' && request.method() === 'POST') {
+      return send(structuredClone(state.order));
     }
     throw new Error(`Unexpected fixture request: ${request.method()} ${path}`);
   });
@@ -155,7 +156,7 @@ test('a late action from the previous account does not overwrite the new account
   await identity;
   await expect(page.locator('.receipt-header h2')).toHaveText('第二位同学的小摊');
   fixtureState.releaseMutation();
-  await expect(page.locator('h1')).toHaveText('订单已提交，等待商家接单');
+  await expect(page.locator('h1')).toHaveText('已付款，等待商家接单');
   await expect(page.locator('.toast-stack')).toBeEmpty();
 });
 
@@ -186,25 +187,25 @@ async function requestReadyCancellation(page: Page) {
   await page.getByRole('button', { name: '提交申请', exact: true }).click();
 }
 
-test('collection code disappears while cancellation response is still pending', async ({ page }) => {
+test('pickup credential disappears while cancellation response is still pending', async ({ page }) => {
   const fixtureState = await fixture(page, order('ready'));
   fixtureState.state.holdMutation = true;
   await page.goto('/orders/sync-order');
-  await expect(page.locator('.stall-qr img')).toBeVisible();
+  await expect(page.locator('.pickup-card')).toBeVisible();
+  await expect(page.locator('.pickup-code')).toContainText('1234');
   await requestReadyCancellation(page);
   await fixtureState.mutationHeld;
-  await expect(page.locator('.stall-qr')).toHaveCount(0);
   await expect(page.locator('.pickup-card')).toHaveCount(0);
   await expect(page.locator('.student-payment')).toContainText('正在确认取消结果');
   fixtureState.releaseMutation();
   await expect(page.locator('h1')).toHaveText('订单已取消');
-  await expect(page.locator('.stall-qr')).toHaveCount(0);
+  await expect(page.locator('.pickup-card')).toHaveCount(0);
 });
 
-test('lost cancellation plus failed or old-state reads keeps collection hidden until cancellation is confirmed', async ({ page }) => {
+test('lost cancellation plus failed or old-state reads keeps pickup credential hidden until cancellation is confirmed', async ({ page }) => {
   const fixtureState = await fixture(page, order('ready'));
   await page.goto('/orders/sync-order');
-  await expect(page.locator('.stall-qr img')).toBeVisible();
+  await expect(page.locator('.pickup-card')).toBeVisible();
   fixtureState.state.loseCancelResponse = true;
   fixtureState.state.skipCancelMutation = true;
   fixtureState.state.failReads = true;
@@ -213,14 +214,15 @@ test('lost cancellation plus failed or old-state reads keeps collection hidden u
   await expect.poll(() => fixtureState.state.reads).toBeGreaterThan(1);
   await expect(page.locator('.order-detail-page > .error-message')).toBeVisible();
   await page.getByRole('button', { name: '关闭', exact: true }).click();
-  await expect(page.locator('.stall-qr')).toHaveCount(0);
+  await expect(page.locator('.pickup-card')).toHaveCount(0);
   await expect(page.locator('.student-payment')).toContainText('正在确认取消结果');
   fixtureState.state.failReads = false;
   await page.reload();
   await expect.poll(() => fixtureState.state.reads).toBeGreaterThan(2);
   await expect(page.locator('.order-detail-page > .error-message')).toHaveCount(0);
-  await expect(page.locator('.stall-qr')).toHaveCount(0);
+  await expect(page.locator('.pickup-card')).toHaveCount(0);
   await expect(page.locator('.student-payment')).toContainText('正在确认取消结果');
+  fixtureState.state.order.payment_status = 'unpaid';
   fixtureState.state.order.payment = {
     id: 'other-device-payment', status: 'reconcile', mode: 'live', channel: 'native',
     code_url: '', h5_url: '', expires_at: new Date(Date.now() + 600000).toISOString(),
@@ -228,23 +230,24 @@ test('lost cancellation plus failed or old-state reads keeps collection hidden u
   fixtureState.state.order.allowed_actions = ['sync_payment', 'close_payment'];
   await page.getByRole('button', { name: '确认取消结果', exact: true }).click();
   await expect(page.getByRole('button', { name: '刷新付款状态', exact: true })).toBeEnabled();
-  await expect(page.getByRole('button', { name: '关闭微信支付，改为到摊付款', exact: true })).toBeEnabled();
-  await expect(page.locator('.stall-qr')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '关闭本次微信支付', exact: true })).toBeEnabled();
+  await expect(page.locator('.pickup-card')).toHaveCount(0);
   fixtureState.state.order.payment = null;
+  fixtureState.state.order.payment_status = 'paid';
   fixtureState.state.order.allowed_actions = [];
   fixtureState.state.order.cancel_requested = true;
   fixtureState.state.order.offline_payment_available = false;
   await page.getByRole('button', { name: '刷新订单状态', exact: true }).click();
-  await expect(page.locator('.student-payment')).toContainText('取消申请正在处理中');
+  await expect(page.locator('.cancel-notice')).toContainText('取消申请已提交');
   await expect(page.locator('.student-payment')).not.toContainText('正在确认取消结果');
-  await expect(page.locator('.stall-qr')).toHaveCount(0);
+  await expect(page.locator('.pickup-card')).toHaveCount(0);
   expect(fixtureState.state.writes).toEqual(['/orders/sync-order/cancel']);
 });
 
-test('definitely rejected cancellation restores collection only after a successful state read', async ({ page }) => {
+test('definitely rejected cancellation restores pickup credential only after a successful state read', async ({ page }) => {
   const fixtureState = await fixture(page, order('ready'));
   await page.goto('/orders/sync-order');
-  await expect(page.locator('.stall-qr img')).toBeVisible();
+  await expect(page.locator('.pickup-card')).toBeVisible();
   fixtureState.state.rejectCancel = true;
   fixtureState.state.failReads = true;
   await requestReadyCancellation(page);
@@ -252,10 +255,10 @@ test('definitely rejected cancellation restores collection only after a successf
   await expect.poll(() => fixtureState.state.reads).toBeGreaterThan(1);
   await expect(page.locator('.order-detail-page > .error-message')).toBeVisible();
   await page.getByRole('button', { name: '关闭', exact: true }).click();
-  await expect(page.locator('.stall-qr')).toHaveCount(0);
+  await expect(page.locator('.pickup-card')).toHaveCount(0);
   fixtureState.state.failReads = false;
   await page.getByRole('button', { name: '刷新订单状态', exact: true }).click();
-  await expect(page.locator('.stall-qr img')).toBeVisible();
+  await expect(page.locator('.pickup-card')).toBeVisible();
   await expect(page.locator('.student-payment')).not.toContainText('正在确认取消结果');
   expect(fixtureState.state.writes).toEqual(['/orders/sync-order/cancel']);
 });

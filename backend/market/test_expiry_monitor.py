@@ -52,7 +52,7 @@ class ExpiryMonitorTests(TestCase):
             'oldest_overdue_seconds': 121.0, 'overdue': True,
         })
         self.order.refresh_from_db(); self.product.refresh_from_db()
-        self.assertEqual(self.order.status, 'pending')
+        self.assertEqual(self.order.status, 'pending_payment')
         self.assertFalse(self.order.inventory_released)
         self.assertEqual(self.product.stock, stock)
         self.assertEqual(expire_pending_orders(), 1)
@@ -100,17 +100,19 @@ class ExpiryMonitorTests(TestCase):
         self.assertEqual(self.status()['order_expiry']['eligible_pending'], 0)
 
     def test_paid_delivery_can_need_expiry_but_paid_pickup_cannot(self):
-        self.overdue(payment_status='paid', fulfillment_type='pickup')
+        self.overdue(status='pending_payment', payment_status='paid', fulfillment_type='pickup')
         self.assertEqual(self.status()['order_expiry']['eligible_pending'], 0)
-        self.overdue(payment_status='paid', fulfillment_type='delivery')
+        self.overdue(status='pending', payment_status='paid', fulfillment_type='pickup')
+        self.assertEqual(self.status()['order_expiry']['eligible_pending'], 1)
+        self.overdue(status='pending', payment_status='paid', fulfillment_type='delivery')
         self.assertEqual(self.status()['order_expiry']['eligible_pending'], 1)
 
     def test_disabled_simulator_and_non_demo_stalls_are_excluded(self):
         self.overdue(mode='simulation')
         self.assertEqual(self.status()['order_expiry']['eligible_pending'], 0)
         Stall.objects.filter(pk=self.stall.pk).update(is_demo=True)
-        self.assertEqual(self.status()['order_expiry']['eligible_pending'], 1)
-        self.payment('closed')  # Even a terminal online attempt requires the simulator.
+        self.assertEqual(self.status()['order_expiry']['eligible_pending'], 0)
+        self.payment('closed')
         self.assertEqual(self.status()['order_expiry']['eligible_pending'], 0)
         self.assertEqual(expire_pending_orders(), 0)
         with override_settings(SERVICES_SIMULATION_ENABLED=True):
@@ -126,5 +128,5 @@ class ExpiryMonitorTests(TestCase):
         Order.objects.filter(pk=other.pk).update(expires_at=self.now-timedelta(seconds=1))
         self.assertEqual(expire_pending_orders(limit=1), 1)
         self.order.refresh_from_db(); other.refresh_from_db()
-        self.assertEqual((self.order.status, other.status), ('pending', 'cancelled'))
+        self.assertEqual((self.order.status, other.status), ('pending_payment', 'cancelled'))
 

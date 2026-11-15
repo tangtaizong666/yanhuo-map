@@ -75,7 +75,10 @@ class Command(BaseCommand):
         for index, (name, category, description, image, area_index, address, lat, lng, prep, products) in enumerate(CATALOG):
             stall, created = Stall.objects.get_or_create(name=name, is_demo=True, defaults={
                 'merchant': merchant, 'area': areas[area_index], 'category': category, 'description': description,
-                'image': f'/images/{DEMO_STALL_IMAGES[name]}', 'prep_minutes': prep, 'transaction_enabled': index not in (6,)})
+                'image': f'/images/{DEMO_STALL_IMAGES[name]}', 'prep_minutes': prep,
+                'transaction_enabled': index not in (6,),
+                'simulation_payment_enabled': index not in (6,),
+                'auto_accept_orders': True})
             if not created: continue
             StallLocation.objects.create(stall=stall, address=address, latitude=lat, longitude=lng)
             session = BusinessSession.objects.create(stall=stall, status='open',

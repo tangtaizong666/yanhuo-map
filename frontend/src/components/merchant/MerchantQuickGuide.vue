@@ -98,10 +98,9 @@ function jumpTo(path: string) {
           <li v-if="!discoveryOnly">
             <span class="m-guide-num"><BellRing :size="18" /></span>
             <div>
-              <strong>2. 接单与出餐：开声音防漏单</strong>
+              <strong>2. 顾客先付款自动进「制作中」，做好点「做好了」</strong>
               <p>
-                来新单先点<strong>接单</strong>（超过 5 分钟未接会自动取消），做好后点大按钮<strong>做好了</strong>，同学手机就会显示
-                4 位取餐码。建议在「更多」里打开声音提醒。
+                所有线上单必须<strong>先完成微信预付</strong>才会进接单台，杜绝跑单！默认开启<strong>付款后自动接单</strong>，您照单做完点大按钮<strong>做好了</strong>即可。建议在「更多」里打开新单声音提醒。
               </p>
             </div>
           </li>
@@ -109,11 +108,9 @@ function jumpTo(path: string) {
           <li v-if="!discoveryOnly">
             <span class="m-guide-num"><KeyRound :size="18" /></span>
             <div>
-              <strong>3. 当面交餐分两步：先收款，再输 4 位码</strong>
+              <strong>3. 零负担交餐结算：不用点收款，不怕忙忘点</strong>
               <p>
-                同学到摊后：① 看清扫码到账，先点<strong>收款</strong>；②
-                再输入同学出示的 <strong>4 位数字取餐码</strong>核销。待取单多时点「取餐码查单」输
-                4 位码即可一秒找到！
+                货款已由微信自动核验！交餐时顺手点卡片上的<strong>已交餐 · 完成</strong>（或输 4 位取餐码核销）；万一忙得没腾出手，<strong>同学点「我已取到餐点」或出餐满 2 小时无争议</strong>也会自动完结并分账结算！
               </p>
             </div>
           </li>
@@ -144,7 +141,7 @@ function jumpTo(path: string) {
 
         <div class="m-guide-shortcuts" aria-label="常用设置直达">
           <button type="button" @click="jumpTo('/merchant/store#location')">
-            <MapPin :size="16" /> 设置位置与收款码
+            <MapPin :size="16" /> 设置位置与营业时间
           </button>
           <button type="button" @click="jumpTo('/merchant/products')">
             <Utensils :size="16" /> 管理菜品与份数

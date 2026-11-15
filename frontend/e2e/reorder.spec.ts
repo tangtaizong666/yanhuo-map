@@ -34,6 +34,13 @@ async function fixture(browser: Browser, studentContext: BrowserContext) {
     closes_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
   });
   expect(opened.ok(), await opened.text()).toBeTruthy();
+  const manualAccept = await mutate(
+    merchant,
+    `/merchant/stalls/${stall.id}/profile`,
+    { auto_accept_orders: false },
+    "PATCH",
+  );
+  expect(manualAccept.ok(), await manualAccept.text()).toBeTruthy();
   const products: any[] = [];
   const createdOrderIds: string[] = [];
   const token = Date.now();
@@ -88,6 +95,22 @@ async function fixture(browser: Browser, studentContext: BrowserContext) {
     createdOrderIds.push(order.id);
     return order;
   }
+  async function pay(orderId: string) {
+    const start = await mutate(
+      studentContext,
+      `/orders/${orderId}/payments/wechat`,
+      { channel: "simulation" },
+    );
+    expect(start.ok(), await start.text()).toBeTruthy();
+    const payment = (await start.json()).payment;
+    const paid = await mutate(
+      studentContext,
+      `/orders/${orderId}/payments/simulate`,
+      { payment_id: payment.id, outcome: "success" },
+    );
+    expect(paid.ok(), await paid.text()).toBeTruthy();
+    return paid.json();
+  }
   async function cleanup() {
     // Only clean up orders created by this fixture and owned by this test student.
     for (const id of createdOrderIds) {
@@ -106,12 +129,16 @@ async function fixture(browser: Browser, studentContext: BrowserContext) {
           },
         );
         expect(finished.ok(), await finished.text()).toBeTruthy();
-      } else if (["pending", "preparing", "ready"].includes(order.status)) {
+      } else if (
+        ["pending_payment", "pending", "preparing", "ready"].includes(
+          order.status,
+        )
+      ) {
         const cancelled = await mutate(studentContext, `/orders/${id}/cancel`, {
           reason: "再来一单测试结束，清理本测试订单",
         });
         expect(cancelled.ok(), await cancelled.text()).toBeTruthy();
-        if (order.status !== "pending") {
+        if (["preparing", "ready"].includes(order.status)) {
           const accepted = await mutate(
             merchant,
             `/merchant/orders/${id}/action`,
@@ -122,6 +149,13 @@ async function fixture(browser: Browser, studentContext: BrowserContext) {
       }
     }
     for (const product of products) await update(product, { is_active: false });
+    const restoredProfile = await mutate(
+      merchant,
+      `/merchant/stalls/${stall.id}/profile`,
+      { auto_accept_orders: stall.auto_accept_orders ?? true },
+      "PATCH",
+    );
+    expect(restoredProfile.ok(), await restoredProfile.text()).toBeTruthy();
     const restored = await mutate(
       merchant,
       `/merchant/stalls/${stall.id}/status`,
@@ -144,6 +178,7 @@ async function fixture(browser: Browser, studentContext: BrowserContext) {
     merchant,
     cartKey,
     create,
+    pay,
     update,
     cleanup,
   };
@@ -305,9 +340,10 @@ test("reorder appears only after an order ends, requires a second review after m
   try {
     const product = f.products[0];
     const order = await f.create([{ product, quantity: 1 }], "states");
+    await f.pay(order.id);
     await page.goto(`/orders/${order.id}`);
     await expect(
-      page.getByRole("heading", { name: "订单已提交，等待商家接单" }),
+      page.getByRole("heading", { name: "已付款，等待商家接单" }),
     ).toBeVisible();
     await expect(
       page.getByRole("button", { name: "再来一单", exact: true }),
@@ -378,7 +414,8 @@ test("reorder appears only after an order ends, requires a second review after m
     );
     expect(opened.ok(), await opened.text()).toBeTruthy();
     const completed = await f.create([{ product, quantity: 1 }], "completed");
-    for (const action of ["accept", "ready", "confirm_payment"]) {
+    await f.pay(completed.id);
+    for (const action of ["accept", "ready"]) {
       const result = await mutate(
         f.merchant,
         `/merchant/orders/${completed.id}/action`,

@@ -19,17 +19,17 @@ function makeOrder(overrides: Record<string, any> = {}) {
     number: "UI-ONLY-0001",
     stall_id: 992,
     stall_name: "界面测试摊位",
-    status: "ready",
-    payment_method: "offline",
+    status: "pending_payment",
+    payment_method: "wechat",
     payment_status: "unpaid",
     payment_review_required: false,
-    offline_payment_available: true,
+    offline_payment_available: false,
     stall_payment_qr_image: "/media/payment-student/collection-test.svg",
     wechat_payment: {
       mode: "live",
       supported: true,
       available: false,
-      reason: "示例环境不发起真实微信扣款，当前支持到摊付款。",
+      reason: "该商家尚未配置微信支付，暂时无法发起线上付款。",
       channels: [],
     },
     payment: null,
@@ -37,6 +37,7 @@ function makeOrder(overrides: Record<string, any> = {}) {
     payment_can_close: false,
     total_cents: 1450,
     created_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 900000).toISOString(),
     pickup_code: "1234",
     pickup_address: "测试取餐点",
     pickup_latitude: 45.7,
@@ -106,11 +107,11 @@ async function fixture(
   });
   await page.goto(`/orders/${state.id}`);
   await expect(
-    page.getByRole("heading", { name: "支付方式", exact: true }),
+    page.getByRole("heading", { name: "线上付款状态", exact: true }),
   ).toBeVisible();
   return { calls, unexpected };
 }
-test("UI contract: unconfigured WeChat is unavailable and offline collection remains clear", async ({
+test("UI contract: unconfigured WeChat is unavailable and never falls back to offline QR", async ({
   page,
 }, testInfo) => {
   const f = await fixture(page, makeOrder());
@@ -118,11 +119,12 @@ test("UI contract: unconfigured WeChat is unavailable and offline collection rem
     page.getByText("微信支付尚未开通", { exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "微信支付", exact: true }),
+    page.getByRole("button", { name: "立即微信支付", exact: true }),
   ).toBeDisabled();
   await expect(page.locator(".student-payment")).toContainText(
-    "当前支持到摊付款",
+    "暂时无法发起线上付款",
   );
+  await expect(page.locator(".stall-qr")).toHaveCount(0);
   for (const width of [360, 390, 768, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     await assertNoHorizontalOverflow(page);
@@ -135,7 +137,7 @@ test("UI contract: unconfigured WeChat is unavailable and offline collection rem
   expect(f.calls).toEqual([]);
   expect(f.unexpected).toEqual([]);
 });
-test("UI contract: repeated click creates once, QR pending is not paid, and server close restores offline", async ({
+test("UI contract: repeated click creates once, QR pending is not paid, and server close allows restarting online payment", async ({
   page,
 }) => {
   const state = makeOrder({
@@ -163,15 +165,14 @@ test("UI contract: repeated click creates once, QR pending is not paid, and serv
       });
     } else if (kind === "close") {
       state.payment.status = "closed";
-      state.payment_method = "offline";
+      state.payment_method = "wechat";
       state.payment_can_close = false;
     }
     return state;
   });
-  await expect(page.locator(".stall-qr img")).toBeVisible();
-  await page.getByRole("button", { name: "微信支付", exact: true }).click();
-  await expect(page.getByRole("button", { name: "正在创建…" })).toBeDisabled();
   await expect(page.locator(".stall-qr")).toHaveCount(0);
+  await page.getByRole("button", { name: "立即微信支付", exact: true }).click();
+  await expect(page.getByRole("button", { name: "正在创建…" })).toBeDisabled();
   await expect.poll(() => f.calls).toEqual(["wechat"]);
   release();
   await expect(page.getByAltText("本订单微信支付二维码")).toBeVisible();
@@ -180,17 +181,17 @@ test("UI contract: repeated click creates once, QR pending is not paid, and serv
     0,
   );
   await expect(
-    page.getByRole("button", { name: "申请取消", exact: true }),
+    page.getByRole("button", { name: "取消订单", exact: true }),
   ).toHaveCount(0);
   await page
-    .getByRole("button", { name: "关闭微信支付，改为到摊付款" })
+    .getByRole("button", { name: "关闭本次微信支付", exact: true })
     .click();
   await expect(
-    page.getByRole("button", { name: "微信支付", exact: true }),
+    page.getByRole("button", { name: "立即微信支付", exact: true }),
   ).toBeEnabled();
-  await expect(page.locator(".stall-qr img")).toBeVisible();
+  await expect(page.locator(".stall-qr")).toHaveCount(0);
   await expect(
-    page.getByRole("button", { name: "申请取消", exact: true }),
+    page.getByRole("button", { name: "取消订单", exact: true }),
   ).toBeVisible();
   expect(f.calls).toEqual(["wechat", "close"]);
   expect(f.unexpected).toEqual([]);
@@ -199,6 +200,7 @@ test("UI contract: unknown, refunding, and manual review do not show successful 
   page,
 }) => {
   const state = makeOrder({
+    status: "ready",
     payment_method: "wechat",
     payment_can_close: true,
     payment: {
@@ -252,6 +254,7 @@ test("UI contract: H5 entry rejects an untrusted redirect and only verified API 
     },
   });
   const f = await fixture(page, state, async () => {
+    state.status = "preparing";
     state.payment_status = "paid";
     state.payment.status = "paid";
     return state;
@@ -307,10 +310,10 @@ test("UI contract: desktop cannot initiate an H5-only merchant channel", async (
     }),
   );
   await expect(
-    page.getByRole("button", { name: "微信支付", exact: true }),
+    page.getByRole("button", { name: "立即微信支付", exact: true }),
   ).toBeDisabled();
   await expect(page.locator(".student-payment")).toContainText(
-    "暂未开通电脑扫码支付",
+    "请用手机系统浏览器打开本单完成微信付款",
   );
   expect(f.calls).toEqual([]);
 });
@@ -336,6 +339,7 @@ test("UI contract: delayed payment result pauses parent reads then refreshes the
   });
   const f = await fixture(page, state, async () => {
     const older = structuredClone(state);
+    older.status = "preparing";
     older.payment_status = "paid";
     older.payment.status = "paid";
     await wait;
@@ -394,7 +398,7 @@ test("UI contract: mobile external browser offers H5 while WeChat webview explai
       });
       if (embedded) {
         await expect(
-          page.getByRole("button", { name: "微信支付", exact: true }),
+          page.getByRole("button", { name: "立即微信支付", exact: true }),
         ).toBeDisabled();
         await expect(page.locator(".student-payment")).toContainText(
           "尚未接入微信内网页支付",
@@ -402,7 +406,7 @@ test("UI contract: mobile external browser offers H5 while WeChat webview explai
         expect(f.calls).toEqual([]);
       } else {
         await page
-          .getByRole("button", { name: "微信支付", exact: true })
+          .getByRole("button", { name: "立即微信支付", exact: true })
           .click();
         const entry = page.getByRole("link", { name: "前往微信支付" });
         await expect(entry).toBeVisible();

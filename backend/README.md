@@ -37,7 +37,7 @@ python -m venv .venv
 
 找摊菜品新增 `display_availability`（`available` 今天有、`sold_out` 卖完了、`paused` 暂时不卖、空值沿用原状态），商家创建／PATCH 可维护。此字段不修改 `stock`、`stock_version` 或交易用的 `sale_paused`。公开餐点的 `display_only=true` 时按展示状态返回 `availability`，`max_order_quantity=0`；恢复交易资格后重新按线上库存与停售开关判断。旧数据不自动填充“今天有”。
 
-订单 `offline_payment_available` 是当前展示现场付款入口的明确授权；真实自取待取餐、未付款、无线下／线上资金冲突及取消申请时才可能为 true。收款码必须经 `?purpose=payment_qr` 上传为本摊位受保护的 `qr-*` 文件（Caddy 与后端均仅向所属商家及符合现场付款条件的学生本人返回，普通公开图片路径拒绝写入且不会作为收款码下发）；`stall_payment_qr_image` 在其他状态返回空字符串，模拟订单始终为空。资质失效后的旧线上支付入口收起，查询、关闭和必要售后仍可执行；前端不能仅凭图片地址或旧链接展示付款入口。
+线上交易订单（自取与配送）统一采用**下单先在线预付**（`pending_payment`），`offline_payment_available` 与 `stall_payment_qr_image` 恒为 `False` / 空字符串，不再提供线上单到摊线下付款或商家手动点击 `confirm_payment`。订单持久化分账快照字段：`platform_fee_bps`、`platform_fee_cents`、`merchant_net_cents`、`settlement_status`（`unsettled | escrow | settled | reversed`）、`settled_at` 及 `completed_by`（`merchant_quick | merchant_code | student_confirm | auto_timeout`）。资质失效后的旧线上支付入口收起，查询、关闭和必要售后仍可执行。
 
 ### 试点安全与分页接口（2026-10-03）
 
@@ -70,7 +70,7 @@ python -m venv .venv
 - `GET /merchant/reviews?stall=` 查看评价；`POST /merchant/reviews/:id/reply`（content）回复本摊位评价。回复允许更新；content 为空字符串时撤回本人回复，replied_at 置空，用户评价原文及星级不变。操作审计留痕，并通过公共评价的 merchant_reply/replied_at 展示给用户。
 - 商家评价默认 `mode=live`，显式 `mode=simulation` 查看演练评价，每条评价返回订单的 `mode` 快照。公开摊位评分、评价数量、评价预览和已完成订单数量仅统计真实订单，历史模拟评价不计入公开口碑；模拟订单本人的详情仍保留自己的评价。
 - `GET /merchant/orders/:id?stall=` 按商家所有权或运营 `market.view_order` 权限读取一笔当前订单；可选摊位不匹配返回 404。沿用商家字段和动作权限，隐藏学生取餐码，响应为 `private, no-store`，用于同步已载入但刚退出待处理列表的订单。
-- `POST /merchant/orders/:id/action`，自取 action 为 accept/update_prep/reject/ready/confirm_payment/complete/approve_cancel/deny_cancel，配送另有 dispatch/arrive/report_delivery_issue/resolve_delivery_issue。complete 需要 `pickup_code`（默认 4 位数字，同摊位进行中订单数据库级唯一，极端饱和时回退 8 位）。先确认收款，才能核销；核销一次后不可重用。商家响应隐藏取餐码，学生自己的订单才显示。备餐预估参数及幂等规则详见下文。
+- `POST /merchant/orders/:id/action`，自取 action 为 accept/update_prep/reject/ready/complete_quick/complete/approve_cancel/deny_cancel/refund，配送另有 dispatch/arrive/report_delivery_issue/resolve_delivery_issue。`complete_quick` 支持已付款且无资金异常的待取餐订单一键完结交餐；`complete` 核验 `pickup_code`（默认 4 位数字，同摊位进行中订单数据库级唯一，极端饱和时回退 8 位）；学生也可调用 `POST /orders/:id/confirm-receipt` 主动确认收餐，或由定时任务在出餐/送达满 `auto_complete_ready_minutes`（默认 120 分钟）无争议时自动完结并触发分账结算。商家响应隐藏取餐码，学生自己的订单才显示。备餐预估参数及幂等规则详见下文。
 - `POST /feedback`（content/contact?）；`POST /events`（type/stall_id?），事件可为 browse/home_view/stall_view/map_view/checkout_view/location_denied/map_error/api_error。
 - `GET /merchant/metrics?stall=&days=1|7|30&mode=live|simulation`：默认含今天的近 7 个上海时区自然日，模式默认为 `live`。按订单模式快照区分真实与模拟收款；模拟金额不是实际营收或平台余额。保留浏览次数、创建订单数、完成率等字段，以及 paid_orders/average_order_cents/followers/products_active/products_sold_out/today/series/top_products/recent_payments。收款、客单价、热销商品与收款流水按 paid_at 统计；退款按完成日期另计。orders_completed 与完成率使用“期间创建订单中当前已完成”的同一批次；today/series 的完成数按 completed_at 统计。metric_definitions 提供具体口径，浏览事件不是去重人数，转化率仅供参考。
 - `GET /health` 数据库就绪检查。服务端异常记录 `market` 日志，客户端上报 api_error 用于统计。
@@ -161,7 +161,7 @@ prep_minutes 为 1–180 的整数，reason 不超过 200 字，idempotency_key 
 
 ### 备餐容量、本场截止与接单提示
 
-- `PATCH /merchant/stalls/:id/profile` 可设置 `prep_capacity:null|1..100`；null 关闭，0 无效。容量按**订单数**计，`pending_payment + pending + preparing` 共用预留名额，单份和多份均占一单。出餐为 ready 或取消等终止状态释放名额；调小上限不会取消已有订单。
+- `PATCH /merchant/stalls/:id/profile` 可设置 `prep_capacity:null|1..100`；null 关闭，0 无效。容量按**订单数**计，已付款的 `pending + preparing` 共用预留名额（未付款草稿单 `pending_payment` 不挤占厨房备餐容量），单份和多份均占一单。出餐为 ready 或取消等终止状态释放名额；调小上限不会取消已有订单。
 - 摊位响应增加 `prep_capacity`、`prep_active_orders`、`stop_orders_at`。新下单在原有摊位锁内检查容量，满额返回 409 `prep_capacity_reached`。在商品库存充足时仍可能因订单容量暂时不可下单。
 - `POST /merchant/stalls/:id/status` 可传 `stop_orders_at`（带时区时间或 null），只对当前营业会话生效。到时仅停止新订单，返回 409 `ordering_stopped`；不会收摊、修改位置确认时间或自动处理旧单。允许过去时间表达立即停新单；有 closes_at 时不得晚于它。null 清除截止；新开营业会话不继承上一场截止。
 - 页面单独保存截止时，必须发送 `{cutoff_only:true,expected_session_id,stop_orders_at}`，其中 expected_session_id 取摊位响应的 `business_session_id`（无会话时为 null，此时不可提交）。该分支拒绝混入 status、confirm_location 等字段；锁内只修改同一有效场次的截止，不会把另一设备的暂歇恢复为营业。场次变化/不存在返回 409 `business_session_changed`，同场次已收摊或到预计收摊时间返回 409 `business_session_ended`；客户端应刷新后让商家重新确认，不能自动重放到新场次。

@@ -51,6 +51,8 @@ export interface Config {
   areas: Area[];
   user: User | null;
   stale_minutes?: number;
+  platform_fee_bps?: number;
+  auto_complete_ready_minutes?: number;
   public_base_url?: string;
 }
 export interface Product {
@@ -117,6 +119,8 @@ export interface Stall {
   arrival_image?: string;
   payment_qr_image?: string;
   accepting_orders?: boolean;
+  auto_accept_orders?: boolean;
+  effective_fee_bps?: number;
   usual_hours?: string;
   stop_orders_at?: string | null;
   receiving_status?: "unknown" | "recent" | "stale";
@@ -337,6 +341,12 @@ export interface Order {
   payment_can_close?: boolean;
   refund?: PaymentRefund | null;
   total_cents: number;
+  platform_fee_bps?: number;
+  platform_fee_cents?: number;
+  merchant_net_cents?: number;
+  settlement_status?: "unsettled" | "escrow" | "settled" | "reversed";
+  settled_at?: string | null;
+  completed_by?: "" | "merchant_code" | "merchant_quick" | "student_confirm" | "auto_timeout";
   created_at: string;
   accepted_at: string | null;
   estimated_ready_at?: string | null;

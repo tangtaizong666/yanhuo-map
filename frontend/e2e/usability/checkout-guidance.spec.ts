@@ -254,7 +254,7 @@ test("pending and unknown submissions never offer correction or a normal second 
   await expect.poll(() => state.writes.length).toBe(1);
   try {
     await expect(submit(page)).toBeDisabled();
-    await expect(submit(page)).toHaveText("正在提交…");
+    await expect(submit(page)).toHaveText("正在创建订单…");
     await expect(modify(page)).toHaveCount(0);
   } finally {
     state.release();
@@ -278,7 +278,7 @@ test("a confirmed price change keeps the explicit new-price submission action", 
   state.behavior = "price";
   await page.goto("/checkout/481");
   await submit(page).click();
-  await expect(submit(page)).toHaveText("确认新价格并提交");
+  await expect(submit(page)).toHaveText("确认新价格去支付");
   await expect(submit(page)).toBeEnabled();
   await expect(guidance(page)).toHaveCount(0);
   expect(state.writes).toHaveLength(1);

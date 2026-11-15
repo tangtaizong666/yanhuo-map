@@ -21,7 +21,7 @@ from .errors import BusinessError
 from .models import AuditLog, BusinessSession, Feedback, Order, Product, StockCorrection, Stall
 from .services import cancel_order, create_order, expire_pending_orders, merchant_action
 from .test_simulation import SimulationSetup
-from .tests import fixtures, payload
+from .tests import fixtures, pay_order_for_test, payload
 
 
 @override_settings(DEMO_MODE=True, SERVICES_SIMULATION_ENABLED=False)
@@ -55,7 +55,7 @@ class CounterTests(TestCase):
 
     def ready_order(self, user=None):
         order, _ = create_order(user or self.student, payload(self.stall, self.product))
-        merchant_action(order.pk, self.vendor, 'accept')
+        pay_order_for_test(order)
         return merchant_action(order.pk, self.vendor, 'ready')
 
     def test_defaults_and_public_contract_do_not_change_existing_availability(self):
@@ -94,7 +94,8 @@ class CounterTests(TestCase):
         self.assertEqual(exc.exception.detail['code'], 'product_sale_paused')
         replay, created = create_order(self.student, original)
         self.assertFalse(created); self.assertEqual(replay.pk, order.pk)
-        for action in ('accept', 'ready', 'confirm_payment', 'complete'):
+        pay_order_for_test(order, auto_accept=False)
+        for action in ('accept', 'ready', 'complete'):
             merchant_action(order.pk, self.vendor, action, order.pickup_code)
         self.assertEqual(self.fresh_product(), (4, 1))
         self.api.patch(f'/api/v1/merchant/products/{self.product.pk}', {'sale_paused': False}, format='json')
@@ -127,6 +128,7 @@ class CounterTests(TestCase):
         self.assertEqual(expire_pending_orders(), 0)
         self.assertEqual(self.fresh_product(), (5, 2))
         order, _ = create_order(self.other, payload(self.stall, self.product))
+        pay_order_for_test(order, auto_accept=False)
         merchant_action(order.pk, self.vendor, 'reject')
         self.assertEqual(self.fresh_product(), (5, 4))
 
@@ -204,7 +206,7 @@ class CounterTests(TestCase):
         self.assertEqual((public['status'], public['can_order']), ('open', False))
         with self.assertRaises(BusinessError) as exc: create_order(self.other, payload(self.stall, self.product))
         self.assertEqual(exc.exception.detail['code'], 'prep_capacity_reached')
-        merchant_action(order.pk, self.vendor, 'accept')
+        pay_order_for_test(order)
         self.assertFalse(self.api.get(f'/api/v1/stalls/{self.stall.pk}').data['can_order'])
         merchant_action(order.pk, self.vendor, 'ready')
         self.assertTrue(self.api.get(f'/api/v1/stalls/{self.stall.pk}').data['can_order'])
@@ -215,7 +217,7 @@ class CounterTests(TestCase):
         create_order(self.other, payload(self.stall, self.product))
         response = self.profile({'prep_capacity': 1})
         self.assertEqual(response.data['prep_active_orders'], 2)
-        self.assertEqual(Order.objects.filter(status='pending').count(), 2)
+        self.assertEqual(Order.objects.filter(status='pending_payment').count(), 2)
         self.assertEqual(self.profile({'prep_capacity': None}).status_code, 200)
         newcomer = User.objects.create_user('capacity_newcomer', password='ExampleSafe123')
         self.assertTrue(create_order(newcomer, payload(self.stall, self.product))[1])
@@ -230,7 +232,7 @@ class CounterTests(TestCase):
         self.assertEqual(exc.exception.detail['code'], 'ordering_stopped')
         self.stall.current_session.refresh_from_db()
         self.assertEqual(self.stall.current_session.last_confirmed_at, confirmed)
-        merchant_action(order.pk, self.vendor, 'accept')
+        pay_order_for_test(order)
         merchant_action(order.pk, self.vendor, 'ready')
         old_id = self.stall.current_session_id
         self.status(status='paused')
@@ -367,7 +369,7 @@ class CounterTests(TestCase):
         result = self.api.post(url, {'pickup_code': order.pickup_code}, format='json')
         self.assertEqual(result.status_code, 200, result.data)
         self.assertEqual((result.data['id'], result.data['pickup_code'], result.data['status'], result.data['payment_status']),
-            (str(order.pk), '', 'ready', 'unpaid'))
+            (str(order.pk), '', 'ready', 'paid'))
         self.assertNotIn(order.pickup_code, json.dumps(list(AuditLog.objects.values('details'))))
         Order.objects.filter(pk=order.pk).update(status='completed')
         self.assertEqual(self.api.post(url, {'pickup_code': order.pickup_code}, format='json').data['code'], 'pickup_order_not_found')
@@ -417,7 +419,7 @@ class CounterTests(TestCase):
 
     def test_wrong_pickup_code_locks_after_five_attempts(self):
         cache.clear()
-        order = merchant_action(self.ready_order().pk, self.vendor, 'confirm_payment')
+        order = self.ready_order()
         wrong = '0000' if order.pickup_code != '0000' else '1111'
         for _ in range(5):
             with self.assertRaises(BusinessError) as raised: merchant_action(order.pk, self.vendor, 'complete', wrong)
@@ -431,7 +433,9 @@ class CounterTests(TestCase):
 @override_settings(SERVICES_SIMULATION_ENABLED=True, DEMO_MODE=True, PRODUCTION=False)
 class CounterPaymentTests(SimulationSetup, TestCase):
     def test_reserved_delivery_payment_survives_capacity_cutoff_and_product_pause(self):
-        self.stall.prep_capacity = 1; self.stall.save(update_fields=['prep_capacity'])
+        self.stall.auto_accept_orders = False
+        self.stall.prep_capacity = 1
+        self.stall.save(update_fields=['auto_accept_orders', 'prep_capacity'])
         order = self.create()
         self.assertEqual(order.status, 'pending_payment')
         self.assertFalse(Stall.objects.get(pk=self.stall.pk).can_order())
@@ -535,7 +539,7 @@ class CounterConcurrencyTests(TransactionTestCase):
     def test_capacity_release_racing_checkout_never_exceeds_limit(self):
         Stall.objects.filter(pk=self.stall.pk).update(prep_capacity=1)
         order, _ = create_order(self.student, payload(self.stall, self.product))
-        merchant_action(order.pk, self.vendor, 'accept')
+        pay_order_for_test(order)
         a, b = self.race(lambda: merchant_action(order.pk, self.vendor, 'ready'),
             lambda: create_order(self.other, payload(self.stall, self.product)))
         self.assertEqual(a[0], 'ok')

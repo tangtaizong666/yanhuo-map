@@ -146,7 +146,7 @@ class SimulationPacingTests(SimulationSetup, TestCase):
             {'payment_id': str(payment.pk), 'outcome': 'success'}, format='json')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['payment_status'], 'paid')
-        self.assertEqual(response.data['status'], 'pending')
+        self.assertEqual(response.data['status'], 'preparing')
         self.live.assert_not_called()
 
     def test_explicit_refund_success_refreshes_failed_result_without_waiting(self):

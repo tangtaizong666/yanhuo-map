@@ -78,6 +78,9 @@ def _open_demo_stall(
     if not stall.accepting_orders:
         stall.accepting_orders = True
         stall_updates.append('accepting_orders')
+    if stall.transaction_enabled and not stall.simulation_payment_enabled:
+        stall.simulation_payment_enabled = True
+        stall_updates.append('simulation_payment_enabled')
     if stall_updates:
         stall.save(update_fields=stall_updates)
 

@@ -43,7 +43,7 @@ async function fixture(page: Page) {
     review_count: 0,
     rating: 0,
     contact_phone: "",
-    wechat_payment: { available: false, channels: [], reason: "尚未开通" },
+    wechat_payment: { available: true, mode: "live", channels: ["native"], reason: "" },
   };
   const state = {
     user: first,
@@ -135,7 +135,7 @@ async function fixture(page: Page) {
   );
   await page.goto("/checkout/9701");
   await expect(
-    page.getByRole("button", { name: "提交自取订单", exact: true }),
+    page.getByRole("button", { name: "去支付 ¥10", exact: true }),
   ).toBeEnabled();
   await page.evaluate(async () => {
     const modulePath = "/src/lib/api.ts";
@@ -152,7 +152,7 @@ test("focus identity verification prevents an old cart from being submitted unde
   state.holdIdentity = true;
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect.poll(() => state.identityChecks.length).toBe(1);
-  await page.getByRole("button", { name: "提交自取订单", exact: true }).click();
+  await page.getByRole("button", { name: "去支付 ¥10", exact: true }).click();
   // Keep auth/me in flight while the user attempts a mutation.
   await page.waitForTimeout(250);
   await info.attach("identity-write-observation", {
@@ -231,7 +231,7 @@ test("a server account mismatch refreshes identity without replaying a write aft
   state.enforceActor = true;
   state.holdIdentity = false;
   await state.identityChecks[0]!.fulfill({ json: first });
-  await page.getByRole("button", { name: "提交自取订单", exact: true }).click();
+  await page.getByRole("button", { name: "去支付 ¥10", exact: true }).click();
   await expect(page.getByText("同学 B", { exact: true })).toBeVisible();
   expect(state.rejectedActors).toEqual([String(first.id)]);
   expect(state.writes).toEqual([]);

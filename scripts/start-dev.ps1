@@ -1,9 +1,10 @@
 param([switch]$NoSeed, [switch]$Lan, [string]$LanAddress, [switch]$Simulation)
 $ErrorActionPreference = 'Stop'
-if ($Simulation) {
+if ($Simulation -or (($env:DJANGO_ENV -ne 'production') -and ((-not $env:DEMO_MODE) -or $env:DEMO_MODE.ToLowerInvariant() -eq 'true') -and (-not $env:SERVICES_SIMULATION_ENABLED))) {
     if ($env:DJANGO_ENV -eq 'production') { throw 'Simulation is only supported in the development environment.' }
     $env:DEMO_MODE = 'true'
     $env:SERVICES_SIMULATION_ENABLED = 'true'
+    $Simulation = $true
 }
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $backendDir = Join-Path $projectRoot 'backend'

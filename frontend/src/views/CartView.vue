@@ -630,7 +630,7 @@ function acceptPrice(id: string, item: CartItem) {
             <Wallet :size="19" />
             <div>
               <strong>结算时选择取餐方式</strong>
-              <p>自取在出餐后付款；已开放的商家配送须先完成微信付款。</p>
+              <p>自取与商家配送均在线预付后进入备餐，备好凭 4 位码即取或送至交接点。</p>
             </div>
           </div>
           <div class="cart-guide-fact">

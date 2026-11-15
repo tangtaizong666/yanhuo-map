@@ -51,8 +51,6 @@ class PaymentSetup:
         pacing.enable(); self.addCleanup(pacing.disable)
         self.student, self.other, self.vendor, self.stall, self.product = fixtures()
         self.order, _ = create_order(self.student, payload(self.stall, self.product))
-        merchant_action(self.order.pk, self.vendor, 'accept')
-        merchant_action(self.order.pk, self.vendor, 'ready')
         self.order.refresh_from_db()
         self.gateway = Mock(mchid='1234567890', appid='wxTestApp', enabled=True, channels=('native', 'h5'))
         self.gateway.create_payment.return_value = {'code_url': 'weixin://wxpay/test-code'}
@@ -85,6 +83,16 @@ class PaymentSetup:
         payment.refresh_from_db()
         return payment
 
+    def pay_ready(self):
+        payment = PaymentSetup.pay(self)
+        self.order.refresh_from_db()
+        if self.order.status == 'pending':
+            merchant_action(self.order.pk, self.vendor, 'accept')
+        if self.order.status == 'preparing':
+            merchant_action(self.order.pk, self.vendor, 'ready')
+        self.refresh()
+        return payment
+
     def refresh(self):
         self.order.refresh_from_db(); self.product.refresh_from_db()
 
@@ -104,7 +112,7 @@ class PaymentTests(PaymentSetup, TestCase):
         self.assertEqual(result.status_code, 503)
         self.assertFalse(PaymentAttempt.objects.exists())
         self.gateway.create_payment.assert_not_called()
-        self.refresh(); self.assertEqual(self.order.payment_method, 'offline')
+        self.refresh(); self.assertEqual((self.order.payment_method, self.order.payment_status), ('wechat', 'unpaid'))
 
     def test_local_gateway_configuration_and_h5_ip_rejected_before_intent(self):
         self.gateway.enabled = False
@@ -150,11 +158,11 @@ class PaymentTests(PaymentSetup, TestCase):
                 response = self.api.post(f'/api/v1/orders/{self.order.pk}/payments/{action}', {'channel': 'native'})
                 self.assertEqual(response.status_code, expected)
 
-    def test_payment_only_ready_no_cancellation_and_no_paid_order(self):
-        for status in ('pending', 'preparing', 'completed', 'cancelled', 'rejected'):
+    def test_payment_only_pending_payment_no_cancellation_and_no_paid_order(self):
+        for status in ('pending', 'preparing', 'ready', 'completed', 'cancelled', 'rejected'):
             Order.objects.filter(pk=self.order.pk).update(status=status)
             with self.assertRaises(BusinessError): self.start()
-        Order.objects.filter(pk=self.order.pk).update(status='ready', cancel_requested=True)
+        Order.objects.filter(pk=self.order.pk).update(status='pending_payment', cancel_requested=True)
         with self.assertRaises(BusinessError): self.start()
         Order.objects.filter(pk=self.order.pk).update(cancel_requested=False, payment_status='paid')
         with self.assertRaises(BusinessError): self.start()
@@ -188,16 +196,18 @@ class PaymentTests(PaymentSetup, TestCase):
         self.assertEqual(retried.status, 'pending')
 
     def test_verified_success_is_idempotent_and_requires_pickup_code(self):
-        payment = self.pay()
+        self.pay()
         handle_notification('own-account', {}, b'{}')
         self.refresh()
         self.assertEqual(self.order.payment_status, 'paid')
-        self.assertEqual(self.order.status, 'ready')
+        self.assertEqual(self.order.status, 'preparing')
+        self.assertEqual(self.order.settlement_status, 'escrow')
         self.assertEqual(AuditLog.objects.filter(action='wechat_payment_confirmed').count(), 1)
+        merchant_action(self.order.pk, self.vendor, 'ready')
         with self.assertRaises(BusinessError): merchant_action(self.order.pk, self.vendor, 'confirm_payment')
         with self.assertRaises(BusinessError): merchant_action(self.order.pk, self.vendor, 'complete', 'bad-code')
         merchant_action(self.order.pk, self.vendor, 'complete', self.order.pickup_code)
-        self.refresh(); self.assertEqual(self.order.status, 'completed')
+        self.refresh(); self.assertEqual((self.order.status, self.order.settlement_status), ('completed', 'settled'))
         with self.assertRaises(BusinessError): merchant_action(self.order.pk, self.vendor, 'complete', self.order.pickup_code)
 
     def test_payment_mismatch_never_marks_paid(self):
@@ -229,15 +239,17 @@ class PaymentTests(PaymentSetup, TestCase):
         self.assertEqual(PaymentNotification.objects.get().status, 'dead')
         self.refresh(); self.assertEqual(self.order.payment_status, 'unpaid')
 
-    def test_unpaid_query_can_omit_amount_and_confirmed_close_unblocks_offline(self):
+    def test_unpaid_query_can_omit_amount_and_confirmed_close_allows_cancel_without_offline(self):
         payment = self.start()
         data = payment_result(payment, 'NOTPAY'); data.pop('amount')
         self.gateway.query_payment.side_effect = None; self.gateway.query_payment.return_value = data
         close_payment(self.order.pk, self.student)
         payment.refresh_from_db(); self.refresh()
         self.assertEqual(payment.status, 'closed')
-        self.assertEqual(self.order.payment_method, 'offline')
-        merchant_action(self.order.pk, self.vendor, 'confirm_payment')
+        self.assertEqual(self.order.payment_method, 'wechat')
+        with self.assertRaises(BusinessError): merchant_action(self.order.pk, self.vendor, 'confirm_payment')
+        cancel_order(self.order.pk, self.student, '无需了')
+        self.refresh(); self.assertEqual((self.order.status, self.product.stock), ('cancelled', 5))
 
     def test_expired_local_clock_never_proves_gateway_closed(self):
         payment = self.start()
@@ -261,7 +273,6 @@ class PaymentTests(PaymentSetup, TestCase):
     def test_closed_success_callback_is_recorded_without_reviving_cancelled_order(self):
         payment = self.start(); close_payment(self.order.pk, self.student)
         cancel_order(self.order.pk, self.student, '取消')
-        merchant_action(self.order.pk, self.vendor, 'approve_cancel')
         self.gateway.verify_notification.return_value = {'id': uuid.uuid4().hex, 'event_type': 'TRANSACTION.SUCCESS', 'resource': payment_result(payment)}
         handle_notification('own-account', {}, b'{}')
         self.refresh(); payment.refresh_from_db()
@@ -278,7 +289,7 @@ class PaymentTests(PaymentSetup, TestCase):
         self.refresh(); self.assertEqual((self.order.payment_method, self.order.payment_status), ('wechat', 'paid'))
 
     def test_full_refund_processing_then_success_no_restock_or_duplicate(self):
-        self.pay()
+        self.pay_ready()
         request_refund(self.order.pk, self.vendor, '用户无需取餐')
         refund = PaymentRefund.objects.get(order=self.order)
         self.refresh(); self.assertEqual(self.order.payment_status, 'refunding')
@@ -296,7 +307,7 @@ class PaymentTests(PaymentSetup, TestCase):
         self.assertEqual(AuditLog.objects.filter(action='wechat_refund_succeeded').count(), 1)
 
     def test_completed_order_refund_preserves_pickup_history(self):
-        self.pay(); merchant_action(self.order.pk, self.vendor, 'complete', self.order.pickup_code)
+        self.pay_ready(); merchant_action(self.order.pk, self.vendor, 'complete', self.order.pickup_code)
         request_refund(self.order.pk, self.vendor, '售后退款')
         self.gateway.query_refund.side_effect = lambda number: refund_result(PaymentRefund.objects.get(out_refund_no=number))
         sync_payment(self.order.pk, self.student)
@@ -335,7 +346,8 @@ class PaymentTests(PaymentSetup, TestCase):
         self.assertFalse(PaymentRefund.objects.exists())
 
     def test_offline_paid_order_cannot_use_wechat_refund(self):
-        merchant_action(self.order.pk, self.vendor, 'confirm_payment')
+        with self.assertRaises(BusinessError): merchant_action(self.order.pk, self.vendor, 'confirm_payment')
+        Order.objects.filter(pk=self.order.pk).update(status='ready', payment_method='offline', payment_status='paid', paid_at=timezone.now())
         with self.assertRaises(BusinessError): request_refund(self.order.pk, self.vendor, '退款')
         self.gateway.refund.assert_not_called()
 
@@ -352,7 +364,6 @@ class PaymentTests(PaymentSetup, TestCase):
     def test_reconciliation_shares_budget_between_old_refunds_and_unchecked_payments(self):
         first = self.start()
         other_order, _ = create_order(self.student, payload(self.stall, self.product))
-        merchant_action(other_order.pk, self.vendor, 'accept'); merchant_action(other_order.pk, self.vendor, 'ready')
         start_payment(other_order.pk, self.student, 'native', '127.0.0.1')
         other_payment = PaymentAttempt.objects.get(order=other_order)
         self.gateway.verify_notification.return_value = {'id': uuid.uuid4().hex, 'event_type': 'TRANSACTION.SUCCESS', 'resource': payment_result(other_payment)}
@@ -405,12 +416,10 @@ class PaymentConcurrencyTests(PaymentSetup, TransactionTestCase):
     def test_payment_creation_and_cancel_are_mutually_exclusive(self):
         self.race(self.start, lambda: cancel_order(self.order.pk, self.student, '取消'))
         self.refresh()
-        self.assertEqual(self.product.stock, 4)
         if PaymentAttempt.objects.exists():
-            self.assertFalse(self.order.cancel_requested)
-            self.assertEqual(self.order.payment_method, 'wechat')
+            self.assertEqual((self.order.status, self.order.payment_method, self.product.stock), ('pending_payment', 'wechat', 4))
         else:
-            self.assertTrue(self.order.cancel_requested)
+            self.assertEqual((self.order.status, self.product.stock), ('cancelled', 5))
 
     def test_payment_notification_and_manual_payment_cannot_double_collect(self):
         payment = self.start()
@@ -427,7 +436,7 @@ class PaymentConcurrencyTests(PaymentSetup, TransactionTestCase):
         self.gateway.create_payment.assert_called_once()
 
     def test_refund_and_pickup_are_serialized_with_refund_still_recorded(self):
-        self.pay()
+        self.pay_ready()
         self.race(lambda: request_refund(self.order.pk, self.vendor, '用户协商退款'),
             lambda: merchant_action(self.order.pk, self.vendor, 'complete', self.order.pickup_code))
         self.refresh()
@@ -438,11 +447,9 @@ class PaymentConcurrencyTests(PaymentSetup, TransactionTestCase):
     def test_start_and_offline_collection_cannot_both_succeed(self):
         self.race(self.start, lambda: merchant_action(self.order.pk, self.vendor, 'confirm_payment'))
         self.refresh()
-        if PaymentAttempt.objects.exists():
-            self.assertEqual((self.order.payment_method, self.order.payment_status), ('wechat', 'unpaid'))
-            self.assertEqual(AuditLog.objects.filter(action='order_confirm_payment').count(), 0)
-        else:
-            self.assertEqual((self.order.payment_method, self.order.payment_status), ('offline', 'paid'))
+        self.assertTrue(PaymentAttempt.objects.exists())
+        self.assertEqual((self.order.payment_method, self.order.payment_status), ('wechat', 'unpaid'))
+        self.assertEqual(AuditLog.objects.filter(action='order_confirm_payment').count(), 0)
 
     def test_duplicate_refunds_keep_one_external_refund_number(self):
         self.pay()

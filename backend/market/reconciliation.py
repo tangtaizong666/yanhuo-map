@@ -294,13 +294,16 @@ def verify_and_resolve(order_id, actor, reason):
                 facts={'reason': unresolved, 'captured_cents': sum(p.amount_cents for p in captures), 'net_online_cents': net})
         else:
             if not captures and not offline:
-                order.payment_status, order.payment_method, order.paid_at = 'unpaid', 'offline', None
+                order.payment_status, order.payment_method, order.paid_at = 'unpaid', 'wechat', None
+                order.settlement_status, order.settled_at = 'unsettled', None
             elif offline:
                 order.payment_status = 'paid'
             elif net:
                 order.payment_status, order.payment_method, order.paid_at = 'paid', 'wechat', remaining[0].paid_at
+                order.settlement_status = 'settled' if order.status == 'completed' else 'escrow'
             else:
                 order.payment_status, order.payment_method = 'refunded', 'wechat'
+                order.settlement_status, order.settled_at = 'reversed', None
                 if order.status not in ('completed', 'cancelled', 'rejected'):
                     if order.status in ('pending', 'pending_payment'): release_inventory(order)
                     order.status, order.cancel_requested = 'cancelled', False
@@ -372,7 +375,7 @@ def confirm_uncreated_payment(order_id, payment_id, actor, reason):
                 payment.save()
                 if (order.payment_status == 'unpaid' and not order.payment_review_required
                         and not order.payments.exclude(pk=payment.pk).filter(status__in=PaymentAttempt.ACTIVE_STATUSES + ('paid',)).exists()):
-                    order.payment_method = 'wechat' if order.fulfillment_type == 'delivery' else 'offline'
+                    order.payment_method = 'wechat'
                     order.save(update_fields=['payment_method'])
                 evidence(order, 'uncreated_payment_closed', 'resolved', reason, actor=actor, payment=payment,
                     facts={'provider_code': not_found_code, 'out_trade_no': payment.out_trade_no})

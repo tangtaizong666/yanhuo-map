@@ -12,8 +12,16 @@ import {
 import type { Order } from "../lib/types";
 import { copyText } from "../lib/engagement";
 import { money, routeUrl } from "../lib/api";
+import { allows } from "../lib/orderActions";
 import OrderContactHelp from "./OrderContactHelp.vue";
-const props = defineProps<{ order: Order; syncError?: boolean }>();
+const props = defineProps<{
+  order: Order;
+  syncError?: boolean;
+  busy?: boolean;
+}>();
+const emit = defineEmits<{
+  confirmReceipt: [];
+}>();
 const copied = ref("");
 const fallback = ref(false);
 const phone = computed(() =>
@@ -52,18 +60,33 @@ async function copy() {
     </p>
     <div class="pickup-code">
       <span>向商家出示 4 位取餐码</span><strong>{{ order.pickup_code }}</strong
-      ><small>请勿向无关人员分享 · 商家确认收款后核销</small>
+      ><small>已线上付清 ¥{{ money(order.total_cents) }} · 报码或出示页面即可取餐</small>
+    </div>
+    <div
+      v-if="allows(order, 'confirm_receipt', order.payment_status === 'paid')"
+      class="pickup-confirm-box"
+    >
+      <button
+        type="button"
+        class="btn btn-primary pickup-confirm-btn"
+        :disabled="busy"
+        @click="emit('confirmReceipt')"
+      >
+        <CheckCircle2 :size="18" />{{
+          busy ? "正在确认…" : "我已取到餐点"
+        }}
+      </button>
+      <small>拿到餐点后可主动点击完结，或由摊主一键交餐；出餐满 2 小时无争议自动完结结算</small>
     </div>
     <p
+      v-else
       class="pickup-payment"
       :class="{ paid: order.payment_status === 'paid' }"
     >
       <Wallet :size="17" />{{
         order.payment_status === "paid"
-          ? "款项已确认，可凭码取餐"
-          : order.wechat_payment?.available
-            ? `应付 ¥${money(order.total_cents)} · 可在下方支付，或到摊扫码付给摊主`
-            : `应付 ¥${money(order.total_cents)} · 到摊扫摊主收款码付款`
+          ? "款项已线上确认，可凭码取餐"
+          : `应付 ¥${money(order.total_cents)} · 请先完成线上付款`
       }}
     </p>
     <div class="pickup-card-address">
@@ -168,6 +191,24 @@ h2 {
 }
 .pickup-payment.paid {
   color: #476d3d;
+}
+.pickup-confirm-box {
+  margin: 14px 0;
+  display: grid;
+  gap: 6px;
+}
+.pickup-confirm-btn {
+  width: 100%;
+  min-height: 46px;
+  justify-content: center;
+  gap: 8px;
+  font-weight: 700;
+}
+.pickup-confirm-box small {
+  color: #7c684e;
+  font-size: 11px;
+  line-height: 1.55;
+  text-align: center;
 }
 .pickup-card-address {
   display: flex;

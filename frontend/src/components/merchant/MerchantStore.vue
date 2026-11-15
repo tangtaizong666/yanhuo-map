@@ -675,32 +675,6 @@ async function upload(
               </button>
             </div>
           </div>
-          <div v-if="!discoveryOnly" class="m-shop-photo">
-            <img
-              v-if="ownedImage(profile.payment_qr_image)"
-              :src="ownedImage(profile.payment_qr_image)"
-              alt="摊主自有收款码"
-            />
-            <div>
-              <label class="btn btn-secondary m-upload"
-                ><Camera :size="16" /> 上传我的收款码<input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  :disabled="!!busy"
-                  @change="upload($event, 'payment_qr_image')"
-                  aria-label="上传我的收款码" /></label
-              ><small
-                >上传你自己的微信或支付宝收款码。仅给真实自取、已出餐且待现场付款的顾客展示；取消处理中或资金待核实时不展示。钱直接进你的账户，平台不经手。</small
-              ><button
-                v-if="profile.payment_qr_image"
-                type="button"
-                class="m-text-link"
-                @click="profile.payment_qr_image = ''"
-              >
-                移除收款码
-              </button>
-            </div>
-          </div>
           <button class="btn btn-primary" type="submit" :disabled="!!busy">
             <Save :size="16" /> 保存店铺信息
           </button>

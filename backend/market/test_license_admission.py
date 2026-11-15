@@ -9,7 +9,7 @@ from rest_framework.test import APIClient
 
 from .admission import ADMISSION_WHITESPACE, has_admission_text, new_trade_eligibility_q, pickup_eligibility_reason
 from .models import MerchantProfile, Order, Product, Stall
-from .tests import fixtures, payload
+from .tests import fixtures, pay_order_for_test, payload
 
 
 @override_settings(DEMO_MODE=False, SERVICES_SIMULATION_ENABLED=False, PRODUCTION=False,
@@ -188,9 +188,10 @@ class LicenseAdmissionTests(TestCase):
         created = self.post_order()
         self.assertEqual(created.status_code, 201, created.data)
         order = Order.objects.get(pk=created.data['id'])
+        pay_order_for_test(order, auto_accept=False)
         self.save_licence('', None)
         self.client.force_authenticate(self.vendor)
-        for action in ('accept', 'ready', 'confirm_payment', 'complete'):
+        for action in ('accept', 'ready', 'complete'):
             result = self.client.post(f'/api/v1/merchant/orders/{order.pk}/action',
                 {'action': action, 'pickup_code': order.pickup_code}, format='json')
             self.assertEqual(result.status_code, 200, result.data)
@@ -207,13 +208,14 @@ class LicenseAdmissionTests(TestCase):
         self.product.refresh_from_db()
         self.assertEqual(self.product.stock, 4)
 
-    @override_settings(DEMO_MODE=True, PRODUCTION=False)
+    @override_settings(DEMO_MODE=True, SERVICES_SIMULATION_ENABLED=True, PRODUCTION=False)
     def test_explicit_demo_keeps_its_own_rule_but_real_stalls_cannot_borrow_it(self):
         self.save_licence('', None)
         self.assert_admission_matches_sql(False)
         self.assertEqual(self.post_order().status_code, 409)
         self.stall.is_demo = True
-        self.stall.save(update_fields=['is_demo'])
+        self.stall.simulation_payment_enabled = True
+        self.stall.save(update_fields=['is_demo', 'simulation_payment_enabled'])
         self.assert_admission_matches_sql(True)
         simulated = self.post_order()
         self.assertEqual(simulated.status_code, 201, simulated.data)

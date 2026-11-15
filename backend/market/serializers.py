@@ -18,7 +18,7 @@ def public_payment_readiness(stall, context):
     if eligible(stall):
         return {'supported': True, **{key: value for key, value in payment_readiness(stall).items() if key != 'account_key'}}
     if stall.is_demo:
-        return {'mode': 'simulation', 'supported': False, 'available': False, 'reason': '示例摊位不发起真实微信扣款，请到摊扫摊主收款码付款。', 'channels': []}
+        return {'mode': 'simulation', 'supported': False, 'available': False, 'reason': '示例摊位尚未开启模拟微信支付。', 'channels': []}
     cache = context.setdefault('_payment_readiness', {})
     if stall.merchant_id not in cache:
         available = readiness(stall.merchant)
@@ -137,7 +137,7 @@ class StallSerializer(serializers.ModelSerializer):
           'area_id', 'area_name', 'status', 'session_status', 'business_session_id', 'last_confirmed_at', 'closes_at', 'prep_minutes',
           'transaction_enabled', 'can_order', 'qualification_note', 'merchant_name', 'contact_phone',
           'rating', 'review_count', 'order_count', 'distance_m', 'is_followed', 'products', 'reviews', 'wechat_payment', 'delivery', 'services', 'capabilities',
-          'arrival_note', 'arrival_image', 'payment_qr_image', 'accepting_orders', 'order_unavailable_reason', 'location_draft_address', 'usual_hours',
+          'arrival_note', 'arrival_image', 'payment_qr_image', 'accepting_orders', 'auto_accept_orders', 'order_unavailable_reason', 'location_draft_address', 'usual_hours',
           'prep_capacity', 'prep_active_orders', 'stop_orders_at', 'receiving_seen_at', 'receiving_status', 'receiving_age_seconds']
     def to_representation(self, instance):
         result = super().to_representation(instance)
@@ -149,6 +149,12 @@ class StallSerializer(serializers.ModelSerializer):
                 result['status'] == 'closed' and session and session.closes_at and
                 session.closes_at > timezone.now()
             ) else None
+            cfg = self.context.get('config') or SiteConfiguration.current()
+            result['effective_fee_bps'] = (
+                instance.merchant.custom_fee_bps
+                if instance.merchant.custom_fee_bps is not None
+                else cfg.platform_fee_bps
+            )
             has_location = getattr(instance, 'location', None) is not None
             sellable = any(p.is_active and not p.sale_paused and p.stock > 0 for p in instance.products.all())
             payment = result.get('wechat_payment') or {}
@@ -162,7 +168,7 @@ class StallSerializer(serializers.ModelSerializer):
                 step('location', '确认实际取餐位置', has_location, 'merchant', '选择实际位置并保存，文字草稿不等于已确认位置。'),
                 step('visibility', '公开摊位', instance.is_visible, 'operator', '运营核验展示资料后公开；当前学生还不能查看或分享。'),
                 step('transaction', '线上接单资格', result['capabilities']['pickup_orders']['eligible'], 'operator', result['capabilities']['pickup_orders']['reason']),
-                step('payment', '线上支付（可选）', payment.get('available', False), 'operator', payment.get('reason', '尚未开通线上支付。'), True),
+                step('payment', '线上支付与分账收款', payment.get('available', False), 'operator', payment.get('reason', '尚未开通线上支付与分账收款。'), not instance.transaction_enabled),
                 step('delivery', '配送准入（可选）', instance.delivery_approved, 'operator', '需由运营单独核验配送条件。', True),
             ]
             result.update(is_visible=instance.is_visible, public_phone_enabled=instance.public_phone_enabled,
@@ -268,14 +274,8 @@ class OrderItemSerializer(serializers.ModelSerializer):
 
 
 def order_offline_payment_available(order):
-    """Single source of truth for whether an order may display/access the vendor's collection QR."""
-    from .financial import hold_reason
-    return bool(order.mode == 'live' and order.fulfillment_type == 'pickup'
-        and order.status == 'ready' and order.payment_status == 'unpaid'
-        and order.payment_method == 'offline' and not order.cancel_requested
-        and not hold_reason(order)
-        and not list(order.refunds.all())
-        and not any(payment.status != 'closed' for payment in order.payments.all()))
+    """Online orders are strictly prepaid; vendor personal QR collection is retired."""
+    return False
 
 
 class OrderSerializer(serializers.ModelSerializer):
@@ -301,7 +301,9 @@ class OrderSerializer(serializers.ModelSerializer):
         fields = ['id', 'mode', 'number', 'stall_id', 'stall_name', 'stall_image', 'status', 'payment_status',
             'payment_method', 'payment_review_required', 'wechat_payment', 'payment', 'payment_can_close', 'refund',
             'refunds', 'financial_hold_reason', 'allowed_actions', 'payment_query_after_seconds',
-            'total_cents', 'created_at', 'accepted_at', 'ready_at', 'completed_at', 'paid_at', 'expires_at', 'pickup_code',
+            'total_cents', 'platform_fee_bps', 'platform_fee_cents', 'merchant_net_cents',
+            'settlement_status', 'settled_at', 'completed_by',
+            'created_at', 'accepted_at', 'ready_at', 'completed_at', 'paid_at', 'expires_at', 'pickup_code',
             'estimated_ready_at', 'prep_updated_at', 'prep_delay_reason',
             'pickup_address', 'pickup_latitude', 'pickup_longitude', 'current_address', 'location_changed',
             'note', 'contact_phone', 'merchant_contact_phone', 'stall_payment_qr_image', 'stall_payment_qr_updated_at', 'offline_payment_available', 'cancel_requested', 'cancel_reason', 'review', 'items',

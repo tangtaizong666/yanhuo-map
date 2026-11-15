@@ -49,7 +49,7 @@ async function fixture(page: Page) {
       review_count: 0,
       rating: 0,
       contact_phone: "",
-      wechat_payment: { available: false, channels: [], reason: "尚未开通" },
+      wechat_payment: { available: true, mode: "live", channels: ["native"], reason: "" },
     },
     stallUnavailable: false,
     loseBeforeCommit: false,
@@ -135,8 +135,8 @@ async function fixture(page: Page) {
         stall_name: state.stall.name,
         fulfillment_type: body.fulfillment_type || "pickup",
         status: "pending",
-        payment_status: "unpaid",
-        payment_method: "offline",
+        payment_status: "paid",
+        payment_method: "wechat",
         total_cents: body.items.reduce(
           (sum: number, item: any) =>
             sum + item.quantity * item.expected_price_cents,
@@ -196,7 +196,7 @@ async function fixture(page: Page) {
   return state;
 }
 async function submit(page: Page) {
-  await page.getByRole("button", { name: "提交自取订单", exact: true }).click();
+  await page.getByRole("button", { name: "去支付 ¥16", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "上一笔提交结果待确认", exact: true }),
   ).toBeVisible();
@@ -222,7 +222,7 @@ for (const failedRefresh of [false, true]) {
     state.stall.delivery!.fee_cents = 300;
     state.stallUnavailable = failedRefresh;
     state.behavior = "success";
-    await page.getByRole("button", { name: "提交配送订单，去付款", exact: true }).click();
+    await page.getByRole("button", { name: "去支付 ¥18", exact: true }).click();
     if (failedRefresh) {
       await expect(page.locator(".location-change-notice")).toContainText("暂未读到最新地址");
       state.stallUnavailable = false;
@@ -230,7 +230,7 @@ for (const failedRefresh of [false, true]) {
     }
     await expect(page.locator(".amount-change-notice")).toContainText("配送费：¥2 → ¥3");
     await expect(page.locator(".amount-change-notice")).toContainText("最新合计 ¥19");
-    await expect(page.getByRole("button", { name: "确认新位置与新金额并提交", exact: true })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "确认新位置与新金额去支付", exact: true })).toBeEnabled();
     expect(state.committed.size).toBe(0);
     if (!failedRefresh) {
       await page.setViewportSize({ width: 360, height: 844 });
@@ -238,7 +238,7 @@ for (const failedRefresh of [false, true]) {
       await assertNoHorizontalOverflow(page);
       await page.screenshot({ path: info.outputPath("combined-location-fee-360.png"), fullPage: true });
     }
-    await page.getByRole("button", { name: "确认新位置与新金额并提交", exact: true }).click();
+    await page.getByRole("button", { name: "确认新位置与新金额去支付", exact: true }).click();
     await expect(page).toHaveURL(/\/orders\/recovered-1$/);
     expect(state.writes[0].expected_delivery_fee_cents).toBe(200);
     expect(state.writes[1]).toMatchObject({ expected_location_token: "b".repeat(64), expected_delivery_fee_cents: 300, delivery_point_id: 71 });
@@ -254,14 +254,14 @@ test("confirmed simultaneous move and product price changes preserves both ackno
   state.stall.products[0]!.price_cents = 1700;
   state.validateChangedPrices = true;
   state.behavior = "success";
-  await page.getByRole("button", { name: "提交自取订单", exact: true }).click();
+  await page.getByRole("button", { name: "去支付 ¥16", exact: true }).click();
   await expect(page.locator(".amount-change-notice")).toContainText("恢复验证烤冷面单价：¥16 → ¥17");
   state.stall.products[0]!.price_cents = 1800;
-  await page.getByRole("button", { name: "确认新位置与新金额并提交", exact: true }).click();
+  await page.getByRole("button", { name: "确认新位置与新金额去支付", exact: true }).click();
   await expect(page.locator(".amount-change-notice")).toContainText("恢复验证烤冷面单价：¥17 → ¥18");
   await expect(page.locator(".amount-change-notice")).toContainText("最新合计 ¥18");
   expect(state.committed.size).toBe(0);
-  await page.getByRole("button", { name: "确认新位置与新金额并提交", exact: true }).click();
+  await page.getByRole("button", { name: "确认新位置与新金额去支付", exact: true }).click();
   await expect(page).toHaveURL(/\/orders\/recovered-1$/);
   expect(state.writes.map(write => write.items[0].expected_price_cents)).toEqual([1600, 1700, 1800]);
   expect(state.unexpected).toEqual([]);
@@ -270,7 +270,7 @@ test("confirmed simultaneous move and product price changes preserves both ackno
 test("confirmed lost delivery result preserves original payload despite simultaneous location fee and product price changes", async ({ page }) => {
   const state = await fixture(page);
   await chooseDelivery(page, state);
-  await page.getByRole("button", { name: "提交配送订单，去付款", exact: true }).click();
+  await page.getByRole("button", { name: "去支付 ¥18", exact: true }).click();
   await expect(page.getByRole("heading", { name: "上一笔提交结果待确认", exact: true })).toBeVisible();
   const original = structuredClone(state.writes[0]);
   state.stall.address = "西门蓝色雨棚旁";
@@ -295,7 +295,7 @@ test("confirmed location change preserves the cart and requires the newly read a
   state.stall.address = "西门蓝色雨棚旁";
   state.stall.location_token = "b".repeat(64);
   state.behavior = "success";
-  await page.getByRole("button", { name: "提交自取订单", exact: true }).click();
+  await page.getByRole("button", { name: "去支付 ¥16", exact: true }).click();
   await expect(page.locator(".location-change-notice")).toContainText("原位置：南门");
   await expect(page.locator(".location-change-notice")).toContainText("最新位置：西门蓝色雨棚旁");
   expect(state.committed.size).toBe(0);
@@ -305,10 +305,10 @@ test("confirmed location change preserves the cart and requires the newly read a
     await page.setViewportSize({ width, height: 844 });
     await page.locator(".location-change-notice").scrollIntoViewIfNeeded();
     await assertNoHorizontalOverflow(page);
-    await expect(page.getByRole("button", { name: "确认新位置并提交", exact: true })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "确认新位置去支付", exact: true })).toBeEnabled();
     await page.screenshot({ path: info.outputPath(`checkout-location-${width}.png`), fullPage: true });
   }
-  await page.getByRole("button", { name: "确认新位置并提交", exact: true }).click();
+  await page.getByRole("button", { name: "确认新位置去支付", exact: true }).click();
   await expect(page).toHaveURL(/\/orders\/recovered-1$/);
   expect(state.writes[1].expected_location_token).toBe("b".repeat(64));
   expect(state.writes[1].idempotency_key).not.toBe(state.writes[0].idempotency_key);
@@ -322,13 +322,13 @@ test("confirmed location change preserves a blocked submit until the current add
   state.stall.address = "西门蓝色雨棚旁";
   state.stall.location_token = "b".repeat(64);
   state.stallUnavailable = true;
-  await page.getByRole("button", { name: "提交自取订单", exact: true }).click();
+  await page.getByRole("button", { name: "去支付 ¥16", exact: true }).click();
   await expect(page.locator(".location-change-notice")).toContainText("暂未读到最新地址");
-  await expect(page.getByRole("button", { name: "确认新位置并提交", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "确认新位置去支付", exact: true })).toBeDisabled();
   state.stallUnavailable = false;
   await page.getByRole("button", { name: "重新读取摊位位置", exact: true }).click();
   await expect(page.locator(".location-change-notice")).toContainText("最新位置：西门蓝色雨棚旁");
-  await expect(page.getByRole("button", { name: "确认新位置并提交", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "确认新位置去支付", exact: true })).toBeEnabled();
   expect(state.writes).toHaveLength(1);
   expect(state.unexpected).toEqual([]);
 });
@@ -364,7 +364,7 @@ test("confirmed uncommitted recovery preserves the original address comparison a
   await expect(page.locator(".location-change-notice")).toContainText("最新位置：西门蓝色雨棚旁");
   expect(state.writes[1]).toEqual(original);
   expect(state.committed.size).toBe(0);
-  await page.getByRole("button", { name: "确认新位置并提交", exact: true }).click();
+  await page.getByRole("button", { name: "确认新位置去支付", exact: true }).click();
   await expect(page).toHaveURL(/\/orders\/recovered-1$/);
   expect(state.writes[2].expected_location_token).toBe("b".repeat(64));
   expect(state.writes[2].idempotency_key).not.toBe(original.idempotency_key);
@@ -384,11 +384,11 @@ test("confirmed delivery location change preserves the selected handoff and cont
   state.stall.address = "西门蓝色雨棚旁";
   state.stall.location_token = "b".repeat(64);
   state.behavior = "success";
-  await page.getByRole("button", { name: "提交配送订单，去付款", exact: true }).click();
+  await page.getByRole("button", { name: "去支付 ¥18", exact: true }).click();
   await expect(page.locator(".location-change-notice")).toContainText("配送仍送到所选校园交接点");
   await expect(page.getByLabel("校园交接点")).toHaveValue("71");
   await expect(page.locator(".pickup-address")).toContainText("图书馆南侧长椅");
-  await page.getByRole("button", { name: "确认新位置并提交", exact: true }).click();
+  await page.getByRole("button", { name: "确认新位置去支付", exact: true }).click();
   await expect(page).toHaveURL(/\/orders\/recovered-1$/);
   expect(state.writes[1]).toMatchObject({ expected_location_token: "b".repeat(64), fulfillment_type: "delivery",
     delivery_point_id: 71, expected_delivery_fee_cents: 200, recipient_name: "测试同学", contact_phone: "13800000000" });
@@ -399,7 +399,7 @@ for (const code of ['stall_reservation_limit', 'active_reservation_limit', 'orde
   test(`confirmed ${code} preserves the editable cart and draft`, async ({ page }) => {
     const state = await fixture(page);
     state.limitCode = code;
-    await page.getByRole('button', { name: '提交自取订单', exact: true }).click();
+    await page.getByRole('button', { name: '去支付 ¥16', exact: true }).click();
     await expect(page.getByRole('alert')).toContainText('已达到下单额度');
     await expect(page.getByRole('heading', { name: '上一笔提交结果待确认', exact: true })).toHaveCount(0);
     await expect(page.getByPlaceholder(note)).toBeEnabled();
@@ -499,7 +499,7 @@ test('confirmed checkout removes its submitted bag and all stale checkout action
   state.behavior = 'success';
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: info.outputPath('checkout-ready-390.png'), fullPage: true });
-  await page.getByRole('button', { name: '提交自取订单', exact: true }).click();
+  await page.getByRole('button', { name: '去支付 ¥16', exact: true }).click();
   await expect(page).toHaveURL(/\/orders\/recovered-1$/);
   await expect(page.locator('.checkout-action-bar')).toHaveCount(0);
   await expect(page.locator('.header-cart')).toHaveCount(0);
@@ -516,7 +516,7 @@ test('confirmed checkout removes its submitted bag and all stale checkout action
 test('a successful response removes only submitted portions while a second tab adds food', async ({ page }) => {
   const state = await fixture(page);
   state.behavior = 'hold';
-  await page.getByRole('button', { name: '提交自取订单', exact: true }).click();
+  await page.getByRole('button', { name: '去支付 ¥16', exact: true }).click();
   await expect.poll(() => state.writes.length).toBe(1);
   const other = await page.context().newPage();
   await other.goto('/stalls/989');
@@ -576,7 +576,7 @@ for (const failure of ["400", "price"] as const) {
     const state = await fixture(page);
     state.behavior = failure;
     await page
-      .getByRole("button", { name: "提交自取订单", exact: true })
+      .getByRole("button", { name: "去支付 ¥16", exact: true })
       .click();
     await expect(page.getByPlaceholder(note)).toBeEnabled();
     await expect(page.locator(".submission-recovery")).toHaveCount(0);
@@ -587,7 +587,7 @@ for (const failure of ["400", "price"] as const) {
     state.behavior = "success";
     await page
       .getByRole("button", {
-        name: failure === "price" ? "确认新价格并提交" : "提交自取订单",
+        name: failure === "price" ? "确认新价格去支付" : "去支付 ¥16",
         exact: true,
       })
       .click();
@@ -636,7 +636,7 @@ test("leaving while the server response is pending retains the original request 
     ),
   );
   state.behavior = "hold";
-  await page.getByRole("button", { name: "提交自取订单", exact: true }).click();
+  await page.getByRole("button", { name: "去支付 ¥16", exact: true }).click();
   await expect.poll(() => state.writes.length).toBe(1);
   const saved = await page.evaluate(
     (key) => sessionStorage.getItem(key),
@@ -733,7 +733,7 @@ test("an old account response cannot clear the new account's pending checkout", 
     ),
   );
   state.behavior = "hold";
-  await page.getByRole("button", { name: "提交自取订单", exact: true }).click();
+  await page.getByRole("button", { name: "去支付 ¥16", exact: true }).click();
   await expect.poll(() => state.writes.length).toBe(1);
   const releaseFirst = state.release;
   const firstRecord = await page.evaluate(

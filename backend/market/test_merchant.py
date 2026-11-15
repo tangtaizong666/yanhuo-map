@@ -249,7 +249,7 @@ class MerchantWorkspaceTests(TestCase):
         self.assertEqual(order.stall_name, '测试烤冷面')
         self.assertEqual(order.items.get().unit_price_cents, 800)
         self.assertEqual(order.total_cents, 800)
-        self.assertEqual(order.status, 'pending')
+        self.assertEqual(order.status, 'pending_payment')
 
     def test_merchant_reply_persists_and_is_public_without_customer_identifier(self):
         order = self.order()
@@ -306,7 +306,7 @@ class MerchantWorkspaceTests(TestCase):
         self.assertEqual(data['average_order_cents'], 800)
         self.assertEqual(data['followers'], 1)
         self.assertEqual(data['series'], [{'date': '2026-09-26', 'orders_created': 1, 'orders_completed': 1,
-            'revenue_cents': 800, 'offline_revenue_cents': 800, 'online_revenue_cents': 0,
+            'revenue_cents': 800, 'offline_revenue_cents': 0, 'online_revenue_cents': 800,
             'paid_orders': 1, 'refund_cents': 0, 'net_received_cents': 800}])
         self.assertEqual(str(data['recent_payments'][0]['id']), str(first.id))
         self.assertEqual(data['top_products'][0]['quantity'], 1)

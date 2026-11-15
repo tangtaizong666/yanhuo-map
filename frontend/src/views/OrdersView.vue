@@ -284,9 +284,10 @@ function caption(order: any) {
     )[order.status];
   return (
     {
-      pending: "商家正在确认你的订单",
+      pending_payment: "请先完成线上付款，付款后立即进入备餐",
+      pending: "已付款，等待商家接单",
       preparing: "美味正在制作中，请耐心等待",
-      ready: "餐点已备好，记得及时来取",
+      ready: "餐点已备好，凭 4 位码到摊即取",
       completed: "谢谢你，让小摊的烟火继续",
       cancelled: "订单已取消",
       rejected: "商家暂时无法接单",
@@ -309,22 +310,22 @@ function paymentSummary(order: any) {
   if (order.payment_status === "refunded") return "微信支付 · 已退款";
   if (order.payment_status === "refunding") return "微信支付 · 退款处理中";
   if (order.payment_status === "paid")
-    return order.payment_method === "wechat"
-      ? "微信支付 · 已付款"
-      : "到摊付款 · 已收款";
+    return order.mode === "simulation"
+      ? "模拟微信支付 · 已付款"
+      : order.payment_method === "wechat"
+        ? "微信支付 · 已付款"
+        : "历史线下款项 · 已收款";
   if (["cancelled", "rejected", "completed"].includes(order.status)) return "";
   if (["creating", "pending"].includes(order.payment?.status))
     return "微信支付 · 请核对付款进度";
   if (order.cancel_requested) return "付款已暂停 · 取消申请处理中";
-  if (order.fulfillment_type === "delivery")
+  if (order.status === "pending_payment")
     return order.wechat_payment?.available
-      ? "微信支付 · 配送需先付款"
-      : "微信支付 · 暂时无法付款";
-  if (order.wechat_payment?.available)
-    return order.status === "ready"
-      ? "微信支付 · 待付款"
-      : "微信支付 · 出餐后可支付";
-  return "到摊扫码付给摊主";
+      ? order.mode === "simulation"
+        ? "模拟微信支付 · 待付款"
+        : "微信支付 · 待付款"
+      : "线上支付暂不可用";
+  return "";
 }
 function orderAction(order: any) {
   if (refundNeedsFollowUp(order)) return "查看退款进度";
@@ -338,12 +339,11 @@ function orderAction(order: any) {
     return "查看付款进度";
   if (needsFinancialFollowUp(order)) return "查看款项处理进度";
   if (
-    (order.status === "pending_payment" ||
-      (order.fulfillment_type !== "delivery" && order.status === "ready")) &&
+    order.status === "pending_payment" &&
     order.payment_status === "unpaid" &&
     !order.cancel_requested
   )
-    return order.wechat_payment?.available ? "去付款" : "查看付款方式";
+    return order.wechat_payment?.available ? "去付款" : "查看订单";
   if (
     order.fulfillment_type === "delivery" &&
     !["completed", "cancelled", "rejected"].includes(order.status)

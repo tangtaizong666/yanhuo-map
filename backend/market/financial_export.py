@@ -15,7 +15,8 @@ from .financial import hold_reason
 
 
 HEADERS = ['record_type', 'merchant_id', 'order_number', 'order_id', 'account_key', 'out_trade_no',
-    'transaction_id', 'out_refund_no', 'refund_id', 'amount_cents', 'currency', 'provider_state',
+    'transaction_id', 'out_refund_no', 'refund_id', 'amount_cents', 'platform_fee_bps',
+    'platform_fee_cents', 'merchant_net_cents', 'settlement_status', 'currency', 'provider_state',
     'order_payment_status', 'review_required', 'resolved_at', 'occurred_at', 'reason']
 
 
@@ -55,18 +56,23 @@ def reconciliation_export(actor, merchant_id, starts_on, ends_on):
         yield '\ufeff' + _csv_row(HEADERS)
         for p in payments.iterator(chunk_size=500):
             yield _csv_row(['wechat_payment', merchant_id, p.order.number, p.order_id, p.account_key, p.out_trade_no,
-                p.transaction_id, '', '', p.amount_cents, p.currency, p.status, p.order.payment_status,
+                p.transaction_id, '', '', p.amount_cents, p.order.platform_fee_bps,
+                p.order.platform_fee_cents, p.order.merchant_net_cents, p.order.settlement_status,
+                p.currency, p.status, p.order.payment_status,
                 p.order.payment_review_required, '', (p.paid_at or p.created_at).isoformat(), ''])
         for r in refunds.iterator(chunk_size=500):
             yield _csv_row(['wechat_refund', merchant_id, r.order.number, r.order_id, r.payment.account_key,
                 r.payment.out_trade_no, r.payment.transaction_id, r.out_refund_no, r.refund_id, r.amount_cents,
+                r.order.platform_fee_bps, r.order.platform_fee_cents, r.order.merchant_net_cents, r.order.settlement_status,
                 r.payment.currency, r.status, r.order.payment_status, r.order.payment_review_required,
                 r.resolved_at.isoformat() if r.resolved_at else '', (r.completed_at or r.created_at).isoformat(), ''])
         for o in offline.iterator(chunk_size=500):
             yield _csv_row(['offline_confirmation', merchant_id, o.number, o.pk, '', '', '', '', '', o.total_cents,
+                o.platform_fee_bps, o.platform_fee_cents, o.merchant_net_cents, o.settlement_status,
                 'CNY', 'merchant_confirmed', o.payment_status, o.payment_review_required, '', o.paid_at.isoformat(), ''])
         for o in differences.iterator(chunk_size=500):
             yield _csv_row(['unresolved_difference', merchant_id, o.number, o.pk, '', '', '', '', '', o.total_cents,
+                o.platform_fee_bps, o.platform_fee_cents, o.merchant_net_cents, o.settlement_status,
                 'CNY', '', o.payment_status, o.payment_review_required, '', o.created_at.isoformat(), hold_reason(o)])
     response = StreamingHttpResponse(rows(), content_type='text/csv; charset=utf-8')
     response['Content-Disposition'] = f'attachment; filename="reconciliation-{merchant_id}-{starts_on}-{ends_on}.csv"'

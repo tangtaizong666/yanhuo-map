@@ -7,7 +7,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from .models import Order, PaymentAttempt, PaymentRefund, Stall
-from .tests import fixtures, payload
+from .tests import fixtures, pay_order_for_test, payload
 from .test_payments import PaymentSetup, payment_result
 from .wechatpay import GatewayError
 
@@ -111,9 +111,10 @@ class AdmissionApiTests(TestCase):
 
     def test_existing_order_fulfilment_is_not_blocked_by_new_order_qualification(self):
         order = self.submit().data
+        pay_order_for_test(order, auto_accept=False)
         self.revoke()
         self.client.force_authenticate(self.vendor)
-        for action in ('accept', 'ready', 'confirm_payment', 'complete'):
+        for action in ('accept', 'ready', 'complete'):
             if action == 'complete':
                 self.client.force_authenticate(self.student)
                 order = self.client.get(f"/api/v1/orders/{order['id']}").data
@@ -158,13 +159,18 @@ class AdmissionApiTests(TestCase):
     def test_explicit_demo_keeps_simulated_pickup_without_real_qualification(self):
         self.revoke('mobile')
         self.stall.is_demo = True
+        self.stall.simulation_payment_enabled = True
         self.stall.save()
-        result = self.submit()
-        self.assertEqual(result.status_code, 201, result.data)
-        self.assertEqual(result.data['mode'], 'simulation')
+        self.assertEqual(self.submit().status_code, 409)
         detail = self.client.get(f'/api/v1/stalls/{self.stall.pk}').data
         self.assertEqual(detail['capabilities']['mode'], 'simulation')
         self.assertFalse(detail['wechat_payment']['available'])
+        with override_settings(SERVICES_SIMULATION_ENABLED=True):
+            result = self.submit()
+            self.assertEqual(result.status_code, 201, result.data)
+            self.assertEqual(result.data['mode'], 'simulation')
+            detail = self.client.get(f'/api/v1/stalls/{self.stall.pk}').data
+            self.assertTrue(detail['wechat_payment']['available'])
 
     @override_settings(DEMO_MODE=True, SERVICES_SIMULATION_ENABLED=True, PRODUCTION=False)
     def test_simulation_environment_does_not_bypass_real_stall_qualification(self):

@@ -50,6 +50,13 @@ test("student and merchant complete a real pickup order in separate browser sess
       },
     );
     expect(refreshed.ok(), await refreshed.text()).toBeTruthy();
+    const autoAccept = await mutate(
+      merchantContext,
+      `/merchant/stalls/${stall.id}/profile`,
+      { auto_accept_orders: true },
+      "PATCH",
+    );
+    expect(autoAccept.ok(), await autoAccept.text()).toBeTruthy();
     const product = stall.products.find(
       (item: any) => item.is_active !== false && item.stock > 0,
     );
@@ -58,11 +65,25 @@ test("student and merchant complete a real pickup order in separate browser sess
     const productEditor = merchant.locator("article.merchant-product").filter({
       has: merchant.getByRole("heading", { name: product.name, exact: true }),
     });
-    await expect(productEditor.locator('.stock-readout b')).toHaveText(String(product.stock));
-    await expect(productEditor.getByRole('spinbutton', { name: `${product.name}库存`, exact: true })).toHaveCount(0);
-    await productEditor.getByRole('button', { name: `编辑商品：${product.name}`, exact: true }).click();
-    const productDialog = merchant.getByRole('dialog', { name: '编辑商品', exact: true });
-    await expect(productDialog.getByRole('spinbutton', { name: /单价（元）/ })).toHaveValue((product.price_cents / 100).toFixed(2));
+    await expect(productEditor.locator(".stock-readout b")).toHaveText(
+      String(product.stock),
+    );
+    await expect(
+      productEditor.getByRole("spinbutton", {
+        name: `${product.name}库存`,
+        exact: true,
+      }),
+    ).toHaveCount(0);
+    await productEditor
+      .getByRole("button", { name: `编辑商品：${product.name}`, exact: true })
+      .click();
+    const productDialog = merchant.getByRole("dialog", {
+      name: "编辑商品",
+      exact: true,
+    });
+    await expect(
+      productDialog.getByRole("spinbutton", { name: /单价（元）/ }),
+    ).toHaveValue((product.price_cents / 100).toFixed(2));
 
     // Start as a guest: adding a draft is public; checkout must require login,
     // and the chosen food must survive the authentication round trip.
@@ -74,12 +95,14 @@ test("student and merchant complete a real pickup order in separate browser sess
     await expect(page).toHaveURL(/\/login\?returnTo=/);
     await login(page, student.username, student.password);
     await expect(page).toHaveURL(new RegExp(`/checkout/${stall.id}$`));
-    await page.goto('/cart');
-    await page.getByRole('button', { name: '加入当前账号餐袋', exact: true }).click();
+    await page.goto("/cart");
+    await page
+      .getByRole("button", { name: "加入当前账号餐袋", exact: true })
+      .click();
     await page.goto(`/checkout/${stall.id}`);
-    await expect(
-      page.locator('.pay-at-stall'),
-    ).toBeVisible();
+    await expect(page.locator(".checkout-payment-methods")).toContainText(
+      "在线预付",
+    );
     await page.locator(".checkout-contact-card > summary").click();
     await page
       .getByPlaceholder("例如：餐具按需提供（每份口味请在上方分别填写）")
@@ -97,16 +120,14 @@ test("student and merchant complete a real pickup order in separate browser sess
         response.request().method() === "POST" &&
         /\/api\/v1\/orders$/.test(response.url()),
     );
-    await page
-      .getByRole("button", { name: "提交自取订单", exact: true })
-      .click();
+    await page.getByRole("button", { name: /^去模拟支付 ¥/ }).click();
     const created = await createdPromise;
     expect(created.status(), await created.text()).toBe(201);
     const order = await created.json();
-    await expect(page).toHaveURL(new RegExp(`/orders/${order.id}$`));
-    await expect(
-      page.getByRole("heading", { name: "订单已提交，等待商家接单" }),
-    ).toBeVisible();
+    await expect(page).toHaveURL(
+      new RegExp(`/orders/${order.id}(\\?autopay=1)?$`),
+    );
+    await expect(page.locator(".simulation-cashier")).toBeVisible();
     expect(order.total_cents).toBe(product.price_cents);
 
     // The merchant loaded this editor before the student's stock reservation.
@@ -132,8 +153,9 @@ test("student and merchant complete a real pickup order in separate browser sess
         await merchantContext.request.get(`${baseURL}/api/v1/merchant/stalls`)
       ).json();
       expect(
-        afterPriceChange.find((item: any) => item.id === stall.id).products.find((item: any) => item.id === product.id)
-          .stock,
+        afterPriceChange
+          .find((item: any) => item.id === stall.id)
+          .products.find((item: any) => item.id === product.id).stock,
       ).toBe(product.stock - 1);
       const unchangedOrder = await (
         await context.request.get(`${baseURL}/api/v1/orders/${order.id}`)
@@ -149,14 +171,19 @@ test("student and merchant complete a real pickup order in separate browser sess
       expect(restored.ok(), await restored.text()).toBeTruthy();
     }
 
+    await page.getByRole("button", { name: "模拟支付成功", exact: true }).click();
+    await expect(
+      page.getByRole("heading", { name: "小摊正忙着，为你做一餐" }),
+    ).toBeVisible();
+
     await merchant.goto("/merchant/orders");
     await merchant.getByLabel("选择管理的摊位").selectOption(String(stall.id));
     const merchantOrder = merchant
       .locator("article.merchant-order")
       .filter({ hasText: order.number });
     await expect(merchantOrder).toBeVisible();
-    await expect(merchantOrder.locator(".m-orders-countdown")).toHaveText(
-      /剩余 \d+:\d{2} 接单/,
+    await expect(merchantOrder.locator(".merchant-order-status")).toHaveText(
+      "制作中",
     );
     const detailTrigger = merchantOrder.getByRole("button", {
       name: `查看订单 ${order.number} 详情`,
@@ -168,7 +195,7 @@ test("student and merchant complete a real pickup order in separate browser sess
       exact: true,
     });
     await expect(details).toBeVisible();
-    await details.locator('.m-order-records > summary').click();
+    await details.locator(".m-order-records > summary").click();
     await expect(
       details.getByText(order.pickup_address, { exact: true }),
     ).toBeVisible();
@@ -200,20 +227,12 @@ test("student and merchant complete a real pickup order in separate browser sess
       merchantStored.find((item: any) => item.id === order.id).pickup_code,
     ).toBe("");
     await merchantOrder
-      .getByRole("button", { name: "接单开始做", exact: true })
-      .click();
-    await merchant.getByRole('group', { name: '订单阶段', exact: true }).getByRole('button', { name: /制作中/ }).click();
-    await expect(merchantOrder.locator(".merchant-order-status")).toHaveText(
-      "制作中",
-    );
-    await page.getByRole("button", { name: "刷新订单状态" }).click();
-    await expect(
-      page.getByRole("heading", { name: "小摊正忙着，为你做一餐" }),
-    ).toBeVisible();
-    await merchantOrder
       .getByRole("button", { name: "做好了", exact: true })
       .click();
-    await merchant.getByRole('group', { name: '订单阶段', exact: true }).getByRole('button', { name: /待取餐/ }).click();
+    await merchant
+      .getByRole("group", { name: "订单阶段", exact: true })
+      .getByRole("button", { name: /待取餐/ })
+      .click();
     await expect(merchantOrder.locator(".merchant-order-status")).toHaveText(
       "待取餐",
     );
@@ -229,28 +248,21 @@ test("student and merchant complete a real pickup order in separate browser sess
       });
     }
 
-    // Payment and collection remain distinct, explicit merchant actions.
+    // Online pre-payment is already verified; no manual offline payment button exists.
     await expect(merchantOrder.getByPlaceholder("输入取餐码")).toHaveCount(0);
-    await merchantOrder.getByRole("button", { name: /^收款 ¥/ }).click();
-    const receipt = merchant.getByRole("dialog", {
-      name: "确认这笔线下收款",
-      exact: true,
-    });
-    await expect(receipt).toBeVisible();
-    const beforeReceipt = await (
-      await context.request.get(`${baseURL}/api/v1/orders/${order.id}`)
-    ).json();
-    expect(beforeReceipt.payment_status).toBe("unpaid");
-    expect(beforeReceipt.status).toBe("ready");
-    await receipt
-      .getByRole("button", { name: "确认收款", exact: true })
+    await expect(
+      merchantOrder.getByRole("button", { name: /^收款 ¥/ }),
+    ).toHaveCount(0);
+    await expect(
+      merchantOrder.getByRole("button", { name: "已交餐 · 完成", exact: true }),
+    ).toBeVisible();
+    await expect(merchantOrder.locator(".paid-tag")).toContainText("模拟 · 微信已预付");
+    await merchantOrder
+      .getByRole("button", {
+        name: `查看订单 ${order.number} 详情`,
+        exact: true,
+      })
       .click();
-    await expect(receipt).not.toBeVisible();
-    await expect(merchantOrder.locator(".paid-tag")).toHaveText(/^(模拟 · )?到摊已收款$/);
-    await expect(merchantOrder.locator(".merchant-order-status")).toHaveText(
-      "待取餐",
-    );
-    await merchantOrder.getByRole('button', { name: '核对取餐码', exact: true }).click();
     await details.getByPlaceholder("输入取餐码").fill(pickupCode);
     for (const width of [360, 390]) {
       await merchant.setViewportSize({ width, height: 844 });
@@ -266,7 +278,7 @@ test("student and merchant complete a real pickup order in separate browser sess
     await expect(
       page.getByRole("heading", { name: "这一餐，刚刚好" }),
     ).toBeVisible();
-    await expect(page.locator('.receipt-total')).toContainText('已收款');
+    await expect(page.locator(".receipt-total")).toContainText("已收款");
     await page.getByRole("button", { name: "4 星", exact: true }).click();
     const review = `测试评价 ${student.username}：餐点热乎，取餐方便。`;
     await page
@@ -284,6 +296,8 @@ test("student and merchant complete a real pickup order in separate browser sess
     ).json();
     expect(stored.status).toBe("completed");
     expect(stored.payment_status).toBe("paid");
+    expect(stored.settlement_status).toBe("settled");
+    expect(stored.completed_by).toBe("merchant_code");
     expect(stored.review.rating).toBe(4);
     expect(stored.items[0].unit_price_cents).toBe(product.price_cents);
     expect(stored.pickup_address).toBe(stall.address);
@@ -323,7 +337,9 @@ test("a pending order can be cancelled from the customer dialog", async ({
       "The demo vendor needs an eligible stall with stock",
     ).toBeTruthy();
     fixtureStallId = eligible.id;
-    fixtureProduct = eligible.products.find((product: any) => product.is_active !== false && product.stock > 0);
+    fixtureProduct = eligible.products.find(
+      (product: any) => product.is_active !== false && product.stock > 0,
+    );
     const opened = await mutate(
       merchantContext,
       `/merchant/stalls/${eligible.id}/status`,
@@ -344,9 +360,12 @@ test("a pending order can be cancelled from the customer dialog", async ({
     await context.request.get(`${baseURL}/api/v1/stalls/${fixtureStallId}`)
   ).json();
   expect(stall.can_order).toBe(true);
-  const product = stall.products.find((item: any) => item.id === fixtureProduct.id && item.availability === 'available');
+  const product = stall.products.find(
+    (item: any) =>
+      item.id === fixtureProduct.id && item.availability === "available",
+  );
   expect(product).toBeTruthy();
-  expect(product).not.toHaveProperty('stock');
+  expect(product).not.toHaveProperty("stock");
   const created = await mutate(context, "/orders", {
     stall_id: stall.id,
     idempotency_key: `cancel-${student.username}`,
@@ -375,10 +394,19 @@ test("a pending order can be cancelled from the customer dialog", async ({
   ).toHaveCount(0);
   const verification = await browser.newContext({ baseURL });
   try {
-    const signedIn = await mutate(verification, '/auth/login', { username: 'vendor', password: 'demo12345' });
+    const signedIn = await mutate(verification, "/auth/login", {
+      username: "vendor",
+      password: "demo12345",
+    });
     expect(signedIn.ok(), await signedIn.text()).toBeTruthy();
-    const refreshed = await (await verification.request.get(`${baseURL}/api/v1/merchant/stalls`)).json();
-    expect(refreshed.find((item: any) => item.id === stall.id).products.find((item: any) => item.id === product.id).stock).toBe(fixtureProduct.stock);
+    const refreshed = await (
+      await verification.request.get(`${baseURL}/api/v1/merchant/stalls`)
+    ).json();
+    expect(
+      refreshed
+        .find((item: any) => item.id === stall.id)
+        .products.find((item: any) => item.id === product.id).stock,
+    ).toBe(fixtureProduct.stock);
   } finally {
     await verification.close();
   }

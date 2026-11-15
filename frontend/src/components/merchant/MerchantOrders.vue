@@ -50,9 +50,9 @@ import {
   paymentNeedsFollowUp,
 } from "../../lib/orderFollowUp";
 import MerchantPaymentInfo, {
-  canConfirmOfflinePayment,
   merchantPaymentAmountLabel,
   merchantPaymentLabel,
+  settlementStatusLabel,
 } from "./MerchantPaymentInfo.vue";
 
 const props = withDefaults(
@@ -81,8 +81,8 @@ const orderMutations = [
   "update_prep",
   "reject",
   "ready",
-  "confirm_payment",
   "complete",
+  "complete_quick",
   "approve_cancel",
   "deny_cancel",
   "dispatch",
@@ -138,10 +138,15 @@ function preparationText(order: any) {
     order.status === "preparing";
   return `${past ? "已超过预计时间，请更新实际安排；原预计" : "预计出餐"} ${formatTime(order.estimated_ready_at)}`;
 }
+function defaultActiveStage() {
+  return props.stall?.auto_accept_orders !== false ? "preparing" : "pending";
+}
 const filter = ref(
-  ["active", "cancellation"].includes(props.initialFilter)
-    ? "pending"
-    : props.initialFilter,
+  props.initialFilter === "active"
+    ? defaultActiveStage()
+    : props.initialFilter === "cancellation"
+      ? "pending"
+      : props.initialFilter,
 );
 const history = ref<Order[]>([]);
 const historyNext = ref<string | null>(null);
@@ -411,10 +416,11 @@ const cancelCount = computed(
     ).length,
 );
 function matchesFilter(order: any, value: string) {
+  if (order.status === "pending_payment" && order.payment_status === "unpaid")
+    return false;
   if (value === "all") return true;
   if (value === "recovery") return !!pendingPrep[order.id];
-  if (value === "pending")
-    return ["pending", "pending_payment"].includes(order.status);
+  if (value === "pending") return order.status === "pending";
   if (value === "ready")
     return ["ready", "delivering", "arrived"].includes(order.status);
   if (value === "followup") return needsMerchantFollowUp(order);
@@ -519,9 +525,7 @@ function actions(order: any) {
             : "继续制作",
         primary: false,
       },
-      !isDelivery(order) && canAct(order, "refund")
-        ? { value: "refund", label: "全额退款并取消", primary: false }
-        : { value: "approve_cancel", label: "同意取消", primary: true },
+      { value: "approve_cancel", label: "同意取消并全额退款", primary: true },
     ];
   if (order.status === "pending")
     return [
@@ -535,6 +539,9 @@ function actions(order: any) {
         label: "做好了",
         primary: true,
       },
+      ...(canAct(order, "refund")
+        ? [{ value: "refund", label: "全额原路退款", primary: false }]
+        : []),
     ];
   if (isDelivery(order) && order.status === "ready")
     return [
@@ -558,13 +565,16 @@ function actions(order: any) {
         ? [{ value: "refund", label: "全额原路退款", primary: false }]
         : []),
     ];
-  if (order.status === "ready" && canConfirmOfflinePayment(order))
+  if (!isDelivery(order) && order.status === "ready" && canAct(order, "complete_quick"))
     return [
       {
-        value: "confirm_payment",
-        label: `收款 ¥${money(order.total_cents)}`,
+        value: "complete_quick",
+        label: "已交餐 · 完成",
         primary: true,
       },
+      ...(canAct(order, "refund")
+        ? [{ value: "refund", label: "全额原路退款", primary: false }]
+        : []),
     ];
   if (canAct(order, "refund"))
     return [{ value: "refund", label: "全额原路退款", primary: false }];
@@ -665,6 +675,12 @@ function cardAction(order: any) {
       label: order.delivery_issue ? "处理配送问题" : "查看款项问题",
       details: true,
     };
+  if (!isDelivery(order) && canAct(order, "complete_quick"))
+    return {
+      value: "complete_quick",
+      label: "已交餐 · 完成",
+      details: false,
+    };
   if (canAct(order, "complete"))
     return {
       value: "details",
@@ -717,15 +733,13 @@ function canAct(order: any, value: string) {
       order.cancel_requested &&
       cancellableDeliveryStatuses.includes(order.status) &&
       !order.payment_review_required &&
-      (value === "deny_cancel" ||
-        canConfirmOfflinePayment(order) ||
-        (isDelivery(order) && verifiedOnlinePayment(order)))
+      (value === "deny_cancel" || verifiedOnlinePayment(order))
     );
   if (value === "ready")
     return (
       order.status === "preparing" &&
       !order.cancel_requested &&
-      (!isDelivery(order) || verifiedOnlinePayment(order))
+      verifiedOnlinePayment(order)
     );
   if (
     [
@@ -749,30 +763,17 @@ function canAct(order: any, value: string) {
           : cancellableDeliveryStatuses.includes(order.status) &&
             (value !== "resolve_delivery_issue" || !!order.delivery_issue))
     );
-  if (value === "confirm_payment")
-    return (
-      order.status === "ready" &&
-      canConfirmOfflinePayment(order) &&
-      !order.cancel_requested
-    );
   if (value === "refund")
     return (
-      (isDelivery(order)
-        ? [
-            "pending",
-            "preparing",
-            "ready",
-            "delivering",
-            "arrived",
-            "completed",
-          ]
-        : ["ready", "completed"]
-      ).includes(order.status) &&
-      order.payment_method === "wechat" &&
-      order.payment_status === "paid" &&
-      order.payment?.status === "paid" &&
-      !order.payment_review_required &&
-      order.payment?.status !== "review" &&
+      [
+        "pending",
+        "preparing",
+        "ready",
+        "delivering",
+        "arrived",
+        "completed",
+      ].includes(order.status) &&
+      verifiedOnlinePayment(order) &&
       !order.refund
     );
   if (value === "refund_status")
@@ -782,13 +783,17 @@ function canAct(order: any, value: string) {
       !order.payment_review_required &&
       order.payment?.status !== "review"
     );
+  if (value === "complete_quick")
+    return (
+      !isDelivery(order) &&
+      order.status === "ready" &&
+      verifiedOnlinePayment(order) &&
+      !order.cancel_requested
+    );
   if (value === "complete")
     return (
       order.status === (isDelivery(order) ? "arrived" : "ready") &&
-      order.payment_status === "paid" &&
-      (order.payment_method !== "wechat" || order.payment?.status === "paid") &&
-      !order.payment_review_required &&
-      order.payment?.status !== "review" &&
+      verifiedOnlinePayment(order) &&
       (!isDelivery(order) || !order.delivery_issue) &&
       !order.cancel_requested
     );
@@ -803,8 +808,8 @@ function actionIcon(value: string) {
         ? MapPin
         : value === "ready"
           ? PackageCheck
-          : value === "confirm_payment"
-            ? Wallet
+          : value === "complete_quick"
+            ? CheckCircle2
             : value === "accept"
               ? Check
               : null;
@@ -819,29 +824,20 @@ const confirmationCopy = computed(() => {
       body: "从这次确认起，还需要多久做好？填写实际原因，同学会看到新的预估和说明。只更新预估，不会自动出餐或完成订单。",
       submit: "更新并告知顾客",
     },
-    confirm_payment: {
-      title: "确认这笔线下收款",
-      body: `请核对已收到顾客支付的 ¥${money(confirmationOrder.value?.total_cents)}。确认后会记录为已收款，仍需核验顾客的取餐码才能完成订单。`,
-      submit: "确认收款",
-    },
     reject: {
       title: "暂时无法接下这一单？",
-      body: isDelivery(confirmationOrder.value)
-        ? "拒单后会停止履约，发起含配送费的全额原路退款。退款以微信确认结果为准，请说明原因，让顾客及时作其他安排。"
-        : "拒单后会通知顾客并释放预留库存。请说明原因，让顾客及时作其他安排。",
-      submit: "确认拒单",
+      body: "拒单后将停止履约，自动发起全额原路退款并恢复预留库存。退款以微信确认结果为准，请说明原因以便顾客另作安排。",
+      submit: "确认拒单并退款",
     },
     approve_cancel: {
-      title: "同意顾客取消订单",
-      body: isDelivery(confirmationOrder.value)
-        ? "同意后停止履约并发起含配送费的全额原路退款。已制作餐点不会自动恢复库存，退款是否完成以微信结果为准。"
-        : "同意后订单将取消，预留库存会恢复。请确认当前餐点还适合恢复售卖，必要时在商品管理中调整库存。",
-      submit: "确认取消订单",
+      title: "同意取消并全额原路退款",
+      body: "同意后停止履约并发起全额原路退款。已进入备餐的餐点不会自动恢复库存，请按实际食材损耗在菜品管理中调整库存。",
+      submit: "同意取消并退款",
     },
     deny_cancel: {
-      title: "继续处理这份订单",
-      body: "取消申请将被拒绝，订单继续保留。请向顾客说明处理原因，有需要时电话沟通。",
-      submit: "确认继续处理",
+      title: "餐点已下锅，继续履约",
+      body: "取消申请将被拒绝，订单继续制作/待取餐（出餐满 2 小时无争议将自动完结结算）。请向顾客说明已制作情况。",
+      submit: "确认继续履约",
     },
     refund: {
       title: "确认全额原路退款",
@@ -930,7 +926,6 @@ async function requestAction(order: any, value: string) {
       "reject",
       "approve_cancel",
       "deny_cancel",
-      "confirm_payment",
       "refund",
       "dispatch",
       "arrive",
@@ -1138,16 +1133,16 @@ async function performAction(order: any, value: string, explanation = "") {
     const messages: Record<string, string> = {
       accept: "已接单，请开始制作",
       update_prep: "已更新预计出餐时间和说明",
-      reject: "已拒绝接单",
-      ready: isDelivery(order) ? "已出餐，请安排配送人员" : "已通知顾客取餐",
-      confirm_payment: "已记录线下收款，请继续核验取餐码",
-      complete: `${isDelivery(order) ? "收餐码" : "取餐码"}核验成功，订单已完成`,
+      reject: "已拒绝接单并发起退款",
+      ready: isDelivery(order) ? "已出餐，请安排配送人员" : "已通知顾客凭 4 位码取餐",
+      complete_quick: "已交餐完结，分账已结算",
+      complete: `${isDelivery(order) ? "收餐码" : "取餐码"}核验成功，订单已完结分账`,
       dispatch: "已记录出发，请按本单交接点配送",
       arrive: "已通知顾客到达交接点，等待收餐确认",
       report_delivery_issue: "配送异常已记录，请及时联系顾客",
       resolve_delivery_issue: "异常已标记解决，请继续按真实进度履约",
-      approve_cancel: "已同意取消订单",
-      deny_cancel: "已拒绝取消申请，订单继续处理",
+      approve_cancel: "已同意取消并发起原路退款",
+      deny_cancel: "已拒绝取消申请，订单继续履约",
     };
     if (result.payment_status === "refunding") {
       notify(
@@ -1251,8 +1246,25 @@ watch(
       ? value
       : ["delivering", "arrived"].includes(value)
         ? "ready"
-        : "pending";
+        : value === "active"
+          ? defaultActiveStage()
+          : "pending";
   },
+);
+watch(
+  () => props.ordersReady,
+  (ready) => {
+    if (!ready || props.initialFilter !== "active" || cancellationOnly.value)
+      return;
+    if (filter.value === "preparing" && !queueCount("preparing")) {
+      if (queueCount("pending")) filter.value = "pending";
+      else if (queueCount("ready")) filter.value = "ready";
+    } else if (filter.value === "pending" && !queueCount("pending")) {
+      if (queueCount("preparing")) filter.value = "preparing";
+      else if (queueCount("ready")) filter.value = "ready";
+    }
+  },
+  { immediate: true },
 );
 watch(
   () => props.orders,
@@ -1663,7 +1675,12 @@ onUnmounted(() => {
             }"
             >{{ merchantPaymentLabel(order) }}</span
           ><strong
-            ><small>{{ merchantPaymentAmountLabel(order) }}</small
+            ><small>{{
+              order.payment_status === "paid" &&
+              typeof order.merchant_net_cents === "number"
+                ? `净得 ¥${money(order.merchant_net_cents)} · 实付`
+                : merchantPaymentAmountLabel(order)
+            }}</small
             >¥{{ money(order.total_cents) }}</strong
           >
         </div>
@@ -2035,9 +2052,49 @@ onUnmounted(() => {
                 </div>
                 <div class="total">
                   <dt>
-                    {{ merchantPaymentAmountLabel(selectedOrder) + "金额" }}
+                    {{ merchantPaymentAmountLabel(selectedOrder) + "总额" }}
                   </dt>
                   <dd>¥{{ money(selectedOrder.total_cents) }}</dd>
+                </div>
+                <template
+                  v-if="typeof selectedOrder.merchant_net_cents === 'number'"
+                >
+                  <div>
+                    <dt>
+                      平台技术服务费（{{
+                        ((selectedOrder.platform_fee_bps || 0) / 100)
+                          .toFixed(1)
+                          .replace(/\.0$/, "")
+                      }}%）
+                    </dt>
+                    <dd>¥{{ money(selectedOrder.platform_fee_cents || 0) }}</dd>
+                  </div>
+                  <div>
+                    <dt>商户分账净额</dt>
+                    <dd>¥{{ money(selectedOrder.merchant_net_cents) }}</dd>
+                  </div>
+                  <div v-if="selectedOrder.settlement_status">
+                    <dt>分账结算状态</dt>
+                    <dd>
+                      {{
+                        settlementStatusLabel(selectedOrder.settlement_status)
+                      }}
+                    </dd>
+                  </div>
+                </template>
+                <div v-if="selectedOrder.completed_by">
+                  <dt>完结方式</dt>
+                  <dd>
+                    {{
+                      {
+                        merchant_quick: "商家一键交餐",
+                        merchant_code: "4 位取餐码核销",
+                        student_confirm: "顾客主动确认收餐",
+                        auto_timeout: "超时无争议自动完结",
+                      }[selectedOrder.completed_by as string] ||
+                      selectedOrder.completed_by
+                    }}
+                  </dd>
                 </div>
               </dl>
               <p v-if="selectedOrder.paid_at" class="m-orders-help">
@@ -2070,7 +2127,7 @@ onUnmounted(() => {
           <header>
             <span class="m-orders-confirm-icon"
               ><Wallet
-                v-if="confirmationState.action === 'confirm_payment'"
+                v-if="confirmationState.action === 'refund'"
                 :size="25" /><ShoppingBag v-else :size="25" /></span
             ><button
               type="button"
@@ -2121,7 +2178,7 @@ onUnmounted(() => {
           /></label>
           <label
             v-if="
-              !['confirm_payment', 'dispatch', 'arrive'].includes(
+              !['dispatch', 'arrive'].includes(
                 confirmationState.action,
               )
             "

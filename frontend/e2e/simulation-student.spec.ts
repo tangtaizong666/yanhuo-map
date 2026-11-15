@@ -118,7 +118,7 @@ async function fixture(
   });
   await page.goto(`/orders/${state.id}`);
   await expect(
-    page.getByRole("heading", { name: "支付方式", exact: true }),
+    page.getByRole("heading", { name: "线上付款状态", exact: true }),
   ).toBeVisible();
   return { calls, unexpected };
 }
@@ -142,10 +142,10 @@ test("simulation: opens a local cashier, prevents double submit and waits for th
       await gate;
       state.payment.status = "paid";
       state.payment_status = "paid";
-      state.status = "pending";
+      state.status = "preparing";
     }
   });
-  await page.getByRole("button", { name: "模拟微信付款", exact: true }).click();
+  await page.getByRole("button", { name: "去模拟付款", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "微信支付 · 模拟收银台" }),
   ).toBeVisible();
@@ -219,9 +219,9 @@ test("simulation: failed attempt can start a new attempt without recreating an o
   await page.getByText("试试其他付款情况", { exact: true }).click();
   await page.getByRole("button", { name: "模拟支付失败", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "模拟微信付款", exact: true }),
+    page.getByRole("button", { name: "去模拟付款", exact: true }),
   ).toBeEnabled();
-  await page.getByRole("button", { name: "模拟微信付款", exact: true }).click();
+  await page.getByRole("button", { name: "去模拟付款", exact: true }).click();
   await expect(page.locator(".simulation-cashier")).toBeVisible();
   expect(state.payment.id).toBe("sim-retry");
   expect(f.calls.map((c) => c.kind)).toEqual(["simulate", "wechat"]);
@@ -281,7 +281,7 @@ test("simulation: historical live orders keep real payment UI even while the env
 }) => {
   const state = order({
     mode: "live",
-    status: "ready",
+    status: "pending_payment",
     fulfillment_type: "pickup",
     wechat_payment: { mode: "live", available: false, channels: [] },
   });
@@ -292,7 +292,7 @@ test("simulation: historical live orders keep real payment UI even while the env
   await expect(page.locator(".simulation-cashier")).toHaveCount(0);
   await expect(page.locator(".simulation-notice")).toHaveCount(0);
   await expect(
-    page.getByRole("button", { name: "模拟微信付款", exact: true }),
+    page.getByRole("button", { name: "去模拟付款", exact: true }),
   ).toHaveCount(0);
 });
 

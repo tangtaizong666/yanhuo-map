@@ -8,7 +8,7 @@ from django.db import IntegrityError, connection, transaction
 from django.db.models import Exists, F, OuterRef, Q
 from django.utils import timezone
 from .errors import BusinessError
-from .models import pickup_code, AuditLog, Event, MerchantProfile, Order, OrderItem, PaymentAttempt, PaymentRefund, PreparationRequest, Product, Stall, SiteConfiguration
+from .models import compute_order_split, pickup_code, AuditLog, Event, MerchantProfile, Order, OrderItem, PaymentAttempt, PaymentRefund, PreparationRequest, Product, Stall, SiteConfiguration
 from .tastes import canonical_item, validate_portions
 
 
@@ -37,24 +37,27 @@ def expire_locked(order):
     if order.status in ('pending', 'pending_payment') and order.expires_at <= timezone.now():
         if payment_busy(order):
             return False
+        refund = None
         if order.payment_status != 'unpaid':
-            if order.fulfillment_type != 'delivery' or order.payment_status != 'paid': return False
+            if order.status != 'pending' or order.payment_status != 'paid': return False
             from .payments import queue_refund
-            queue_refund(order, None, '商家接单超时，全额退款')
+            refund = queue_refund(order, None, '商家接单超时，全额退款')
+            order.settlement_status = 'reversed'
         order.cancel_reason = '未在规定时间内付款，订单已取消' if order.status == 'pending_payment' else '商家超时未接单，订单已自动取消'
         order.status = 'cancelled'
         release_inventory(order)
         order.save()
         Event.objects.create(type='order_expired', user=order.user, stall=order.stall)
         audit(None, 'order_expired', order.pk)
-        return True
+        return refund.pk if refund is not None and order.mode == 'simulation' else True
     return False
 
 
 def expiry_candidates(*, now=None):
     """Read-only eligibility shared by the worker and backlog diagnostics."""
     candidates = Order.objects.filter(status__in=['pending', 'pending_payment'], expires_at__lte=now or timezone.now(),
-        payment_review_required=False).filter(Q(payment_status='unpaid') | Q(fulfillment_type='delivery', payment_status='paid'))
+        payment_review_required=False).filter(
+            Q(status='pending_payment', payment_status='unpaid') | Q(status='pending', payment_status='paid'))
     candidates = candidates.annotate(_active_payment=Exists(PaymentAttempt.objects.filter(
         order_id=OuterRef('pk'), status__in=PaymentAttempt.ACTIVE_STATUSES)),
         _unresolved_refund=Exists(PaymentRefund.objects.filter(order_id=OuterRef('pk'), resolved_at__isnull=True).exclude(status='success'))
@@ -63,13 +66,73 @@ def expiry_candidates(*, now=None):
     if enabled():
         candidates = candidates.exclude(Q(mode='simulation') & Q(stall__is_demo=False))
     else:
-        candidates = candidates.annotate(_any_payment=Exists(PaymentAttempt.objects.filter(order_id=OuterRef('pk'))))
-        # Match require_order_operation: a terminal online payment attempt still
-        # needs the simulator. Such rows must not consume every expiry batch.
-        basic_cash = Q(fulfillment_type='pickup', payment_method='offline', stall__is_demo=True, _any_payment=False)
-        if not settings.DEMO_MODE or settings.PRODUCTION: basic_cash = Q(pk__isnull=True)
-        candidates = candidates.exclude(Q(mode='simulation') & ~basic_cash)
+        candidates = candidates.exclude(mode='simulation')
     return candidates
+
+
+def auto_complete_locked(order, *, cutoff, minutes):
+    if order.mode == 'simulation':
+        from .simulation import require_order_operation
+        try: require_order_operation(order)
+        except BusinessError: return False
+    if payment_busy(order) or order.cancel_requested or order.payment_status != 'paid':
+        return False
+    eligible = (
+        (order.fulfillment_type == 'pickup' and order.status == 'ready' and order.ready_at and order.ready_at <= cutoff)
+        or (order.fulfillment_type == 'delivery' and order.status == 'arrived' and not order.delivery_issue
+            and order.arrived_at and order.arrived_at <= cutoff)
+    )
+    if not eligible:
+        return False
+    now = timezone.now()
+    order.status = 'completed'
+    order.completed_at = now
+    order.completed_by = 'auto_timeout'
+    order.settlement_status = 'settled'
+    order.settled_at = now
+    order.save(update_fields=['status', 'completed_at', 'completed_by', 'settlement_status', 'settled_at'])
+    Event.objects.create(type='order_completed', user=order.user, stall=order.stall)
+    audit(None, 'order_auto_completed', order.pk, minutes=minutes)
+    return True
+
+
+def auto_complete_ready_orders(*, limit=100, stall_id=None, user_id=None, on_error=None):
+    """Automatically complete & settle paid ready/arrived orders after configured timeout."""
+    config = SiteConfiguration.current()
+    minutes = max(15, min(int(config.auto_complete_ready_minutes), 1440))
+    cutoff = timezone.now() - timedelta(minutes=minutes)
+    candidates = Order.objects.filter(
+        payment_status='paid', cancel_requested=False, payment_review_required=False,
+    ).filter(
+        Q(fulfillment_type='pickup', status='ready', ready_at__lte=cutoff)
+        | Q(fulfillment_type='delivery', status='arrived', delivery_issue='', arrived_at__lte=cutoff)
+    ).annotate(
+        _active_payment=Exists(PaymentAttempt.objects.filter(order_id=OuterRef('pk'), status__in=PaymentAttempt.ACTIVE_STATUSES)),
+        _unresolved_refund=Exists(PaymentRefund.objects.filter(order_id=OuterRef('pk'), resolved_at__isnull=True).exclude(status='success')),
+    ).filter(_active_payment=False, _unresolved_refund=False)
+    from .simulation import enabled
+    if enabled():
+        candidates = candidates.exclude(Q(mode='simulation') & Q(stall__is_demo=False))
+    else:
+        candidates = candidates.exclude(mode='simulation')
+    if stall_id is not None: candidates = candidates.filter(stall_id=stall_id)
+    if user_id is not None: candidates = candidates.filter(user_id=user_id)
+    count, seen = 0, []
+    for _ in range(max(1, min(int(limit), 1000))):
+        order_id = None
+        try:
+            with transaction.atomic():
+                locks = {'of': ('self',), 'skip_locked': True} if connection.features.has_select_for_update_skip_locked else {}
+                order = candidates.exclude(pk__in=seen).select_for_update(**locks).order_by('created_at', 'pk').first()
+                if order is None: break
+                order_id = order.pk
+                seen.append(order_id)
+                count += bool(auto_complete_locked(order, cutoff=cutoff, minutes=minutes))
+        except Exception as exc:
+            logging.getLogger('market').warning('order_auto_complete_failed order=%s type=%s', order_id, type(exc).__name__)
+            if on_error is not None: on_error(exc)
+            if order_id is None: break
+    return count
 
 
 def expire_pending_orders(*, limit=100, stall_id=None, user_id=None, on_error=None):
@@ -77,7 +140,7 @@ def expire_pending_orders(*, limit=100, stall_id=None, user_id=None, on_error=No
     candidates = expiry_candidates()
     if stall_id is not None: candidates = candidates.filter(stall_id=stall_id)
     if user_id is not None: candidates = candidates.filter(user_id=user_id)
-    count, seen = 0, []
+    count, seen, sim_refunds = 0, [], []
     for _ in range(max(1, min(int(limit), 1000))):
         order_id = None
         try:
@@ -89,11 +152,23 @@ def expire_pending_orders(*, limit=100, stall_id=None, user_id=None, on_error=No
                 if order is None: break
                 order_id = order.pk
                 seen.append(order_id)
-                count += bool(expire_locked(order))
+                outcome = expire_locked(order)
+                if outcome:
+                    count += 1
+                    if outcome is not True:
+                        sim_refunds.append((order_id, outcome))
         except Exception as exc:
             logging.getLogger('market').warning('order_expiry_failed order=%s type=%s', order_id, type(exc).__name__)
             if on_error is not None: on_error(exc)
             if order_id is None: break
+    if sim_refunds:
+        from .payments import process_refund
+        for oid, rid in sim_refunds:
+            try: process_refund(oid, rid)
+            except Exception as exc:
+                logging.getLogger('market').warning('sim_refund_expiry_failed order=%s type=%s', oid, type(exc).__name__)
+                if on_error is not None: on_error(exc)
+    auto_complete_ready_orders(limit=limit, stall_id=stall_id, user_id=user_id, on_error=on_error)
     return count
 
 
@@ -134,7 +209,11 @@ def create_order(user, data):
             enforce_reservation_limits(user, stall, data['items'])
             config = SiteConfiguration.current()
             if not stall.can_order(config):
-                gate = stall.new_order_gate_code() if stall.accepting_orders and stall.can_order(config, existing_order=True) else ''
+                from .admission import pickup_eligibility_reason, public_listing_reason
+                durable_blocked = bool(public_listing_reason(stall) or pickup_eligibility_reason(stall))
+                if stall.is_demo and not durable_blocked and (not settings.SERVICES_SIMULATION_ENABLED or not stall.simulation_payment_enabled):
+                    raise BusinessError(stall.order_unavailable_reason(config), 'payment_unavailable')
+                gate = stall.new_order_gate_code() if stall.accepting_orders and not durable_blocked and stall.can_order(config, existing_order=True) else ''
                 raise BusinessError(stall.order_unavailable_reason(config), gate or 'stall_unavailable')
             if not hasattr(stall, 'location'):
                 raise BusinessError('商家尚未确认取餐位置。', 'location_missing')
@@ -173,17 +252,21 @@ def create_order(user, data):
                     delivery_point_latitude=point.latitude, delivery_point_longitude=point.longitude,
                     recipient_name=data.get('recipient_name', ''), delivery_fee_cents=stall.delivery_fee_cents,
                     delivery_eta_min_at=timezone.now()+timedelta(minutes=stall.delivery_eta_min_minutes),
-                    delivery_eta_max_at=timezone.now()+timedelta(minutes=stall.delivery_eta_max_minutes),
-                    status='pending_payment', payment_method='wechat')
+                    delivery_eta_max_at=timezone.now()+timedelta(minutes=stall.delivery_eta_max_minutes))
                 total += stall.delivery_fee_cents
                 if total > 1000000: raise BusinessError('单笔订单金额超出限制。', 'amount_limit', status=400)
+            fee_bps = stall.merchant.custom_fee_bps if stall.merchant.custom_fee_bps is not None else config.platform_fee_bps
+            fee_bps, platform_fee_cents, merchant_net_cents = compute_order_split(total, fee_bps)
             loc = stall.location
             # Merchant row is locked above, so open-order codes for this stall cannot race.
             open_codes = Order.objects.filter(stall=stall).exclude(status__in=('completed', 'cancelled', 'rejected')).values_list('pickup_code', flat=True)
             order = Order.objects.create(user=user, stall=stall, pickup_code=pickup_code(open_codes), stall_name=stall.name, stall_image=stall.image,
                 mode='simulation' if stall.is_demo else 'live',
-                total_cents=total, fulfillment_type=fulfillment, **delivery,
-                expires_at=timezone.now()+timedelta(minutes=15 if fulfillment == 'delivery' else config.pending_minutes),
+                status='pending_payment', payment_method='wechat', payment_status='unpaid',
+                total_cents=total, platform_fee_bps=fee_bps, platform_fee_cents=platform_fee_cents,
+                merchant_net_cents=merchant_net_cents, settlement_status='unsettled',
+                fulfillment_type=fulfillment, **delivery,
+                expires_at=timezone.now()+timedelta(minutes=15),
                 pickup_address=loc.address, pickup_latitude=loc.latitude, pickup_longitude=loc.longitude,
                 note=data['note'], contact_phone=data['contact_phone'], idempotency_key=data['idempotency_key'], request_hash=fingerprint)
             for item in data['items']:
@@ -203,44 +286,69 @@ def create_order(user, data):
 
 
 def cancel_order(order_id, user, reason):
+    sim_refund_id = None
     with transaction.atomic():
         try: order = Order.objects.select_for_update().get(pk=order_id, user=user)
         except Order.DoesNotExist: raise BusinessError('订单不存在。', 'not_found', status=404)
         if order.mode == 'simulation':
             from .simulation import require_order_operation
             require_order_operation(order)
-        if expire_locked(order): return order
-        if order.status in ('cancelled', 'rejected'): return order
-        delivery_paid = order.fulfillment_type == 'delivery' and order.payment_status == 'paid'
-        if order.status == 'completed' or order.payment_status != 'unpaid' and not delivery_paid:
-            raise BusinessError('已收款或已完成的订单不能在线取消，请联系商家。', 'cannot_cancel')
-        if payment_busy(order):
-            raise BusinessError('微信支付结果尚未确认，请先在订单页查询并关闭支付，再申请取消。', 'payment_in_progress')
-        order.cancel_reason = reason or '用户取消'
-        if order.status in ('pending', 'pending_payment'):
-            if delivery_paid:
-                from .payments import queue_refund
-                queue_refund(order, user, '用户接单前取消，全额退款')
-            order.status = 'cancelled'
-            release_inventory(order)
+        expired = expire_locked(order)
+        if expired:
+            if expired is not True:
+                sim_refund_id = expired
+            return_early = True
         else:
-            order.cancel_requested = True
-        order.save()
-        audit(user, 'cancel_requested' if order.cancel_requested else 'order_cancelled', order.pk)
-        return order
+            return_early = False
+        if not return_early:
+            if order.status in ('cancelled', 'rejected'):
+                return order
+            if order.status == 'completed' or order.payment_status not in ('unpaid', 'paid'):
+                raise BusinessError('已完成或正在退款的订单不能重复取消，请联系商家。', 'cannot_cancel')
+            if payment_busy(order):
+                raise BusinessError('微信支付结果尚未确认，请先在订单页查询并关闭支付，再申请取消。', 'payment_in_progress')
+            order.cancel_reason = reason or '用户取消'
+            if order.status == 'pending_payment':
+                if order.payment_status != 'unpaid':
+                    raise BusinessError('订单付款状态已更新，请刷新订单后重试。', 'cannot_cancel')
+                order.status = 'cancelled'
+                release_inventory(order)
+            elif order.status == 'pending':
+                if order.payment_status == 'paid':
+                    from .payments import queue_refund
+                    refund = queue_refund(order, user, '用户接单前取消，全额退款')
+                    order.settlement_status = 'reversed'
+                    if order.mode == 'simulation':
+                        sim_refund_id = refund.pk
+                order.status = 'cancelled'
+                release_inventory(order)
+            else:
+                order.cancel_requested = True
+            order.save()
+            audit(user, 'cancel_requested' if order.cancel_requested else 'order_cancelled', order.pk)
+    if sim_refund_id is not None:
+        from .payments import process_refund
+        return process_refund(order.pk, sim_refund_id)
+    return order
 
 
 def merchant_action(order_id, user, action, code='', reason='', *, prep_minutes=None, idempotency_key=''):
-    result = _merchant_action(order_id, user, action, code, reason,
+    result, sim_refund_id = _merchant_action(order_id, user, action, code, reason,
         prep_minutes=prep_minutes, idempotency_key=idempotency_key)
     # Raise only after the locked transaction has committed the failed attempt.
     # Production DatabaseCache otherwise rolls back alongside BusinessError.
+    if sim_refund_id is not None:
+        from .payments import process_refund
+        processed = process_refund(order_id, sim_refund_id)
+        if not isinstance(result, BusinessError):
+            result = processed
     if isinstance(result, BusinessError):
         raise result
     return result
 
 
 def _merchant_action(order_id, user, action, code='', reason='', *, prep_minutes=None, idempotency_key=''):
+    sim_refund_id = None
     with transaction.atomic():
         from .permissions import owned_or_permitted
         query = owned_or_permitted(Order.objects.select_for_update(of=('self',)), user, 'market.change_order')
@@ -260,7 +368,7 @@ def _merchant_action(order_id, user, action, code='', reason='', *, prep_minutes
             if previous_operation:
                 if previous_operation.request_hash != operation_hash:
                     raise BusinessError('本次提交标识已用于其他订单操作，请核对原操作。', 'idempotency_conflict')
-                return order
+                return order, None
         request_hash = ''
         if idempotency_key:
             request_hash = hashlib.sha256(json.dumps({'action': action, 'prep_minutes': prep_minutes,
@@ -269,39 +377,42 @@ def _merchant_action(order_id, user, action, code='', reason='', *, prep_minutes
             if previous:
                 if not prep_action or previous.request_hash != request_hash:
                     raise BusinessError('本次提交标识已用于其他备餐操作，请刷新后重试。', 'idempotency_conflict')
-                return order
+                return order, None
         if prep_action and prep_minutes is not None and (isinstance(prep_minutes, bool) or not isinstance(prep_minutes, int) or not 1 <= prep_minutes <= 180):
             raise BusinessError('备餐预估需要填写1至180分钟。', 'invalid_prep_minutes', status=400)
         if action == 'update_prep' and (prep_minutes is None or not idempotency_key or not reason.strip() or len(reason) > 200):
             raise BusinessError('请填写新的备餐预估、调整说明及提交标识。', 'invalid_prep_update', status=400)
-        if expire_locked(order):
-            return BusinessError('订单已超时自动取消，当前无法执行此操作。', 'order_expired')
+        expired = expire_locked(order)
+        if expired:
+            if expired is not True:
+                sim_refund_id = expired
+            return BusinessError('订单已超时自动取消，当前无法执行此操作。', 'order_expired'), sim_refund_id
         delivery = order.fulfillment_type == 'delivery'
-        if action in ('accept', 'update_prep', 'ready', 'dispatch', 'arrive', 'confirm_payment', 'approve_cancel', 'complete', 'reject', 'deny_cancel'):
+        if action in ('accept', 'update_prep', 'ready', 'dispatch', 'arrive', 'approve_cancel', 'complete', 'complete_quick', 'reject', 'deny_cancel'):
             from .financial import require_no_financial_hold
             require_no_financial_hold(order)
         if delivery and order.delivery_issue and action in ('dispatch', 'arrive', 'complete'):
             raise BusinessError('请先处理并记录配送异常的解决结果。', 'delivery_issue_unresolved')
-        if action == 'accept' and order.status == 'pending' and (not delivery or order.payment_status == 'paid'):
+        if action == 'accept' and order.status == 'pending' and order.payment_status == 'paid':
             order.status, order.accepted_at = 'preparing', timezone.now()
             minutes = prep_minutes if prep_minutes is not None else max(1, min(order.stall.prep_minutes, 180))
             order.estimated_ready_at = order.accepted_at + timedelta(minutes=minutes)
             order.prep_updated_at, order.prep_delay_reason = order.accepted_at, ''
-        elif action == 'update_prep' and order.status == 'preparing' and not order.cancel_requested and (not delivery or order.payment_status == 'paid'):
+        elif action == 'update_prep' and order.status == 'preparing' and not order.cancel_requested and order.payment_status == 'paid':
             order.prep_updated_at = timezone.now()
             order.estimated_ready_at = order.prep_updated_at + timedelta(minutes=prep_minutes)
             order.prep_delay_reason = reason.strip()
-        elif action == 'reject' and order.status == 'pending':
-            if delivery and order.payment_status == 'paid':
-                from .payments import queue_refund
-                queue_refund(order, user, '商家无法接单，全额退款')
+        elif action == 'reject' and order.status == 'pending' and order.payment_status == 'paid':
+            from .payments import queue_refund
+            refund = queue_refund(order, user, '商家无法接单，全额退款')
+            if order.mode == 'simulation':
+                sim_refund_id = refund.pk
+            order.settlement_status = 'reversed'
             order.status = 'rejected'
             order.cancel_reason = reason or '商家暂时无法接单'
             release_inventory(order)
-        elif action == 'ready' and order.status == 'preparing' and not order.cancel_requested and (not delivery or order.payment_status == 'paid'):
+        elif action == 'ready' and order.status == 'preparing' and not order.cancel_requested and order.payment_status == 'paid':
             order.status, order.ready_at = 'ready', timezone.now()
-        elif action == 'confirm_payment' and not delivery and order.status == 'ready' and not order.cancel_requested and order.payment_status == 'unpaid' and order.payment_method == 'offline':
-            order.payment_status, order.paid_at = 'paid', timezone.now()
         elif action == 'dispatch' and delivery and order.status == 'ready' and order.payment_status == 'paid' and not order.cancel_requested:
             order.status, order.dispatched_at = 'delivering', timezone.now()
         elif action == 'arrive' and delivery and order.status == 'delivering' and order.payment_status == 'paid' and not order.cancel_requested:
@@ -314,29 +425,39 @@ def _merchant_action(order_id, user, action, code='', reason='', *, prep_minutes
             if not reason.strip(): raise BusinessError('请填写配送异常解决说明。', 'reason_required', status=400)
             audit(user, 'delivery_issue_resolved', order.pk, issue=order.delivery_issue, resolution=reason)
             order.delivery_issue = ''
+        elif action == 'complete_quick' and not delivery and order.status == 'ready' and order.payment_status == 'paid' and not order.cancel_requested:
+            now = timezone.now()
+            order.status, order.completed_at = 'completed', now
+            order.completed_by = 'merchant_quick'
+            order.settlement_status, order.settled_at = 'settled', now
+            Event.objects.create(type='order_completed', user=order.user, stall=order.stall)
         elif action == 'complete' and order.status == ('arrived' if delivery else 'ready') and order.payment_status == 'paid' and not order.cancel_requested:
             from django.core.cache import cache
             fails_key = f'pickup_code_fails:{order.pk}'
             failures = cache.get(fails_key, 0)
             if failures >= 5:
-                return BusinessError('取餐码错误次数过多，请10分钟后再试或让顾客刷新订单页核对。', 'pickup_code_locked', status=409)
+                return BusinessError('取餐码错误次数过多，请10分钟后再试或让顾客刷新订单页核对。', 'pickup_code_locked', status=409), None
             if not secrets.compare_digest(str(code), order.pickup_code):
                 # The order row lock serializes attempts across workers. Set an
                 # explicit expiry: DatabaseCache.incr uses the default timeout.
                 cache.set(fails_key, failures + 1, 600)
-                return BusinessError('取餐码不正确，请核对用户出示的取餐码。', 'invalid_pickup_code', status=400)
+                return BusinessError('取餐码不正确，请核对用户出示的取餐码。', 'invalid_pickup_code', status=400), None
             cache.delete(fails_key)
-            order.status, order.completed_at = 'completed', timezone.now()
+            now = timezone.now()
+            order.status, order.completed_at = 'completed', now
+            order.completed_by = 'merchant_code'
+            order.settlement_status, order.settled_at = 'settled', now
             Event.objects.create(type='order_completed', user=order.user, stall=order.stall)
-        elif action == 'approve_cancel' and order.status in (('preparing', 'ready', 'delivering', 'arrived') if delivery else ('preparing', 'ready')) and order.cancel_requested and order.payment_status in (('unpaid', 'paid') if delivery else ('unpaid',)):
-            if delivery and order.payment_status == 'paid':
-                from .payments import queue_refund
-                queue_refund(order, user, '商家同意取消，全额退款')
+        elif action == 'approve_cancel' and order.status in (('preparing', 'ready', 'delivering', 'arrived') if delivery else ('preparing', 'ready')) and order.cancel_requested and order.payment_status == 'paid':
+            from .payments import queue_refund
+            refund = queue_refund(order, user, '商家同意取消，全额退款')
+            if order.mode == 'simulation':
+                sim_refund_id = refund.pk
+            order.settlement_status, order.settled_at = 'reversed', None
             order.status, order.cancel_requested = 'cancelled', False
-            if not delivery: release_inventory(order)
-        elif action == 'deny_cancel' and order.status in (('preparing', 'ready', 'delivering', 'arrived') if delivery else ('preparing', 'ready')) and order.cancel_requested:
+        elif action == 'deny_cancel' and order.status in (('preparing', 'ready', 'delivering', 'arrived') if delivery else ('preparing', 'ready')) and order.cancel_requested and order.payment_status == 'paid':
             order.cancel_requested = False
-            order.cancel_reason = reason or '商家未同意取消，请联系商家'
+            order.cancel_reason = reason or '餐品已开始制作，请按取餐码取餐'
         else:
             raise BusinessError('订单状态已变化，当前无法执行此操作。', 'invalid_transition')
         order.save()
@@ -346,7 +467,7 @@ def _merchant_action(order_id, user, action, code='', reason='', *, prep_minutes
             MerchantOrderOperation.objects.create(order=order, idempotency_key=idempotency_key,
                 action=action, request_hash=operation_hash)
         audit(user, f'order_{action}', order.pk)
-        return order
+        return order, sim_refund_id
 
 
 def confirm_receipt(order_id, user):
@@ -356,11 +477,16 @@ def confirm_receipt(order_id, user):
         if order.mode == 'simulation':
             from .simulation import require_order_operation
             require_order_operation(order)
-        if (order.fulfillment_type != 'delivery' or order.status != 'arrived'
-                or order.payment_status != 'paid' or order.cancel_requested or order.delivery_issue or payment_busy(order)):
-            raise BusinessError('订单到达交接点且无待处理售后时才能确认收餐。', 'invalid_transition')
-        order.status, order.completed_at = 'completed', timezone.now()
-        order.save(update_fields=['status', 'completed_at'])
+        delivery = order.fulfillment_type == 'delivery'
+        expected_status = 'arrived' if delivery else 'ready'
+        if (order.status != expected_status or order.payment_status != 'paid'
+                or order.cancel_requested or (delivery and order.delivery_issue) or payment_busy(order)):
+            raise BusinessError('餐点出餐或送达且无待处理售后时才能确认已取餐。', 'invalid_transition')
+        now = timezone.now()
+        order.status, order.completed_at = 'completed', now
+        order.completed_by = 'student_confirm'
+        order.settlement_status, order.settled_at = 'settled', now
+        order.save(update_fields=['status', 'completed_at', 'completed_by', 'settlement_status', 'settled_at'])
         Event.objects.create(type='order_completed', user=user, stall=order.stall)
-        audit(user, 'delivery_receipt_confirmed', order.pk)
+        audit(user, 'delivery_receipt_confirmed' if delivery else 'pickup_receipt_confirmed', order.pk)
         return order

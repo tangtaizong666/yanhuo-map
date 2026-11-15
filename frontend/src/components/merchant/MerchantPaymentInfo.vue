@@ -1,15 +1,20 @@
 <script lang="ts">
 import { needsFinancialFollowUp } from "../../lib/orderFollowUp";
 import { allows } from "../../lib/orderActions";
-export function canConfirmOfflinePayment(order: any) {
-  if (Array.isArray(order?.allowed_actions))
-    return allows(order, "confirm_payment");
+export function canConfirmOfflinePayment(_order: any) {
+  return false;
+}
+
+export function settlementStatusLabel(status?: string) {
   return (
-    order.fulfillment_type !== "delivery" &&
-    (order.payment_method || "offline") === "offline" &&
-    order.payment_status === "unpaid" &&
-    !order.payment_review_required &&
-    (order.payment == null || order.payment.status === "closed")
+    (
+      {
+        settled: "已分账结算",
+        escrow: "待完结分账",
+        reversed: "已退款冲正",
+        unsettled: "未付款",
+      } as Record<string, string>
+    )[status || ""] || ""
   );
 }
 
@@ -21,7 +26,7 @@ function paymentLabel(order: any) {
   if (order.financial_hold_reason) return "款项待处理";
   if (order.refund?.resolved_at)
     return order.payment_status === "paid"
-      ? "已收款 · 原退款已结案"
+      ? "已付款 · 原退款已结案"
       : "原退款已核对结案";
   if (order.payment_review_required || order.payment?.status === "review")
     return "付款需人工核对";
@@ -33,15 +38,12 @@ function paymentLabel(order: any) {
   if (order.payment_status === "refunded") return "已原路退款";
   if (order.payment_status === "refunding") return "退款处理中";
   if (order.payment_status === "paid")
-    return order.payment_method === "wechat" ? "微信已付款" : "到摊已收款";
+    return order.settlement_status === "settled"
+      ? "已付款 · 已分账"
+      : "微信已预付";
   if (order.payment?.status === "creating") return "正在发起微信支付";
   if (order.payment?.status === "pending") return "等待微信付款";
-  if (
-    order.fulfillment_type === "delivery" &&
-    order.payment_status === "unpaid"
-  )
-    return "待顾客微信付款";
-  return order.payment_method === "wechat" ? "等待微信确认" : "到摊付款";
+  return "待顾客在线付款";
 }
 
 export function merchantPaymentAmountLabel(order: any) {
@@ -107,29 +109,21 @@ const description = computed(() => {
       return "模拟退款尚未完成，可在更多操作中继续模拟退款结果；没有真实资金变动。";
     if (order.payment_status === "paid")
       return order.fulfillment_type === "delivery"
-        ? "已记录模拟付款。练习送达交接点后，仍需学生确认收餐或核验收餐码。没有真实收款或配送。"
-        : "已记录模拟付款。交餐时继续练习核验取餐码，没有真实收款。";
-    return "这是模拟订单。请让学生在订单详情完成模拟付款，不会真实扣款。";
+        ? "已确认模拟预付，无需手动点收款。送达后由顾客确认收餐或超时自动完结结算。"
+        : "已确认模拟预付，无需手动点收款。交餐点「已交餐 · 完成」或顾客确认/超时自动完结分账。";
+    return "模拟订单等待顾客在线模拟付款，未付款前不进入制作队列。";
   }
   if (order.payment_status === "refunded")
-    return "微信已确认原路退款，请勿再次收款。";
+    return "微信已确认原路退款，分账已冲正。";
   if (order.payment_status === "refunding")
     return "退款请求正在核对，请等待微信结果，不要重复退付或核销取餐。";
   if (order.payment_status === "paid")
-    return order.payment_method === "wechat"
-      ? order.fulfillment_type === "delivery"
-        ? "微信系统已确认付款。到达交接点后，由顾客确认收餐，或当面核验 4 位收餐码完成交付。"
-        : "微信系统已确认付款，无需手工确认收款。交餐时仍需核验 4 位取餐码。"
-      : "已记录到摊收款，交餐时仍需核验 4 位取餐码。";
+    return order.fulfillment_type === "delivery"
+      ? "微信已确认预付，无需手动点收款。到达交接点后由顾客确认收餐、输码核销或满 2 小时无争议自动完结分账。"
+      : "微信已确认预付，无需手动点收款。交餐时可点「已交餐 · 完成」、输 4 位码核销，或由顾客确认/满 2 小时自动完结分账。";
   if (["creating", "pending"].includes(order.payment?.status))
-    return "顾客正在通过微信付款。由系统确认结果，请勿重复收取线下款项。";
-  if (order.fulfillment_type === "delivery")
-    return "配送订单需先微信付款，系统确认后才能接单。请勿线下补收或在未付款时制作配送。";
-  if (order.payment_method === "wechat")
-    return "等待微信支付状态同步，暂不能手工确认收款。";
-  if (order.payment?.status === "closed")
-    return "微信支付已关闭，可在顾客到摊实际付款后确认收款。";
-  return "请在顾客到摊实际付款后确认收款。";
+    return "顾客正在通过微信付款，付款成功后再开始备餐。";
+  return "等待顾客完成线上预付，未付款前无需备餐。";
 });
 </script>
 
@@ -159,6 +153,18 @@ const description = computed(() => {
     <div>
       <strong>{{ label }}</strong>
       <p>{{ description }}</p>
+      <small
+        v-if="
+          order.payment_status === 'paid' &&
+          typeof order.merchant_net_cents === 'number'
+        "
+      >
+        商户分账净额 ¥{{ money(order.merchant_net_cents) }} · 平台技术服务费 ¥{{
+          money(order.platform_fee_cents || 0)
+        }}（{{
+          ((order.platform_fee_bps || 0) / 100).toFixed(1).replace(/\.0$/, "")
+        }}%）· {{ settlementStatusLabel(order.settlement_status) || "待结算" }}
+      </small>
       <small v-if="!compact && order.paid_at">
         付款确认：{{ formatTime(order.paid_at) }}
       </small>

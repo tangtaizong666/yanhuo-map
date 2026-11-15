@@ -43,7 +43,7 @@ defineEmits<{
         @click="$emit('update:modelValue', 'pickup')"
       >
         <Store :size="22" /><span
-          ><strong>到摊自取</strong><small>免配送费 · 出餐后付款</small></span
+          ><strong>到摊自取</strong><small>免配送费 · 凭 4 位码即取</small></span
         >
       </button>
       <button

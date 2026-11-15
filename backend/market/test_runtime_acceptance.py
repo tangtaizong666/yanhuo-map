@@ -270,8 +270,6 @@ class RuntimeNotificationAcceptanceTests(TransactionTestCase):
     def payment(self, index=0):
         user = User.objects.create(username=f'notification-student-{index}', password='!')
         order, _ = create_order(user, payload(self.stall, self.product))
-        merchant_action(order.pk, self.vendor, 'accept')
-        merchant_action(order.pk, self.vendor, 'ready')
         order.refresh_from_db()
         return PaymentAttempt.objects.create(order=order, merchant=self.stall.merchant,
             account_key='runtime-account', mchid='1900000109', appid='wxRuntimeAcceptance',

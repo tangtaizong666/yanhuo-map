@@ -11,7 +11,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 from .errors import BusinessError
 from .models import Area, BusinessSession, Event, MerchantProfile, Order, Product, Review, SiteConfiguration, Stall, StallLocation
-from .services import cancel_order, create_order, expire_pending_orders, merchant_action
+from .services import auto_complete_ready_orders, cancel_order, confirm_receipt, create_order, expire_pending_orders, merchant_action
 
 
 def fixtures():
@@ -37,6 +37,51 @@ def payload(stall, product, quantity=1, key=None):
         'expected_price_cents': product.price_cents}], 'note': '', 'contact_phone': '', 'idempotency_key': key or str(uuid.uuid4())}
 
 
+def pay_order_for_test(order_or_id, *, auto_accept=None):
+    """Create and confirm a verified online payment for an unpaid pending_payment order in tests."""
+    from django.db import transaction
+    from .models import PaymentAttempt
+    from .payments import apply_notification
+
+    order_id = order_or_id['id'] if isinstance(order_or_id, dict) else (order_or_id.pk if isinstance(order_or_id, Order) else order_or_id)
+    order = Order.objects.select_related('stall__merchant', 'user').get(pk=order_id)
+    original_auto = order.stall.auto_accept_orders
+    if auto_accept is not None and original_auto != auto_accept:
+        Stall.objects.filter(pk=order.stall_id).update(auto_accept_orders=auto_accept)
+    try:
+        account_key = f'simulation-{order.stall.merchant_id}' if order.mode == 'simulation' else 'test-account'
+        mchid = f'SIM{order.stall.merchant_id}' if order.mode == 'simulation' else '1234567890'
+        appid = 'SIMULATION' if order.mode == 'simulation' else 'wxTestApp'
+        channel = 'simulation' if order.mode == 'simulation' else 'native'
+        payment = order.payments.filter(status__in=PaymentAttempt.ACTIVE_STATUSES).first()
+        if not payment:
+            payment = PaymentAttempt.objects.create(
+                order=order, merchant=order.stall.merchant, mode=order.mode,
+                account_key=account_key, mchid=mchid, appid=appid,
+                out_trade_no='YHTEST' + uuid.uuid4().hex[:22].upper(),
+                channel=channel, amount_cents=order.total_cents, expires_at=order.expires_at,
+            )
+            Order.objects.filter(pk=order.pk).update(payment_method='wechat')
+        if order.mode == 'simulation':
+            from .simulation import simulate_payment
+            return simulate_payment(order.pk, order.user, payment.pk, 'success')
+        with transaction.atomic():
+            apply_notification(
+                account_key, mchid, appid, 'TRANSACTION.SUCCESS',
+                {
+                    'appid': appid, 'mchid': mchid, 'out_trade_no': payment.out_trade_no,
+                    'trade_state': 'SUCCESS', 'transaction_id': 'WX' + payment.out_trade_no,
+                    'success_time': timezone.now().isoformat(),
+                    'amount': {'total': payment.amount_cents, 'currency': 'CNY'},
+                },
+            )
+        order.refresh_from_db()
+        return order
+    finally:
+        if auto_accept is not None and original_auto != auto_accept:
+            Stall.objects.filter(pk=order.stall_id).update(auto_accept_orders=original_auto)
+
+
 class MarketTests(TestCase):
     def setUp(self):
         self.student, self.other, self.vendor, self.stall, self.product = fixtures()
@@ -56,16 +101,24 @@ class MarketTests(TestCase):
     def test_complete_flow_persists_price_payment_review(self):
         order = self.create(note='少辣')
         self.assertEqual(order['total_cents'], 800)
+        self.assertEqual(order['status'], 'pending_payment')
         self.assertEqual(order['payment_status'], 'unpaid')
-        self.action(order, 'accept')
-        self.action(order, 'ready')
+        self.assertEqual(order['payment_method'], 'wechat')
+        self.assertEqual(order['platform_fee_cents'], 40)
+        self.assertEqual(order['merchant_net_cents'], 760)
+        self.assertEqual(order['settlement_status'], 'unsettled')
+        for forbidden in ('accept', 'ready', 'confirm_payment', 'complete_quick'):
+            with self.assertRaises(BusinessError): self.action(order, forbidden)
         with self.assertRaises(BusinessError): self.action(order, 'complete', code=order['pickup_code'])
-        self.action(order, 'confirm_payment')
+        paid = pay_order_for_test(order)
+        self.assertEqual((paid.status, paid.payment_status, paid.settlement_status), ('preparing', 'paid', 'escrow'))
+        self.action(order, 'ready')
+        with self.assertRaises(BusinessError): self.action(order, 'confirm_payment')
         order = self.client.get(f"/api/v1/orders/{order['id']}").data
         wrong_code = '0000' if order['pickup_code'] != '0000' else '1111'
         with self.assertRaises(BusinessError): self.action(order, 'complete', code=wrong_code)
         completed = self.action(order, 'complete', code=order['pickup_code'])
-        self.assertEqual(completed.status, 'completed')
+        self.assertEqual((completed.status, completed.completed_by, completed.settlement_status), ('completed', 'merchant_code', 'settled'))
         with self.assertRaises(BusinessError): self.action(order, 'complete', code=order['pickup_code'])
         response = self.client.post(f"/api/v1/orders/{order['id']}/review", {'rating': 5, 'content': '很香，下次还来。'}, format='json')
         self.assertEqual(response.status_code, 201, response.data)
@@ -113,42 +166,84 @@ class MarketTests(TestCase):
         self.assertEqual(Product.objects.get(pk=self.product.pk).stock, 5)
         with self.assertRaises(BusinessError): self.action(order, 'accept')
 
-    def test_cancel_after_accept_requires_merchant_and_blocks_payment(self):
+    def test_cancel_after_accept_requires_merchant_and_blocks_completion(self):
         order = self.create()
-        self.action(order, 'accept')
+        pay_order_for_test(order)
         self.action(order, 'ready')
         pending = cancel_order(order['id'], self.student, '临时有事')
         self.assertTrue(pending.cancel_requested)
         self.assertEqual(pending.status, 'ready')
-        with self.assertRaises(BusinessError): self.action(order, 'confirm_payment')
-        self.action(order, 'approve_cancel')
-        self.assertEqual(Product.objects.get(pk=self.product.pk).stock, 5)
+        with self.assertRaises(BusinessError): self.action(order, 'complete_quick')
+        with self.assertRaises(BusinessError): self.action(order, 'complete', code=order['pickup_code'])
+        approved = self.action(order, 'approve_cancel')
+        self.assertEqual((approved.status, approved.payment_status, approved.settlement_status), ('cancelled', 'refunding', 'reversed'))
+        self.assertEqual(Product.objects.get(pk=self.product.pk).stock, 4)
 
-    def test_cancel_while_preparing_returns_stock(self):
+    def test_cancel_while_preparing_queues_refund_without_restocking_prepared_food(self):
         order = self.create()
-        self.action(order, 'accept')
+        pay_order_for_test(order)
         cancel_order(order['id'], self.student, '临时有事')
-        self.action(order, 'approve_cancel')
-        self.assertEqual(Product.objects.get(pk=self.product.pk).stock, 5)
+        approved = self.action(order, 'approve_cancel')
+        self.assertEqual((approved.status, approved.payment_status, approved.settlement_status), ('cancelled', 'refunding', 'reversed'))
+        self.assertEqual(Product.objects.get(pk=self.product.pk).stock, 4)
 
-    def test_cancel_after_payment_blocked(self):
+    def test_cancel_after_completion_blocked(self):
         order = self.create()
-        self.action(order, 'accept')
+        pay_order_for_test(order)
         self.action(order, 'ready')
-        self.action(order, 'confirm_payment')
+        self.action(order, 'complete_quick')
         with self.assertRaises(BusinessError): cancel_order(order['id'], self.student, '')
         with self.assertRaises(BusinessError): self.action(order, 'approve_cancel')
 
     def test_reject_and_deny_cancel(self):
         order = self.create()
-        self.action(order, 'reject', reason='售罄')
+        pay_order_for_test(order, auto_accept=False)
+        rejected = self.action(order, 'reject', reason='售罄')
+        self.assertEqual((rejected.status, rejected.payment_status, rejected.settlement_status), ('rejected', 'refunding', 'reversed'))
         self.assertEqual(Product.objects.get(pk=self.product.pk).stock, 5)
+        self.client.force_authenticate(self.other)
         next_order = self.create()
-        self.action(next_order, 'accept')
-        cancel_order(next_order['id'], self.student, '')
+        pay_order_for_test(next_order)
+        cancel_order(next_order['id'], self.other, '')
         denied = self.action(next_order, 'deny_cancel', reason='已经开始制作')
         self.assertFalse(denied.cancel_requested)
         self.assertEqual(denied.status, 'preparing')
+
+    def test_triple_completion_closure_and_profit_sharing_custom_fee(self):
+        SiteConfiguration.objects.create(platform_fee_bps=600, auto_complete_ready_minutes=60)
+        # 1. Merchant 1-tap complete_quick
+        first = self.create()
+        self.assertEqual((first['platform_fee_bps'], first['platform_fee_cents'], first['merchant_net_cents']), (600, 48, 752))
+        pay_order_for_test(first)
+        self.action(first, 'ready')
+        quick_done = self.action(first, 'complete_quick')
+        self.assertEqual((quick_done.status, quick_done.completed_by, quick_done.settlement_status), ('completed', 'merchant_quick', 'settled'))
+        # 2. Student proactive pickup confirm_receipt with merchant custom_fee_bps override
+        self.stall.merchant.custom_fee_bps = 250
+        self.stall.merchant.save(update_fields=['custom_fee_bps'])
+        second = self.create()
+        self.assertEqual((second['platform_fee_bps'], second['platform_fee_cents'], second['merchant_net_cents']), (250, 20, 780))
+        pay_order_for_test(second)
+        self.action(second, 'ready')
+        student_done = confirm_receipt(second['id'], self.student)
+        self.assertEqual((student_done.status, student_done.completed_by, student_done.settlement_status), ('completed', 'student_confirm', 'settled'))
+        # 3. Auto-timeout completion worker after auto_complete_ready_minutes
+        third = self.create()
+        pay_order_for_test(third)
+        self.action(third, 'ready')
+        Order.objects.filter(pk=third['id']).update(ready_at=timezone.now() - timedelta(minutes=61))
+        self.assertEqual(auto_complete_ready_orders(), 1)
+        self.assertEqual(auto_complete_ready_orders(), 0)
+        auto_done = Order.objects.get(pk=third['id'])
+        self.assertEqual((auto_done.status, auto_done.completed_by, auto_done.settlement_status), ('completed', 'auto_timeout', 'settled'))
+        # 4. Admin /ops/overview profit-sharing ledger
+        admin = User.objects.create_superuser('ops_admin', 'ops@example.com', 'AdminStrong123!')
+        ops_client = APIClient()
+        ops_client.force_authenticate(admin)
+        overview = ops_client.get('/api/v1/ops/overview').data
+        self.assertEqual(overview['revenue']['gmv_cents'], 2400)
+        self.assertEqual(overview['revenue']['settled_platform_fee_cents'], 48 + 20 + 20)
+        self.assertEqual(overview['revenue']['settled_merchant_net_cents'], 752 + 780 + 780)
 
     def test_stale_closed_paused_and_unverified_block_checkout(self):
         for state in ['closed', 'paused', 'stale', 'unverified', 'display_only']:
@@ -227,6 +322,8 @@ class MarketTests(TestCase):
     def test_merchant_cannot_read_pickup_code(self):
         order = self.create()
         self.client.force_authenticate(self.vendor)
+        self.assertEqual(self.client.get('/api/v1/merchant/orders').data, [])
+        pay_order_for_test(order, auto_accept=False)
         listed = self.client.get('/api/v1/merchant/orders').data
         self.assertEqual(listed[0]['pickup_code'], '')
         action = self.client.post(f"/api/v1/merchant/orders/{order['id']}/action", {'action': 'accept'}, format='json')
@@ -372,6 +469,7 @@ class PostgreSQLConcurrencyTests(TransactionTestCase):
         self.assertEqual(Product.objects.get(pk=self.product.pk).stock, 4)
     def test_accept_cancel_race_has_consistent_inventory(self):
         order, _ = create_order(self.student, payload(self.stall, self.product))
+        pay_order_for_test(order, auto_accept=False)
         self.race(lambda: merchant_action(order.pk, self.vendor, 'accept'), lambda: cancel_order(order.pk, self.student, '取消'))
         order.refresh_from_db()
         stock = Product.objects.get(pk=self.product.pk).stock
@@ -381,5 +479,5 @@ class PostgreSQLConcurrencyTests(TransactionTestCase):
         self.race(lambda: create_order(self.student, payload(self.stall, self.product)),
             lambda: cancel_order(order.pk, self.student, '改点另一单'))
         self.assertEqual(Order.objects.filter(status='cancelled').count(), 1)
-        self.assertEqual(Order.objects.filter(status='pending').count(), 1)
+        self.assertEqual(Order.objects.filter(status='pending_payment').count(), 1)
         self.assertEqual(Product.objects.get(pk=self.product.pk).stock, 4)

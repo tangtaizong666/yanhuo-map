@@ -27,11 +27,7 @@ def require(stall):
 
 def require_order_operation(order):
     if order.mode != 'simulation': return
-    # Preserve the original offline pickup demonstration when the optional online
-    # simulator is disabled. An online attempt or delivery always needs the flag.
-    basic_cash_demo = (settings.DEMO_MODE and not settings.PRODUCTION and order.stall.is_demo
-        and order.fulfillment_type == 'pickup' and order.payment_method == 'offline' and not order.payments.exists())
-    if not basic_cash_demo: require(order.stall)
+    require(order.stall)
 
 
 def payment_readiness(stall):

@@ -13,7 +13,7 @@ async function fixture(page: Page) {
     receiving_status: "recent", receiving_valid_for_seconds: 30,
     products: [{ id: 11, name: "椒盐鸡蛋煎饼", description: "现摊鸡蛋饼，椒盐调味。", image: "/images/food-jianbing.jpg",
       price_cents: 800, availability: "available", max_order_quantity: 10, is_active: true }],
-    wechat_payment: { available: false, mode: "simulation", channels: [], reason: "当前模拟支付暂停，请到摊付款。" },
+    wechat_payment: { available: false, mode: "simulation", channels: [], reason: "当前模拟支付暂停，暂不可线上点单。" },
     delivery: { available: false, enabled: false, mode: "live", points: [] },
   };
   const state = { detail, unexpected: [] as string[] };
@@ -88,19 +88,20 @@ for (const mode of ["simulation", "live"]) {
   test(`${mode} unavailable payment uses a neutral status and preserves its actual reason`, async ({ page }, info) => {
     const state = await fixture(page);
     state.detail.wechat_payment.mode = mode;
-    state.detail.wechat_payment.reason = mode === "simulation" ? "当前模拟支付暂停，请到摊付款。" : "线上收款暂时不可用，请到摊付款。";
+    state.detail.wechat_payment.reason = mode === "simulation" ? "当前模拟支付暂停，暂不可线上点单。" : "线上收款暂时不可用，暂不可线上点单。";
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto("/stalls/1");
     await expect(page.locator(".stall-payment-status")).toBeVisible();
     await page.screenshot({ path: info.outputPath(`${mode}-payment-1440.png`), fullPage: true, animations: "disabled" });
-    await expect(page.locator(".stall-payment-status")).toContainText("当前不可用");
-    await expect(page.locator(".stall-payment-status")).toContainText("到摊付款");
-    await expect(page.locator(".stall-payment-status")).not.toContainText("尚未开通");
+    await expect(page.locator(".stall-payment-status")).toContainText("支付暂未开通");
+    await expect(page.locator(".stall-payment-status")).toContainText("暂不可点单");
+    await expect(page.locator(".stall-payment-status")).not.toContainText("到摊付款");
     await expect(page.locator(".stall-payment-status")).not.toContainText("扫码");
     if (mode === "simulation") await expect(page.locator(".stall-payment-status")).toContainText("模拟微信支付");
     await page.getByRole("button", { name: "摊位信息", exact: true }).click();
     await expect(page.locator(".info-panel")).toContainText(state.detail.wechat_payment.reason);
     await expect(page.locator(".info-panel")).not.toContainText("扫码");
+    await expect(page.locator(".info-panel")).not.toContainText("到摊付款");
     if (mode === "simulation") await expect(page.locator(".info-panel")).toContainText("不会真实扣款");
     expect(state.unexpected).toEqual([]);
   });
@@ -114,7 +115,7 @@ test("available simulated payment remains explicitly simulated and does not chan
   await page.goto("/stalls/1");
   await page.getByRole("button", { name: "位置与须知" }).click();
   await expect(page.locator(".stall-payment-status")).toContainText("模拟微信支付");
-  await expect(page.locator(".stall-payment-status")).toContainText("出餐后可模拟付款");
+  await expect(page.locator(".stall-payment-status")).toContainText("下单在线模拟预付");
   Object.assign(state.detail, { transaction_enabled: false, can_order: false, order_unavailable_reason: "仅提供找摊信息服务" });
   await page.reload();
   await expect(page.locator(".mobile-summary-warning")).toContainText("线下到访 · 暂未开通在线点单");
@@ -132,7 +133,7 @@ test("payment copy separates simulation from live across availability changes", 
   for (const mode of ["simulation", "live"]) {
     for (const available of [true, false]) {
       Object.assign(state.detail.wechat_payment, { mode, available,
-        reason: available ? "" : mode === "simulation" ? "当前模拟支付暂停，请到摊付款。" : "线上收款暂时不可用，请到摊付款。" });
+        reason: available ? "" : mode === "simulation" ? "当前模拟支付暂停，暂不可线上点单。" : "线上收款暂时不可用，暂不可线上点单。" });
       await page.goto("/stalls/1");
       await page.getByRole("button", { name: "摊位信息", exact: true }).click();
       const payment = page.locator('.info-panel dt:text-is("线上支付") + dd');
@@ -140,14 +141,14 @@ test("payment copy separates simulation from live across availability changes", 
       await page.screenshot({ path: info.outputPath(`${mode}-${available ? "available" : "unavailable"}-payment-info.png`), fullPage: true });
       if (mode === "simulation") {
         await expect(payment).toContainText("不会真实扣款");
-        await expect(payment).not.toContainText("订单页微信付款");
-        await expect(collection).not.toContainText("出餐后微信");
-        await expect(page.locator(".pickup-description")).not.toContainText("订单页微信付款");
+        await expect(payment).not.toContainText("微信在线预付");
+        await expect(collection).not.toContainText("微信预付");
+        await expect(page.locator(".pickup-description")).not.toContainText("微信预付");
         if (available) {
-          await expect(page.locator(".stall-payment-status strong")).toHaveText("出餐后可模拟付款");
-          await expect(payment).toContainText("出餐后可在订单页模拟付款");
-          await expect(collection).toContainText("模拟付款");
-          await expect(page.locator(".pickup-description")).toContainText("模拟付款");
+          await expect(page.locator(".stall-payment-status strong")).toHaveText("下单在线模拟预付");
+          await expect(payment).toContainText("模拟收银台");
+          await expect(collection).toContainText("模拟预付");
+          await expect(page.locator(".pickup-description")).toContainText("模拟预付");
         }
       } else {
         await expect(payment).not.toContainText("模拟");
@@ -155,23 +156,23 @@ test("payment copy separates simulation from live across availability changes", 
         await expect(collection).not.toContainText("模拟");
         await expect(page.locator(".stall-payment-status")).not.toContainText("模拟");
         if (available) {
-          await expect(page.locator(".stall-payment-status strong")).toHaveText("出餐后可线上付款");
-          await expect(payment).toContainText("出餐后可在订单页微信付款");
-          await expect(collection).toContainText("出餐后微信");
-          await expect(page.locator(".pickup-description")).toContainText("订单页微信付款");
+          await expect(page.locator(".stall-payment-status strong")).toHaveText("下单在线预付");
+          await expect(payment).toContainText("微信在线预付");
+          await expect(collection).toContainText("微信预付");
+          await expect(page.locator(".pickup-description")).toContainText("微信预付");
         }
       }
       if (!available) {
-        await expect(page.locator(".stall-payment-status strong")).toHaveText("当前不可用");
+        await expect(page.locator(".stall-payment-status strong")).toHaveText("支付暂未开通");
         await expect(payment).toContainText(state.detail.wechat_payment.reason);
-        await expect(collection).toContainText("到摊付款自取");
-        await expect(page.locator(".pickup-description")).toContainText("直接向商家付款");
+        await expect(collection).toContainText("线上支付尚未就绪，暂不接单");
+        await expect(page.locator(".pickup-description")).toContainText("线上支付开通后即可提前点单");
       }
       await page.setViewportSize({ width: 360, height: 844 });
       await expect(payment).toBeVisible();
       if (mode === "simulation") {
         await page.getByRole("button", { name: "位置与须知" }).click();
-        await expect(page.locator(".stall-payment-status")).toContainText(available ? "出餐后可模拟付款" : "当前不可用");
+        await expect(page.locator(".stall-payment-status")).toContainText(available ? "下单在线模拟预付" : "支付暂未开通");
       }
       await assertNoHorizontalOverflow(page);
       await page.setViewportSize({ width: 1440, height: 900 });

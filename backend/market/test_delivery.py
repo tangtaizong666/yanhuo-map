@@ -34,6 +34,7 @@ class DeliverySetup:
         self.point = DeliveryPoint.objects.create(area=self.stall.area, name='南门交接点', address='南门校外交接台',
             latitude=31.231, longitude=121.471, is_active=True)
         self.stall.delivery_enabled = self.stall.delivery_approved = True
+        self.stall.auto_accept_orders = False
         self.stall.delivery_min_order_cents = 800
         self.stall.delivery_starts_at, self.stall.delivery_ends_at = time(0), time(23, 59, 59)
         self.stall.save(); self.stall.delivery_points.add(self.point)
@@ -104,6 +105,18 @@ class DeliveryTests(DeliverySetup, TestCase):
         self.assertEqual(response.data['status'], 'completed')
         self.assertIsNotNone(response.data['arrived_at'])
         self.assertEqual(self.api.post(f'/api/v1/orders/{order.pk}/confirm-receipt').status_code, 409)
+
+    def test_auto_accept_delivery_advances_straight_to_preparing_on_payment(self):
+        self.stall.auto_accept_orders = True
+        self.stall.save(update_fields=['auto_accept_orders'])
+        order = self.create()
+        self.assertEqual(order.status, 'pending_payment')
+        self.pay(order)
+        self.assertEqual((order.status, order.payment_status, order.settlement_status), ('preparing', 'paid', 'escrow'))
+        self.assertIsNotNone(order.accepted_at)
+        self.assertIsNotNone(order.estimated_ready_at)
+        self.assertIsNotNone(order.delivery_eta_min_at)
+        self.assertIsNotNone(order.delivery_eta_max_at)
 
     def test_merchant_receipt_code_is_one_time_and_never_in_merchant_payload(self):
         order = self.create(); self.to_arrived(order)

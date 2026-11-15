@@ -70,25 +70,21 @@ def allowed_actions(order, *, merchant=False):
             actions += ['simulate_refund_success', 'simulate_refund_failure', 'simulate_refund_pending']
         if held:
             return actions
-        if order.status == 'pending' and order.expires_at > timezone.now() and (not delivery or order.payment_status == 'paid'):
+        if order.status == 'pending' and order.expires_at > timezone.now() and order.payment_status == 'paid':
             actions += ['accept', 'reject']
-        if order.status == 'preparing' and not order.cancel_requested and (not delivery or order.payment_status == 'paid'):
+        if order.status == 'preparing' and not order.cancel_requested and order.payment_status == 'paid':
             actions += ['update_prep', 'ready']
-        if order.cancel_requested and order.status in (('preparing', 'ready', 'delivering', 'arrived') if delivery else ('preparing', 'ready')):
-            actions.append('deny_cancel')
-            if order.payment_status in (('unpaid', 'paid') if delivery else ('unpaid',)):
-                actions.append('approve_cancel')
-        if not order.cancel_requested:
-            if not delivery and order.status == 'ready' and order.payment_status == 'unpaid' and order.payment_method == 'offline':
-                actions.append('confirm_payment')
-            if order.payment_status == 'paid':
-                if delivery and order.status in ('preparing', 'ready', 'delivering', 'arrived'):
-                    actions.append('resolve_delivery_issue' if order.delivery_issue else 'report_delivery_issue')
-                if not order.delivery_issue:
-                    if delivery and order.status == 'ready': actions.append('dispatch')
-                    if delivery and order.status == 'delivering': actions.append('arrive')
-                    if order.status == ('arrived' if delivery else 'ready'): actions.append('complete')
-        refundable = ('pending', 'preparing', 'ready', 'delivering', 'arrived', 'completed') if delivery else ('ready', 'completed')
+        if order.cancel_requested and order.status in (('preparing', 'ready', 'delivering', 'arrived') if delivery else ('preparing', 'ready')) and order.payment_status == 'paid':
+            actions += ['deny_cancel', 'approve_cancel']
+        if not order.cancel_requested and order.payment_status == 'paid':
+            if delivery and order.status in ('preparing', 'ready', 'delivering', 'arrived'):
+                actions.append('resolve_delivery_issue' if order.delivery_issue else 'report_delivery_issue')
+            if not order.delivery_issue:
+                if delivery and order.status == 'ready': actions.append('dispatch')
+                if delivery and order.status == 'delivering': actions.append('arrive')
+                if not delivery and order.status == 'ready': actions.append('complete_quick')
+                if order.status == ('arrived' if delivery else 'ready'): actions.append('complete')
+        refundable = ('pending', 'preparing', 'ready', 'delivering', 'arrived', 'completed') if delivery else ('pending', 'preparing', 'ready', 'completed')
         if order.status in refundable and order.payment_status == 'paid' and order.payment_method == 'wechat':
             actions.append('refund')
         return actions
@@ -98,16 +94,16 @@ def allowed_actions(order, *, merchant=False):
         actions.append('close_payment')
         if active_payment.mode == 'simulation' and eligible(order.stall) and active_payment.simulation_state not in ('SUCCESS', 'CLOSED'):
             actions.append('simulate_payment')
-    payable = order.status == ('pending_payment' if delivery else 'ready') and order.payment_status == 'unpaid' and not order.cancel_requested
+    payable = order.status == 'pending_payment' and order.payment_status == 'unpaid' and not order.cancel_requested
     if payable and order.mode == 'live':
         from .admission import online_payment_eligibility_reason
         payable = not online_payment_eligibility_reason(order.stall)
     if payable and not order.payment_review_required and not refunds:
         actions.append('pay')
     if not held:
-        if order.status not in ('completed', 'cancelled', 'rejected') and (order.payment_status == 'unpaid' or delivery and order.payment_status == 'paid'):
+        if order.status not in ('completed', 'cancelled', 'rejected') and order.payment_status in ('unpaid', 'paid') and not order.cancel_requested:
             actions.append('cancel')
-        if delivery and order.status == 'arrived' and order.payment_status == 'paid' and not order.cancel_requested and not order.delivery_issue:
+        if order.status == ('arrived' if delivery else 'ready') and order.payment_status == 'paid' and not order.cancel_requested and not (delivery and order.delivery_issue):
             actions.append('confirm_receipt')
     if pending and order.expires_at <= timezone.now():
         actions = [action for action in actions if action not in ('pay', 'accept')]

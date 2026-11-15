@@ -31,7 +31,13 @@ const configError = ref("");
 const cfgForm = reactive({
   stale_minutes: 60,
   pending_minutes: 15,
+  platform_fee_percent: 5,
+  auto_complete_ready_minutes: 120,
 });
+
+function money(cents: number | null | undefined) {
+  return `¥${((cents || 0) / 100).toFixed(2)}`;
+}
 
 const canRestoreDemoStalls = computed(
   () =>
@@ -52,12 +58,17 @@ watch(
     if (!cfg) return;
     cfgForm.stale_minutes = cfg.stale_minutes;
     cfgForm.pending_minutes = cfg.pending_minutes;
+    cfgForm.platform_fee_percent = Number(
+      ((cfg.platform_fee_bps ?? 500) / 100).toFixed(2),
+    );
+    cfgForm.auto_complete_ready_minutes =
+      cfg.auto_complete_ready_minutes ?? 120;
   },
   { immediate: true },
 );
 
 const workerLabels: Record<string, string> = {
-  expire_orders: "超时未接单自动关单",
+  expire_orders: "未付关单 / 未接退款 / 超时自动完结分账",
   reconcile_payments: "微信支付与退款对账",
   process_payment_notifications: "支付回调异步队列",
 };
@@ -73,14 +84,19 @@ async function saveConfig() {
   saving.value = true;
   configError.value = "";
   try {
+    const feeBps = Math.round(Number(cfgForm.platform_fee_percent) * 100);
     await api("/ops/overview", {
       method: "PATCH",
       body: {
         stale_minutes: Number(cfgForm.stale_minutes),
         pending_minutes: Number(cfgForm.pending_minutes),
+        platform_fee_bps: feeBps,
+        auto_complete_ready_minutes: Number(
+          cfgForm.auto_complete_ready_minutes,
+        ),
       },
     });
-    notify("全局风控与时效阈值已保存", "success");
+    notify("全局风控、分账费率与时效阈值已保存", "success");
     emit("refresh");
   } catch (e) {
     configError.value = (e as Error).message;
@@ -241,6 +257,58 @@ async function restoreDemoStalls() {
       </div>
     </section>
 
+    <section class="o-card" aria-label="平台分账营收总览">
+      <div class="o-card-header">
+        <div>
+          <h2>
+            平台服务商分账营收总览（默认费率
+            {{ ((data?.revenue?.platform_fee_bps ?? 500) / 100).toFixed(1) }}%）
+          </h2>
+          <p>
+            微信特约商户服务商分账（Profit Sharing）合规清分，不设平台二清资金池；当前按「{{
+              mode === "simulation" ? "演练体验记录" : "正式服务记录"
+            }}
+            · 近 {{ days }} 天」统计。
+          </p>
+        </div>
+        <span class="o-badge pine">
+          已付款 {{ data?.revenue?.paid_orders ?? 0 }} 单 · 已结算
+          {{ data?.revenue?.settled_orders ?? 0 }} 单
+        </span>
+      </div>
+
+      <div class="o-dl-grid">
+        <div class="o-dl-box">
+          <span>周期总成交额 GMV</span>
+          <strong>{{ money(data?.revenue?.gmv_cents) }}</strong>
+        </div>
+        <div class="o-dl-box">
+          <span>平台技术服务费（周期应计）</span>
+          <strong style="color: #b34c10">{{
+            money(data?.revenue?.platform_fee_cents)
+          }}</strong>
+        </div>
+        <div class="o-dl-box">
+          <span>已完结入账服务费</span>
+          <strong style="color: #245c43">{{
+            money(data?.revenue?.settled_platform_fee_cents)
+          }}</strong>
+        </div>
+        <div class="o-dl-box">
+          <span>商户分账净额（周期）</span>
+          <strong>{{ money(data?.revenue?.merchant_net_cents) }}</strong>
+        </div>
+        <div class="o-dl-box">
+          <span>履约中待分账总额（{{ data?.revenue?.escrow_orders ?? 0 }} 单）</span>
+          <strong>{{ money(data?.revenue?.escrow_total_cents) }}</strong>
+        </div>
+        <div class="o-dl-box">
+          <span>原路退款冲正额（{{ data?.revenue?.refunded_orders ?? 0 }} 单）</span>
+          <strong>{{ money(data?.revenue?.refunded_cents) }}</strong>
+        </div>
+      </div>
+    </section>
+
     <div class="o-two-col">
       <section class="o-card">
         <div class="o-card-header">
@@ -395,15 +463,44 @@ async function restoreDemoStalls() {
             <SlidersHorizontal
               :size="17"
               style="vertical-align: -3px; margin-right: 6px"
-            />全局营业与订单超时阈值
+            />全局分账费率、营业与订单超时阈值
           </h2>
           <p>
-            控制流动摊位置过期自动停单时长（默认 60 分钟）与新订单商家未接单自动释放库存时长。
+            控制平台技术服务费率（默认 5.0%）、流动摊位置过期停单、手动接单超时原路退款与出餐后超时自动完结结算时长。
           </p>
         </div>
       </div>
 
       <form class="o-form-grid" @submit.prevent="saveConfig">
+        <label class="o-field">
+          平台技术服务费率 %（0 - 30）
+          <input
+            v-model.number="cfgForm.platform_fee_percent"
+            type="number"
+            min="0"
+            max="30"
+            step="0.1"
+            class="o-input"
+            :disabled="!session.hasOpsPerm('manage_config') || saving"
+            required
+          />
+          <small>新创建订单默认分账抽佣比例；已在商户档案配置专属费率的商户优先按专属费率计算。</small>
+        </label>
+
+        <label class="o-field">
+          待取餐/已送达自动完结分钟数（15 - 1440）
+          <input
+            v-model.number="cfgForm.auto_complete_ready_minutes"
+            type="number"
+            min="15"
+            max="1440"
+            class="o-input"
+            :disabled="!session.hasOpsPerm('manage_config') || saving"
+            required
+          />
+          <small>已付款订单出餐或送达后无退款争议，超时未点完结将自动完成并触发分账结算（默认 120 分钟）。</small>
+        </label>
+
         <label class="o-field">
           位置过期停单分钟数（1 - 1440）
           <input
@@ -419,7 +516,7 @@ async function restoreDemoStalls() {
         </label>
 
         <label class="o-field">
-          待接单超时释放分钟数（1 - 60）
+          未付关单分钟数（1 - 60）
           <input
             v-model.number="cfgForm.pending_minutes"
             type="number"
@@ -429,7 +526,7 @@ async function restoreDemoStalls() {
             :disabled="!session.hasOpsPerm('manage_config') || saving"
             required
           />
-          <small>超过该时长商家未接单，订单可由定时任务自动过期并归还库存。</small>
+          <small>下单后超过该时长未完成线上付款自动关单释放库存；手动接单模式下已付款超 5 分钟未接单自动退款。</small>
         </label>
 
         <div class="span-2 o-actions-row">
