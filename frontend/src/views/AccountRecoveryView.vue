@@ -154,7 +154,7 @@ async function copyCode() {
 }
 </script>
 <template>
-  <main class="recovery-page">
+  <div class="recovery-page">
     <RouterLink
       class="back"
       :to="managing ? back : loginTarget"
@@ -296,7 +296,7 @@ async function copyCode() {
         />恢复码可重设密码，请像密码一样保管。使用、停用、重新生成或修改密码后，旧码都会失效。找回后所有设备需重新登录。
       </p>
     </section>
-  </main>
+  </div>
 </template>
 <style scoped>
 .recovery-page {
