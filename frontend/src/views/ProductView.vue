@@ -20,7 +20,11 @@ import {
 import { api, confirmedText, money, routeUrl, statusText } from "../lib/api";
 import { notify } from "../lib/notify";
 import type { Stall, Portion } from "../lib/types";
-import { normalizePortions, invalidPortions } from "../lib/portions";
+import {
+  normalizePortions,
+  invalidPortions,
+  specifiedPortions,
+} from "../lib/portions";
 import PortionEditor from "../components/PortionEditor.vue";
 import ReceivingNotice from "../components/ReceivingNotice.vue";
 import {
@@ -54,11 +58,15 @@ const productId = computed(() => Number(route.params.productId));
 const product = computed(() =>
   stall.value?.products.find((item) => item.id === productId.value),
 );
-const inCart = computed(
-  () =>
-    cart
-      .items(stallId.value)
-      .find((item) => item.product.id === productId.value)?.quantity || 0,
+const cartEntry = computed(() =>
+  cart.items(stallId.value).find((item) => item.product.id === productId.value),
+);
+const inCart = computed(() => cartEntry.value?.quantity || 0);
+const hasSavedPortions = computed(() =>
+  Boolean(
+    cartEntry.value &&
+      specifiedPortions(cartEntry.value.portions, cartEntry.value.quantity),
+  ),
 );
 const addedToCart = computed(() => justAdded.value && inCart.value > 0);
 watch(
@@ -319,7 +327,13 @@ onUnmounted(() => {
               :quantity="selected"
             />
             <div v-if="addedToCart" class="dish-added-feedback" role="status">
-              <span><Check :size="17" />已加入餐袋，口味与备注已保留</span>
+              <span
+                ><Check :size="17" />{{
+                  hasSavedPortions
+                    ? "已加入餐袋，口味与备注已保留"
+                    : "已加入餐袋"
+                }}</span
+              >
               <button v-if="canAdd" type="button" @click="justAdded = false">
                 再加这道餐点
               </button>
@@ -393,7 +407,13 @@ onUnmounted(() => {
                 </button>
               </div>
               <div v-if="addedToCart" class="dish-cart-line dish-added-actions">
-                <span><Check :size="14" />口味与备注已保留</span>
+                <span
+                  ><Check :size="14" />{{
+                    hasSavedPortions
+                      ? "口味与备注已保留"
+                      : "可在结算页补充口味与备注"
+                  }}</span
+                >
                 <RouterLink :to="`/stalls/${stallId}`"
                   >继续选餐<ChevronRight :size="14"
                 /></RouterLink>

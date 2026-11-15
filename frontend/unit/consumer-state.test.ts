@@ -237,4 +237,24 @@ describe("consumer account and draft boundaries", () => {
     ]);
     expect(remainingOrderQuantity([{ quantity: 12 }])).toBe(0);
   });
+  it("guest merge preserves distinct per-portion taste options and notes without overwriting", () => {
+    const session = useSession(),
+      cart = useCart();
+    cart.setQuantity(1, product(1), 2, [
+      { options: { 辣度: "微辣" }, note: "不要香菜" },
+      { options: {}, note: "加辣，少糖" },
+    ]);
+    session.user = user(1);
+    cart.setQuantity(1, product(1), 1, [
+      { options: {}, note: "账号原有备注" },
+    ]);
+    cart.mergeGuest();
+    expect(cart.guestCount).toBe(0);
+    expect(cart.items(1)[0].quantity).toBe(3);
+    expect(cart.items(1)[0].portions).toEqual([
+      { options: {}, note: "账号原有备注" },
+      { options: { 辣度: "微辣" }, note: "不要香菜" },
+      { options: {}, note: "加辣，少糖" },
+    ]);
+  });
 });

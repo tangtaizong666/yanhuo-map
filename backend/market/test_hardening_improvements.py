@@ -416,6 +416,21 @@ class SecurityCapacityAndThrottleHardeningTests(DeliverySetup, TestCase):
         self.assertEqual(err.status_code, 502)
         self.assertNotIn('secretjscode99', err.content.decode('utf-8').lower())
 
+        # SDK telemetry v3/log/init succeeds locally without deducting quota or calling upstream
+        quota_before = DailyQuotaCounter.objects.filter(scope='amap_proxy').values_list('count', flat=True).first() or 0
+        telemetry_url = '/api/v1/amap-proxy/_AMapService/v3/log/init'
+        with patch('market.proxy.urllib.request.build_opener', side_effect=AssertionError('must not call upstream')):
+            tel_ok = client.get(f'{telemetry_url}?callback=jsonp_123_', **headers)
+            tel_bad_cb = client.get(f'{telemetry_url}?callback=alert(1)', **headers)
+            tel_bad_origin = client.get(f'{telemetry_url}?callback=jsonp_123_', HTTP_ORIGIN='https://evil.example')
+        self.assertEqual(tel_ok.status_code, 200)
+        self.assertIn('application/javascript', tel_ok['Content-Type'])
+        self.assertIn(b'jsonp_123_', tel_ok.content)
+        self.assertEqual(tel_bad_cb.status_code, 400)
+        self.assertEqual(tel_bad_origin.status_code, 403)
+        quota_after = DailyQuotaCounter.objects.filter(scope='amap_proxy').values_list('count', flat=True).first() or 0
+        self.assertEqual(quota_after, quota_before)
+
     def test_pickup_lookup_five_failure_lockout_and_strict_four_digit_exhaustion(self):
         pickup_order, _ = create_order(self.student, payload(self.stall, self.product))
         pay_order_for_test(pickup_order, auto_accept=True)

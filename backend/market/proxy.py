@@ -67,7 +67,9 @@ def amap_proxy(request, upstream_path=''):
         raise BusinessError('地图请求路径无效。', 'invalid_map_path', status=400)
     allowed_prefixes = ('v3/ip', 'v3/geocode/', 'v3/direction/', 'v3/assistant/coordinate/', 'v3/place/', 'v3/config/',
                         'v4/map/styles', 'v4/ip', 'v4/direction/', 'v5/direction/', 'v5/place/')
-    if not upstream_path.startswith(allowed_prefixes): raise BusinessError('地图接口未开放。', status=400)
+    is_sdk_telemetry = (upstream_path == 'v3/log/init')
+    if not is_sdk_telemetry and not upstream_path.startswith(allowed_prefixes):
+        raise BusinessError('地图接口未开放。', status=400)
     source = request.headers.get('Origin') or request.headers.get('Referer')
     allowed_hosts = {request.get_host(), *[urllib.parse.urlparse(o).netloc for o in settings.CSRF_TRUSTED_ORIGINS]}
     if not source or urllib.parse.urlparse(source).netloc not in allowed_hosts:
@@ -78,6 +80,18 @@ def amap_proxy(request, upstream_path=''):
             raise BusinessError('地图请求参数无效。', status=400)
     if 'callback' in request.GET and not re.fullmatch(r'[A-Za-z_$][A-Za-z0-9_$.]{0,100}', request.GET['callback']):
         raise BusinessError('地图回调格式无效。', status=400)
+    if is_sdk_telemetry:
+        callback = request.GET.get('callback')
+        body = (
+            f'/**/typeof {callback}==="function"&&{callback}({{"status":"1","info":"OK"}});'
+            if callback else '{"status":"1","info":"OK"}'
+        )
+        content_type = 'application/javascript; charset=utf-8' if callback else 'application/json; charset=utf-8'
+        response = HttpResponse(body, content_type=content_type)
+        response['Cache-Control'] = 'private, no-store'
+        response['X-Content-Type-Options'] = 'nosniff'
+        response['Content-Security-Policy'] = "default-src 'none'; sandbox"
+        return response
     if not _proxy_slots.acquire(blocking=False):
         return JsonResponse({'detail': '地图服务繁忙，请稍后再试或使用列表找摊。', 'code': 'map_busy'}, status=503)
     try:
