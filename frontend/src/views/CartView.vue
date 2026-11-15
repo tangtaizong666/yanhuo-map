@@ -1248,26 +1248,27 @@ function acceptPrice(id: string, item: CartItem) {
 }
 @media (max-width: 520px) {
   .cart-page {
-    padding-top: 14px;
+    padding-top: 8px;
   }
   .cart-heading {
-    gap: 12px;
-    padding: 8px 0 14px;
+    gap: 10px;
+    padding: 2px 0 8px;
+    align-items: center;
   }
   .cart-heading .eyebrow {
     display: none;
   }
   .cart-heading h1 {
-    font-size: 26px;
+    font-size: 20px;
     margin: 0;
   }
   .cart-heading p {
     display: none;
   }
   .cart-heading-count {
-    padding: 11px;
-    gap: 7px;
-    border-radius: 13px;
+    padding: 6px 10px;
+    gap: 6px;
+    border-radius: 10px;
   }
   .cart-heading-count > svg {
     display: none;
@@ -1281,19 +1282,19 @@ function acceptPrice(id: string, item: CartItem) {
     white-space: nowrap;
   }
   .cart-stall-heading {
-    padding: 17px 15px 15px;
+    padding: 12px 13px 10px;
   }
   .cart-stall-heading h2 {
-    font-size: 16px;
+    font-size: 15px;
   }
   .cart-stall-link {
-    gap: 9px;
+    gap: 8px;
   }
   .cart-stall-link > img,
   .cart-stall-placeholder {
-    width: 41px;
-    height: 41px;
-    border-radius: 11px;
+    width: 36px;
+    height: 36px;
+    border-radius: 9px;
   }
   .cart-clear {
     gap: 3px;
@@ -1303,21 +1304,21 @@ function acceptPrice(id: string, item: CartItem) {
     display: none;
   }
   .cart-stall-alert {
-    padding: 10px 15px;
+    padding: 8px 13px;
     font-size: 11px;
   }
   .cart-items {
-    padding: 0 15px;
+    padding: 0 13px;
   }
   .cart-item {
-    grid-template-columns: 72px minmax(0, 1fr);
-    column-gap: 12px;
+    grid-template-columns: 64px minmax(0, 1fr);
+    column-gap: 10px;
     row-gap: 0;
-    padding: 17px 0;
+    padding: 11px 0;
   }
   .cart-food-photo {
-    width: 72px;
-    height: 72px;
+    width: 64px;
+    height: 64px;
     grid-row: 1 / 3;
     border-radius: 11px;
   }

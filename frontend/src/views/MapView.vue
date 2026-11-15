@@ -1110,10 +1110,11 @@ onUnmounted(() => {
   border: 0;
   background: none;
   color: #8a7964;
-  font-size: 11px;
+  font-size: 12px;
   margin-left: auto;
   min-height: 44px;
-  max-width: 88px;
+  max-width: none;
+  white-space: nowrap;
 }
 .map-result-count {
   display: flex;
@@ -1599,13 +1600,7 @@ onUnmounted(() => {
 }
 @media (max-width: 767px) {
   .map-page .page-heading {
-    margin-bottom: 18px;
-  }
-  .map-page .page-heading h1 {
-    font-size: 22px;
-  }
-  .map-page .eyebrow {
-    font-size: 8px;
+    display: none;
   }
   .locate-top {
     display: none;
@@ -1617,16 +1612,16 @@ onUnmounted(() => {
     border: 0;
     border-radius: 0;
     background: none;
-    gap: 18px;
+    gap: 10px;
     overflow: visible;
   }
   .map-canvas {
-    height: clamp(360px, 48dvh, 430px);
-    min-height: 360px;
-    border-radius: 18px;
+    height: clamp(216px, 34dvh, 260px);
+    min-height: 216px;
+    border-radius: 15px;
     overflow: hidden;
     border: 1px solid #e7dcc9;
-    box-shadow: 0 10px 26px rgba(60, 37, 20, 0.07);
+    box-shadow: 0 8px 20px rgba(60, 37, 20, 0.06);
   }
   .map-canvas.map-fallback {
     height: auto;
@@ -1636,7 +1631,7 @@ onUnmounted(() => {
   .map-canvas.has-active-route {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
     height: auto;
     min-height: 0;
     border: 0;
@@ -1647,11 +1642,11 @@ onUnmounted(() => {
   }
   .map-canvas.has-active-route .map-container {
     position: relative;
-    height: 280px;
-    border-radius: 18px;
+    height: 210px;
+    border-radius: 15px;
     overflow: hidden;
     border: 1px solid #e7dcc9;
-    box-shadow: 0 10px 26px rgba(60, 37, 20, 0.07);
+    box-shadow: 0 8px 20px rgba(60, 37, 20, 0.06);
   }
   .map-canvas.has-active-route .route-planner-card {
     position: relative;
@@ -1671,13 +1666,26 @@ onUnmounted(() => {
     background: none;
   }
   .map-list-controls {
-    padding: 0 0 12px;
+    padding: 0 0 8px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
   }
+  .map-list-controls .search-box,
   .map-list-controls :deep(.discovery-filters) {
-    margin-bottom: 0;
+    width: 100%;
+    margin: 0;
   }
   .map-list-controls .filter-chips {
-    margin-top: 0;
+    margin: 0;
+    order: 4;
+    margin-left: auto;
+  }
+  .map-list-controls .map-result-count {
+    margin: 0;
+    order: 3;
+    gap: 4px;
   }
   .map-results {
     padding: 0;

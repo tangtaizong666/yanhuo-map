@@ -347,7 +347,10 @@ onUnmounted(() => {
     min-width: 0;
   }
   .header-location select {
-    max-width: 84px;
+    max-width: 96px;
+  }
+  .header-location-chevron {
+    display: none;
   }
   .header-cart {
     position: relative;

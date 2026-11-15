@@ -45,7 +45,8 @@ defineEmits<{ follow: [stall: Stall] }>();
             Number(stall.rating) > 0 ? Number(stall.rating).toFixed(1) : "新摊"
           }}</span
         ><span>{{ stall.category }}</span
-        ><span v-if="stall.review_count">{{ stall.review_count }} 条评价</span
+        ><span v-if="stall.review_count" class="review-count-meta">{{ stall.review_count }} 条评价</span
+        ><span class="prep-inline">{{ preparationLabel(stall.prep_minutes) }}</span
         ><span v-if="stall.distance_m != null" class="distance">{{
           stall.distance_m >= 1000
             ? (stall.distance_m / 1000).toFixed(1) + "km"
@@ -74,7 +75,7 @@ defineEmits<{ follow: [stall: Stall] }>();
           ><b>¥{{ money(product.price_cents) }}</b></RouterLink
         >
       </div>
-      <div class="stall-bottom">
+      <div :class="['stall-bottom', { 'orderable-bottom': stall.can_order }]">
         <span
           :class="['fulfillment', { disabled: !stall.can_order }]"
           :title="stall.order_unavailable_reason"
@@ -356,37 +357,64 @@ defineEmits<{ follow: [stall: Stall] }>();
 .compact .fulfillment {
   display: inline-flex;
 }
+.prep-inline {
+  display: none;
+}
 @media (max-width: 767px) {
   .stall-card {
     display: grid;
-    grid-template-columns: 112px 1fr;
-    padding: 12px;
-    gap: 9px 13px;
-    border-radius: 15px;
+    grid-template-columns: 86px minmax(0, 1fr);
+    padding: 10px 11px;
+    gap: 6px 11px;
+    border-radius: 14px;
     overflow: visible;
+    align-items: start;
   }
   .stall-photo {
-    height: 112px;
+    width: 86px;
+    height: 86px;
     min-height: 0;
     border-radius: 10px;
   }
   .stall-photo .badge {
-    top: 6px;
-    left: 6px;
-    font-size: 12px;
-    padding: 4px 5px;
+    top: 4px;
+    left: 4px;
+    font-size: 10px;
+    padding: 2px 5px;
+    border-radius: 5px;
+    line-height: 1.2;
   }
-  .stall-body { display: contents; }
-  .stall-head-info { min-width: 0; padding-right: 34px; }
-  .compact .stall-head-info { padding-right: 0; }
-  .stall-menu-peek, .stall-bottom, .stall-receiving { grid-column: 1 / -1; }
-  .stall-menu-peek { margin-top: 0; }
-  .stall-desc { display: none; }
-  .prep-summary { font-size: 12px; margin: 7px 0 0; }
-  .prep-summary small { display: none; }
-  .stall-bottom { margin-top: 0; padding-top: 0; }
+  .stall-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 0;
+    min-width: 0;
+  }
+  .stall-head-info {
+    min-width: 0;
+    padding-right: 32px;
+  }
+  .compact .stall-head-info {
+    padding-right: 0;
+  }
+  .stall-desc,
+  .prep-summary,
+  .review-count-meta {
+    display: none;
+  }
+  .prep-inline {
+    display: inline;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .stall-title h3 {
-    font-size: 16px;
+    font-size: 15.5px;
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .stall-title > svg {
     display: none;
@@ -394,9 +422,9 @@ defineEmits<{ follow: [stall: Stall] }>();
   .follow-button {
     width: 44px;
     height: 44px;
-    top: 4px;
+    top: 2px;
     bottom: auto;
-    right: 4px;
+    right: 2px;
     background: none;
     color: #b9aa98;
   }
@@ -404,67 +432,76 @@ defineEmits<{ follow: [stall: Stall] }>();
     top: auto;
   }
   .stall-rating {
-    margin-top: 7px;
-    font-size: 12px;
+    margin-top: 3px;
+    font-size: 11.5px;
     gap: 6px;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
   }
   .stall-rating > span:not(:first-child):not(.distance) {
     padding-left: 6px;
   }
-  .stall-desc {
-    margin-top: 7px;
-    font-size: 12px;
-  }
   .stall-address {
-    font-size: 12px;
-    margin-top: 5px;
+    font-size: 11.5px;
+    margin-top: 3px;
+    color: #7c6f60;
+  }
+  .stall-menu-peek {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 5px;
+    margin-top: 0;
+  }
+  .stall-menu-peek a {
+    min-height: 26px;
+    padding: 3px 7px;
+    border-radius: 6px;
+    font-size: 11.5px;
+    flex: 0 1 auto;
+    max-width: calc(50% - 3px);
+  }
+  .stall-card:not(.compact) .stall-bottom.orderable-bottom {
+    display: none;
   }
   .stall-bottom {
     flex-wrap: wrap;
     padding-top: 0;
     margin-top: 0;
     justify-content: flex-start;
-    gap: 7px;
+    gap: 6px;
     border-top: 0;
   }
   .freshness {
-    font-size: 12px;
+    font-size: 11px;
   }
   .fulfillment {
-    font-size: 12px;
-    padding: 1px 3px;
+    font-size: 11px;
+    padding: 1px 5px;
   }
   .compact {
-    grid-template-columns: 90px 1fr;
+    grid-template-columns: 82px minmax(0, 1fr);
+    padding: 10px;
+    gap: 10px;
   }
   .compact .stall-photo {
-    height: 90px;
+    width: 82px;
+    height: 82px;
     min-height: 0;
   }
   .compact .stall-bottom {
-    padding-right: 18px;
+    padding-right: 34px;
   }
-  .stall-menu-peek {
-    gap: 5px;
-    margin-top: 0;
-  }
-  .stall-menu-peek a {
-    padding: 5px;
-    font-size: 12px;
-  }
-
 }
 @media (max-width: 370px) {
   .stall-card {
-    grid-template-columns: 98px 1fr;
-    gap: 10px;
-    padding: 10px;
+    grid-template-columns: 80px minmax(0, 1fr);
+    gap: 6px 9px;
+    padding: 9px 10px;
   }
   .stall-photo {
-    height: 98px;
-  }
-  .stall-rating > span:nth-child(3) {
-    display: none;
+    width: 80px;
+    height: 80px;
   }
 }
 </style>

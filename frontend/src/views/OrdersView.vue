@@ -841,46 +841,55 @@ function orderAction(order: any) {
     grid-template-columns: 1fr;
   }
 }
-@media (max-width: 600px) {
+@media (max-width: 767px) {
   .orders-page {
-    padding-top: 23px;
+    padding-top: 8px;
   }
+  .orders-page .page-heading {
+    margin-bottom: 8px;
+  }
+  .orders-page .page-heading .eyebrow,
+  .orders-page .page-heading p,
   .page-heading > .btn {
     display: none;
   }
+  .orders-page .page-heading h1 {
+    font-size: 20px;
+    margin: 0;
+  }
   .active-notice {
-    padding: 13px;
+    padding: 8px 11px;
     font-size: 12px;
-    margin-bottom: 20px;
+    margin-bottom: 10px;
   }
   .active-notice > .muted {
     display: none;
   }
   .orders-toolbar {
     gap: 4px;
-    margin-bottom: 20px;
+    margin-bottom: 10px;
   }
   .tabs {
     gap: 1px;
   }
   .tabs button {
     font-size: 12px;
-    padding: 11px 10px;
+    padding: 9px 10px;
   }
   .refresh-button {
     border: 0;
     min-width: 44px;
   }
   .order-card {
-    padding: 19px;
+    padding: 13px 14px;
   }
   .order-food {
-    gap: 11px;
-    padding: 20px 0;
+    gap: 10px;
+    padding: 10px 0;
   }
   .order-food img {
-    width: 62px;
-    height: 62px;
+    width: 54px;
+    height: 54px;
   }
   .order-amount {
     font-size: 16px;

@@ -108,10 +108,14 @@ test("dish cards prioritize names and prices without inventing descriptions at f
       "现摊鸡蛋饼，配菜清爽。",
     );
     await expect(first).toContainText("暂无餐点照片");
-    await expect(first).toContainText("可以点单 · 自取");
+    if (width >= 768) {
+      await expect(first).toContainText("可以点单 · 自取");
+      await expect(first).toContainText("接单后更新");
+    } else {
+      await expect(first.locator(".dish-availability.available")).toBeHidden();
+    }
     await expect(offline).toContainText("到摊选购");
     await expect(first).toContainText("通常备餐约 8 分钟");
-    await expect(first).toContainText("接单后更新");
     await expect(first).not.toContainText("点开看看这份好味道");
     await expect(first).not.toContainText("查看餐点");
     await expect(first).toHaveAttribute("href", "/stalls/91/products/911");

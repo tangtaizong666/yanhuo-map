@@ -95,6 +95,12 @@ async function fixture(page: Page, publicBase = "") {
 }
 
 async function expandArrivalUtilities(page: Page) {
+  const drawerToggle = page.getByRole("button", { name: "位置与须知" });
+  if (await drawerToggle.isVisible()) {
+    if ((await drawerToggle.getAttribute("aria-expanded")) === "false") {
+      await drawerToggle.click();
+    }
+  }
   const visit = page.getByRole("region", { name: "到摊指引" });
   await expect(visit).toBeVisible();
   const more = visit.getByRole("button", { name: "联系与更多信息" });
@@ -234,10 +240,7 @@ test("local QR explicitly warns about reachability and the dialog fits mobile an
   await share.getByRole("button", { name: "关闭分享" }).click();
   await expect(page.getByRole("button", { name: "分享小摊", exact: true })).toBeFocused();
   await page.setViewportSize({ width: 360, height: 900 });
-  await expect(page.getByRole("button", { name: /^(联系与更多信息|收起辅助信息)$/ })).toBeVisible();
-  const collapse = page.getByRole("button", { name: "收起辅助信息" });
-  if (await collapse.isVisible()) await collapse.click();
-  await expect(page.getByRole("button", { name: "联系与更多信息" })).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByRole("button", { name: "位置与须知" })).toHaveAttribute("aria-expanded", "false");
   for (const closeWith of ["button", "escape"]) {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.getByRole("button", { name: "分享小摊", exact: true }).click();
@@ -247,7 +250,7 @@ test("local QR explicitly warns about reachability and the dialog fits mobile an
     if (closeWith === "button") await share.getByRole("button", { name: "关闭分享" }).click();
     else await page.keyboard.press("Escape");
     await expect(share).toBeHidden();
-    await expect(page.getByRole("button", { name: "联系与更多信息" })).toBeFocused();
+    await expect(page.getByRole("button", { name: "位置与须知" })).toBeFocused();
   }
 });
 
@@ -277,8 +280,10 @@ test("arrival guidance stays honest without coordinates or photos, includes repo
   for (const width of [360, 390, 768, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     await assertNoHorizontalOverflow(page);
-    if (width === 390 || width === 1440)
+    if (width === 390 || width === 1440) {
+      if (width === 390) await expandArrivalUtilities(page);
       await visit.screenshot({ path: info.outputPath(`visit-${width}.png`) });
+    }
   }
 });
 

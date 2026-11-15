@@ -43,6 +43,13 @@ const portions = ref<Portion[]>([]);
 const justAdded = ref(false);
 const stallId = computed(() => Number(route.params.id));
 const { target: returnTarget, label: returnLabel, go: returnToSource } = useDetailReturn(() => `/stalls/${stallId.value}`, "返回小摊");
+const mobileQuery = window.matchMedia("(max-width: 767px)");
+const mobileLayout = ref(mobileQuery.matches);
+const updateMobileLayout = () => {
+  mobileLayout.value = mobileQuery.matches;
+};
+onMounted(() => mobileQuery.addEventListener("change", updateMobileLayout));
+onUnmounted(() => mobileQuery.removeEventListener("change", updateMobileLayout));
 const productId = computed(() => Number(route.params.productId));
 const product = computed(() =>
   stall.value?.products.find((item) => item.id === productId.value),
@@ -301,39 +308,9 @@ onUnmounted(() => {
             {{ product.description }}
           </p>
 
-          <div class="dish-visit">
-            <RouterLink :to="`/stalls/${stallId}`" class="dish-stall-link">
-              <Store :size="18" /><strong>{{ stall.name }}</strong>
-              <span>看菜单<ChevronRight :size="15" /></span>
-            </RouterLink>
-            <div class="dish-location-fact">
-              <MapPin :size="18" /><span
-                ><strong>{{ stall.address || "商家暂未提供具体地址" }}</strong
-                ><small>{{
-                  confirmedText(stall.last_confirmed_at)
-                }}</small></span
-              ><RouterLink
-                v-if="
-                  stall.address &&
-                  Number.isFinite(stall.latitude) &&
-                  Number.isFinite(stall.longitude)
-                "
-                class="dish-directions"
-                :to="
-                  routeUrl(stall.latitude, stall.longitude, stall.name, {
-                    stallId: stall.id,
-                    address: stall.address,
-                  })
-                "
-                >路线<ArrowUpRight :size="15"
-              /></RouterLink>
-            </div>
-          </div>
-
           <p v-if="unavailable" class="dish-unavailable" role="status">
             <AlertCircle :size="18" />{{ unavailable }}
           </p>
-          <ReceivingNotice :stall="stall" compact />
           <form class="dish-purchase-panel" @submit.prevent="addToCart">
             <PortionEditor
               v-if="canAdd && !addedToCart"
@@ -347,18 +324,6 @@ onUnmounted(() => {
                 再加这道餐点
               </button>
             </div>
-            <details
-              v-if="canAdd && !addedToCart"
-              class="dish-rules-disclosure"
-            >
-              <summary>
-                <span>点单须知 · 当前还可加入 {{ capacity }} 份</span>
-                <ChevronDown :size="14" class="dish-rules-chevron" />
-              </summary>
-              <p class="dish-allowance">
-                同一摊位单笔订单合计最多 10 份；提交订单时核对实时库存与价格，自取订单出餐后再付款。
-              </p>
-            </details>
             <div
               class="dish-action-bar"
               :aria-label="
@@ -447,6 +412,47 @@ onUnmounted(() => {
               </div>
             </div>
           </form>
+
+          <div class="dish-visit">
+            <RouterLink :to="`/stalls/${stallId}`" class="dish-stall-link">
+              <Store :size="17" /><strong>{{ stall.name }}</strong>
+              <span>看菜单<ChevronRight :size="15" /></span>
+            </RouterLink>
+            <details class="dish-rules-disclosure dish-more-disclosure" :open="!mobileLayout">
+              <summary>
+                <span>位置、路线与点单须知</span>
+                <ChevronDown :size="14" class="dish-rules-chevron" />
+              </summary>
+              <div class="dish-more-body">
+                <div class="dish-location-fact">
+                  <MapPin :size="16" /><span
+                    ><strong>{{ stall.address || "商家暂未提供具体地址" }}</strong
+                    ><small>{{
+                      confirmedText(stall.last_confirmed_at)
+                    }}</small></span
+                  ><RouterLink
+                    v-if="
+                      stall.address &&
+                      Number.isFinite(stall.latitude) &&
+                      Number.isFinite(stall.longitude)
+                    "
+                    class="dish-directions"
+                    :to="
+                      routeUrl(stall.latitude, stall.longitude, stall.name, {
+                        stallId: stall.id,
+                        address: stall.address,
+                      })
+                    "
+                    >路线<ArrowUpRight :size="15"
+                  /></RouterLink>
+                </div>
+                <ReceivingNotice :stall="stall" compact />
+                <p v-if="canAdd" class="dish-allowance">
+                  当前还可加入 {{ capacity }} 份；同一摊位单笔订单合计最多 10 份，提交时自动核对实时库存与价格。
+                </p>
+              </div>
+            </details>
+          </div>
           <div class="dish-contact-note">
             <span>忌口或配料需求，请先向商家确认。</span>
             <a v-if="stall.contact_phone" :href="`tel:${stall.contact_phone}`"
@@ -945,70 +951,87 @@ onUnmounted(() => {
 }
 @media (max-width: 767px) {
   .dish-page {
-    padding-top: 8px;
-    padding-bottom: calc(150px + env(safe-area-inset-bottom));
+    padding-top: 6px;
+    padding-bottom: calc(136px + env(safe-area-inset-bottom));
   }
   .dish-breadcrumb {
-    gap: 10px;
-    margin-bottom: 8px;
+    gap: 8px;
+    margin-bottom: 6px;
     font-size: 12px;
   }
   .dish-breadcrumb > span {
-    gap: 10px;
+    gap: 8px;
   }
   .dish-layout {
     display: block;
   }
   .dish-photo {
-    aspect-ratio: 1.48;
-    border-radius: 16px;
-    margin-bottom: 16px;
+    aspect-ratio: 16 / 9;
+    max-height: 188px;
+    border-radius: 14px;
+    margin-bottom: 10px;
   }
   .dish-photo-category {
-    top: 12px;
-    left: 12px;
-    padding: 6px 10px;
-    font-size: 11px;
+    top: 8px;
+    left: 8px;
+    padding: 4px 8px;
+    font-size: 10.5px;
   }
   .dish-photo figcaption {
-    left: 12px;
-    bottom: 12px;
+    left: 8px;
+    bottom: 8px;
+    font-size: 10px;
+    padding: 2px 6px;
   }
   .dish-summary h1 {
-    font-size: 26px;
+    font-size: 20px;
+    line-height: 1.3;
   }
   .dish-title-top .badge {
-    margin-top: 5px;
+    margin-top: 2px;
+    font-size: 10.5px;
+    padding: 2px 7px;
   }
   .dish-price-line {
-    margin: 10px 0 14px;
+    margin: 4px 0 8px;
   }
   .dish-price-line > strong {
-    font-size: 30px;
+    font-size: 24px;
   }
   .dish-decision-facts {
-    gap: 10px;
-    padding: 12px 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+    padding: 7px 10px;
+    border: 0;
+    border-radius: 9px;
+    background: #faf4ea;
   }
   .dish-decision-facts > div {
-    gap: 6px;
+    gap: 5px;
+    align-items: center;
+  }
+  .dish-decision-facts svg {
+    width: 14px;
+    height: 14px;
+    margin-top: 0;
   }
   .dish-decision-facts strong {
-    font-size: 13px;
-  }
-  .dish-decision-facts small {
     font-size: 12px;
   }
-  .dish-description {
-    font-size: 13px;
-    line-height: 1.7;
-    margin: 12px 0 8px;
+  .dish-decision-facts small {
+    display: none;
   }
-  .dish-visit {
+  .dish-description {
+    font-size: 12.5px;
+    line-height: 1.55;
     margin: 8px 0;
   }
+  .dish-visit {
+    margin: 8px 0 6px;
+  }
   .dish-purchase-panel {
-    margin-top: 10px;
+    margin-top: 8px;
   }
   .dish-action-bar {
     position: fixed;
@@ -1085,9 +1108,29 @@ onUnmounted(() => {
 .dish-rules-disclosure[open] .dish-rules-chevron {
   transform: rotate(180deg);
 }
+.dish-more-disclosure {
+  border-top: 1px dashed #eadbc6;
+  border-left: 0;
+  border-right: 0;
+  border-bottom: 0;
+  border-radius: 0;
+  background: transparent;
+  margin: 0;
+  padding: 0 14px;
+}
+.dish-more-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 10px;
+}
+.dish-more-body .dish-location-fact {
+  padding: 0;
+  border-top: 0;
+}
 .dish-rules-disclosure .dish-allowance {
   margin: 0;
-  padding: 0 0 10px;
+  padding: 0;
   line-height: 1.6;
 }
 </style>

@@ -63,6 +63,7 @@ useBrowseReturn({
 const { target: returnTarget, label: returnLabel, go: returnToSource } = useDetailReturn(() => "/", "返回附近摊位");
 const mobileQuery = window.matchMedia("(max-width: 767px)");
 const mobileLayout = ref(mobileQuery.matches);
+const mobileDetailsOpen = ref(false);
 const updateLayout = () => {
   mobileLayout.value = mobileQuery.matches;
 };
@@ -132,6 +133,7 @@ function start() {
 }
 watch([id, () => session.user?.id], () => {
   stall.value = null;
+  mobileDetailsOpen.value = false;
   start();
 });
 let resumeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -214,27 +216,25 @@ onUnmounted(() => {
         :class="{ 'visit-only': !stall.transaction_enabled }"
       >
         <div class="stall-main">
-          <section class="stall-arrival" aria-label="认摊与路线">
-            <StallVisitInfo :stall="stall" :condensed="mobileLayout">
-              <div class="stall-share-entry"><StallShare :stall="stall" /></div>
-            </StallVisitInfo>
-          </section>
-          <section class="stall-overview card">
-            <div class="overview-top">
-              <div class="overview-rating">
-                <Star :size="17" fill="currentColor" /><b>{{
+          <section
+            v-if="mobileLayout"
+            class="stall-mobile-summary card"
+            aria-label="店铺位置与须知"
+          >
+            <div class="mobile-summary-row1">
+              <span :class="['badge', stall.status]">{{
+                statusText(stall.status)
+              }}</span>
+              <span class="overview-rating mobile-rating">
+                <Star :size="13" fill="currentColor" /><b>{{
                   Number(stall.rating) > 0
                     ? Number(stall.rating).toFixed(1)
                     : "新摊"
-                }}</b
-                ><span>{{ stall.review_count }} 条评价</span>
-              </div>
-              <span :class="['badge', stall.status]">{{
-                statusText(stall.status)
-              }}</span
-              ><span class="freshness-text">{{
+                }}</b>
+              </span>
+              <span class="mobile-summary-meta">{{
                 stall.can_order
-                  ? "可线上点单"
+                  ? `约 ${stall.prep_minutes} 分钟 · ${stall.delivery?.available ? `自取/可送¥${money(stall.delivery.fee_cents)}` : "到摊自取"}`
                   : stall.transaction_enabled &&
                       stall.status === "open" &&
                       stall.accepting_orders === false
@@ -243,88 +243,168 @@ onUnmounted(() => {
                       ? "暂不可线上点单"
                       : "线下到访"
               }}</span>
+              <button
+                type="button"
+                class="mobile-summary-toggle"
+                :aria-expanded="mobileDetailsOpen"
+                aria-controls="stall-mobile-drawer"
+                @click="mobileDetailsOpen = !mobileDetailsOpen"
+              >
+                <span>{{ mobileDetailsOpen ? "收起详情" : "位置与须知" }}</span>
+                <ChevronDown
+                  :size="14"
+                  :class="['overview-more-chevron', { rotated: mobileDetailsOpen }]"
+                />
+              </button>
             </div>
-            <div class="overview-facts">
-              <div v-if="stall.can_order">
-                <Clock3 :size="16" /><span
-                  >预计 {{ stall.prep_minutes }} 分钟备餐</span
-                >
-              </div>
-              <div>
-                <ShieldCheck :size="16" /><span>{{
+            <div class="mobile-summary-row2">
+              <MapPin :size="13" class="mobile-pin" />
+              <strong class="mobile-summary-address">{{
+                stall.address || "商家暂未提供位置"
+              }}</strong>
+              <RouterLink
+                v-if="
+                  Number.isFinite(stall.latitude) &&
+                  Number.isFinite(stall.longitude)
+                "
+                class="mobile-route-chip"
+                :to="
+                  routeUrl(stall.latitude, stall.longitude, stall.name, {
+                    stallId: stall.id,
+                    address: stall.address,
+                  })
+                "
+              >
+                <Navigation :size="12" />查看路线
+              </RouterLink>
+            </div>
+            <p
+              v-if="!stall.can_order || stall.status !== 'open'"
+              class="mobile-summary-warning"
+            >
+              <AlertCircle :size="14" /><span>{{
+                stall.status === "stale"
+                  ? "位置已过期，请先联系商家确认再出发。"
+                  : stall.status === "closed"
+                    ? "商家已收摊，下次出摊后再来。"
+                    : stall.status === "paused"
+                      ? "商家正在暂歇，出发前请先确认。"
+                      : !stall.transaction_enabled
+                        ? "线下到访 · 暂未开通在线点单"
+                        : availability || "当前暂不接线上新单"
+              }}</span>
+            </p>
+          </section>
+          <div
+            id="stall-mobile-drawer"
+            v-show="!mobileLayout || mobileDetailsOpen"
+            :class="mobileLayout ? 'mobile-summary-drawer card' : 'desktop-store-details'"
+          >
+            <p v-if="mobileLayout && stall.description" class="mobile-drawer-desc">
+              {{ stall.description }}
+            </p>
+            <section class="stall-arrival" aria-label="认摊与路线">
+              <StallVisitInfo :stall="stall" :condensed="mobileLayout">
+                <div class="stall-share-entry"><StallShare :stall="stall" /></div>
+              </StallVisitInfo>
+            </section>
+            <section class="stall-overview card">
+              <div v-if="!mobileLayout" class="overview-top">
+                <div class="overview-rating">
+                  <Star :size="17" fill="currentColor" /><b>{{
+                    Number(stall.rating) > 0
+                      ? Number(stall.rating).toFixed(1)
+                      : "新摊"
+                  }}</b
+                  ><span>{{ stall.review_count }} 条评价</span>
+                </div>
+                <span :class="['badge', stall.status]">{{
+                  statusText(stall.status)
+                }}</span
+                ><span class="freshness-text">{{
                   stall.can_order
-                    ? "支持线上点单 · 到摊自取"
-                    : stall.transaction_enabled
-                      ? availability || "当前暂不接线上新单"
-                      : "线下到访 · 暂未开通在线点单"
+                    ? "可线上点单"
+                    : stall.transaction_enabled &&
+                        stall.status === "open" &&
+                        stall.accepting_orders === false
+                      ? "线上接单暂停"
+                      : stall.transaction_enabled
+                        ? "暂不可线上点单"
+                        : "线下到访"
                 }}</span>
               </div>
-              <div
-                v-if="
-                  stall.transaction_enabled &&
-                  (!mobileLayout ||
-                    stall.wechat_payment?.available ||
-                    stall.wechat_payment?.mode === 'simulation')
-                "
-                class="stall-payment-status"
-                :class="{ unavailable: !stall.wechat_payment?.available }"
-              >
-                <CreditCard :size="16" /><span>{{
-                  stall.wechat_payment?.mode === "simulation"
-                    ? "模拟微信支付"
-                    : "微信支付"
-                }}</span
-                ><strong>{{
-                  stall.wechat_payment?.available
-                    ? stall.wechat_payment.mode === "simulation"
-                      ? "出餐后可模拟付款"
-                      : "出餐后可线上付款"
-                    : "当前不可用"
-                }}</strong
-                ><span v-if="!stall.wechat_payment?.available"
-                  >到摊付款</span
-                >
-              </div>
-              <details
-                v-if="
-                  stall.transaction_enabled &&
-                  (!mobileLayout ||
-                    stall.delivery?.available ||
-                    stall.delivery?.mode === 'simulation')
-                "
-                class="overview-more-details"
-                :open="!mobileLayout"
-              >
-                <summary>
-                  <span>配送与点单说明</span>
-                  <small>{{
-                    stall.delivery?.available
-                      ? `可送校园交接点 · 配送费 ¥${money(stall.delivery.fee_cents)}`
-                      : "仅自取 · 单次最多 10 份"
-                  }}</small>
-                  <ChevronDown :size="14" class="overview-more-chevron" />
-                </summary>
-                <div class="overview-more-body">
-                  <div class="stall-delivery-status">
-                    <MapPin :size="15" /><strong>{{
-                      stall.delivery?.mode === "simulation"
-                        ? "模拟商家配送"
-                        : "商家配送"
-                    }}</strong
-                    ><span>{{
-                      stall.delivery?.available
-                        ? `配送费 ¥${money(stall.delivery.fee_cents)} · 送至校园交接点`
-                        : "暂未开放 · 请到摊自取"
-                    }}</span>
-                  </div>
-                  <p class="overview-rule-line">
-                    同一摊位一单合计最多 10 份；点餐页显示状态供参考，提交订单时自动核对实时余量与价格。
-                  </p>
+              <div class="overview-facts">
+                <div v-if="stall.can_order">
+                  <Clock3 :size="16" /><span
+                    >预计 {{ stall.prep_minutes }} 分钟备餐</span
+                  >
                 </div>
-              </details>
-            </div>
-          </section>
-          <ReceivingNotice :stall="stall" />
+                <div>
+                  <ShieldCheck :size="16" /><span>{{
+                    stall.can_order
+                      ? "支持线上点单 · 到摊自取"
+                      : stall.transaction_enabled
+                        ? availability || "当前暂不接线上新单"
+                        : "线下到访 · 暂未开通在线点单"
+                  }}</span>
+                </div>
+                <div
+                  v-if="stall.transaction_enabled"
+                  class="stall-payment-status"
+                  :class="{ unavailable: !stall.wechat_payment?.available }"
+                >
+                  <CreditCard :size="16" /><span>{{
+                    stall.wechat_payment?.mode === "simulation"
+                      ? "模拟微信支付"
+                      : "微信支付"
+                  }}</span
+                  ><strong>{{
+                    stall.wechat_payment?.available
+                      ? stall.wechat_payment.mode === "simulation"
+                        ? "出餐后可模拟付款"
+                        : "出餐后可线上付款"
+                      : "当前不可用"
+                  }}</strong
+                  ><span v-if="!stall.wechat_payment?.available"
+                    >到摊付款</span
+                  >
+                </div>
+                <details
+                  v-if="stall.transaction_enabled"
+                  class="overview-more-details"
+                  open
+                >
+                  <summary>
+                    <span>配送与点单说明</span>
+                    <small>{{
+                      stall.delivery?.available
+                        ? `可送校园交接点 · 配送费 ¥${money(stall.delivery.fee_cents)}`
+                        : "仅自取 · 单次最多 10 份"
+                    }}</small>
+                    <ChevronDown :size="14" class="overview-more-chevron" />
+                  </summary>
+                  <div class="overview-more-body">
+                    <div class="stall-delivery-status">
+                      <MapPin :size="15" /><strong>{{
+                        stall.delivery?.mode === "simulation"
+                          ? "模拟商家配送"
+                          : "商家配送"
+                      }}</strong
+                      ><span>{{
+                        stall.delivery?.available
+                          ? `配送费 ¥${money(stall.delivery.fee_cents)} · 送至校园交接点`
+                          : "暂未开放 · 请到摊自取"
+                      }}</span>
+                    </div>
+                    <p class="overview-rule-line">
+                      同一摊位一单合计最多 10 份；点餐页显示状态供参考，提交订单时自动核对实时余量与价格。
+                    </p>
+                  </div>
+                </details>
+              </div>
+            </section>
+            <ReceivingNotice :stall="stall" />
+          </div>
           <nav class="tabs detail-tabs">
             <button :class="{ active: tab === 'menu' }" @click="tab = 'menu'">
               小摊菜单</button
@@ -1171,8 +1251,8 @@ onUnmounted(() => {
 }
 @media (max-width: 767px) {
   .stall-page {
-    padding-top: 12px;
-    padding-bottom: 90px;
+    padding-top: 8px;
+    padding-bottom: 84px;
   }
   .back-link {
     font-size: 12px;
@@ -1182,96 +1262,191 @@ onUnmounted(() => {
     margin-bottom: 4px;
   }
   .stall-hero {
-    height: 148px;
+    height: 88px;
     margin: 0;
-    border-radius: 16px;
+    border-radius: 14px;
   }
   .stall-hero-caption {
-    left: 20px;
-    bottom: 18px;
-    right: 20px;
-    padding-right: 104px;
+    left: 14px;
+    bottom: 12px;
+    right: 14px;
+    padding-right: 92px;
   }
   .stall-hero-caption > span {
-    font-size: 9px;
-    letter-spacing: 1px;
+    font-size: 10px;
+    letter-spacing: 0.4px;
   }
   .stall-hero-caption h1 {
-    font-size: 26px;
-    margin-top: 6px;
+    font-size: 20px;
+    margin-top: 3px;
+    line-height: 1.25;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .stall-hero-caption p {
-    font-size: 12px;
-    margin-top: 6px;
-    max-width: 67%;
-    line-height: 1.6;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
+    display: none;
   }
   .hero-follow {
-    right: 18px;
-    bottom: 26px;
+    right: 12px;
+    bottom: 12px;
     min-height: 44px;
     font-size: 12px;
-    padding: 7px 10px;
-    gap: 5px;
+    padding: 0 11px;
+    gap: 4px;
   }
   .hero-follow svg {
     width: 14px;
   }
   .demo-image-label {
     font-size: 8px;
-    right: 14px;
-    top: 12px;
+    right: 12px;
+    top: 8px;
+    padding: 2px 6px;
   }
   .stall-layout {
     display: block;
-    margin-top: 14px;
+    margin-top: 8px;
   }
   .pickup-aside {
     display: none;
   }
-  .stall-overview {
-    padding: 15px;
+  .stall-mobile-summary {
+    padding: 10px 12px;
+    border-radius: 13px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .mobile-summary-row1 {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .mobile-summary-row1 .badge {
+    font-size: 10px;
+    padding: 2px 7px;
+    flex-shrink: 0;
+  }
+  .mobile-rating {
+    gap: 2px;
+    flex-shrink: 0;
+  }
+  .mobile-rating b {
+    font-size: 13px;
+  }
+  .mobile-summary-meta {
+    font-size: 12px;
+    color: #6b5640;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+  .mobile-summary-toggle {
+    margin: -8px -4px -8px auto;
+    min-height: 44px;
+    padding: 0 6px;
+    border: 0;
+    background: transparent;
+    color: #7d634a;
+    font-size: 12px;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    flex-shrink: 0;
+    cursor: pointer;
+  }
+  .overview-more-chevron.rotated {
+    transform: rotate(180deg);
+  }
+  .mobile-summary-row2 {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+  }
+  .mobile-pin {
+    flex-shrink: 0;
+    color: var(--orange-dark);
+  }
+  .mobile-summary-address {
+    font-size: 12px;
+    font-weight: 600;
+    color: #3f2f22;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+    flex: 1;
+  }
+  .mobile-route-chip {
+    margin: -7px -2px -7px 4px;
+    min-height: 44px;
+    padding: 0 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--orange-dark);
+    flex-shrink: 0;
+    text-decoration: none;
+  }
+  .mobile-summary-warning {
+    margin: 2px 0 0;
+    padding: 6px 9px;
+    border-radius: 8px;
+    background: #fff2e8;
+    color: #9e421b;
+    font-size: 12px;
+    line-height: 1.4;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .mobile-summary-warning svg {
+    flex-shrink: 0;
+  }
+  .mobile-summary-drawer {
+    margin-top: 8px;
+    padding: 12px;
+    border-radius: 13px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .mobile-summary-drawer .stall-overview {
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: #faf5ec;
+    border: 1px solid #efe3d2;
+    box-shadow: none;
+  }
+  .mobile-summary-drawer .overview-facts {
+    margin-top: 0;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 7px;
+  }
+  .mobile-drawer-desc {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.6;
+    color: #6e5a46;
   }
   .stall-arrival {
-    margin-bottom: 12px;
+    margin-bottom: 0;
   }
   .stall-arrival :deep(.stall-visit) {
     margin: 0;
-    padding: 16px;
-    border-radius: 14px;
+    padding: 12px;
+    border-radius: 12px;
   }
   .stall-arrival :deep(.visit-photo img) {
-    max-height: 180px;
-  }
-  .overview-top {
-    gap: 8px;
-  }
-  .overview-rating b {
-    font-size: 16px;
-  }
-  .overview-rating svg {
-    width: 14px;
-  }
-  .overview-rating > span {
-    font-size: 10px;
-  }
-  .freshness-text {
-    font-size: 9px;
-    margin-left: auto;
-  }
-  .overview-top .badge {
-    font-size: 9px;
-    padding: 4px 6px;
-  }
-  .overview-facts {
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 10px;
+    max-height: 150px;
   }
   .overview-facts > div {
     font-size: 12px;
@@ -1281,37 +1456,43 @@ onUnmounted(() => {
     width: 14px;
   }
   .detail-tabs {
-    margin-top: 12px;
+    margin-top: 6px;
   }
   .detail-tabs button {
     font-size: 13px;
-    margin-right: 17px;
-    padding: 13px 8px;
+    margin-right: 16px;
+    padding: 9px 6px;
+    min-height: 40px;
   }
-  .menu-intro h2 {
-    font-size: 15px;
-  }
-  .menu-intro > span {
-    font-size: 10px;
+  .menu-intro {
+    display: none;
   }
   .product-row {
-    gap: 12px;
-    padding: 16px 0;
+    gap: 11px;
+    padding: 10px 0;
   }
   .product-image {
-    width: 88px;
-    height: 88px;
-    border-radius: 12px;
+    width: 76px;
+    height: 76px;
+    border-radius: 10px;
   }
   .product-content h3 {
     font-size: 15px;
   }
   .product-content p {
     font-size: 12px;
-    margin-top: 5px;
+    margin-top: 3px;
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .product-bottom {
+    margin-top: 6px;
   }
   .product-bottom > .price {
-    font-size: 20px;
+    font-size: 18px;
   }
   .qty-control button {
     width: 44px;

@@ -229,32 +229,54 @@ watch(
 }
 @media (max-width: 767px) {
   .dish-card {
-    border-radius: 13px;
+    border-radius: 12px;
   }
   .dish-card-body {
-    padding: 12px;
+    padding: 9px 10px 10px;
   }
   .dish-card h3 {
-    font-size: 16px;
-    line-height: 1.4;
+    font-size: 14.5px;
+    line-height: 1.35;
+    min-height: 0;
+    -webkit-line-clamp: 1;
     overflow-wrap: anywhere;
   }
   .dish-card-photo {
-    aspect-ratio: 1.4;
+    aspect-ratio: 1.48;
   }
   .dish-availability {
-    top: 8px;
-    left: 8px;
-    padding: 4px 6px;
-    font-size: 12px;
-    max-width: calc(100% - 16px);
+    top: 6px;
+    left: 6px;
+    padding: 2px 6px;
+    font-size: 11px;
+    border-radius: 5px;
+    max-width: calc(100% - 12px);
+  }
+  .dish-availability.available,
+  .dish-open {
+    display: none;
+  }
+  .dish-card-bottom {
+    margin-top: 3px;
   }
   .dish-card-bottom strong {
-    font-size: 18px;
+    font-size: 17px;
   }
-  .dish-stall,
+  .dish-stall {
+    margin-top: 4px;
+    font-size: 11.5px;
+  }
   .dish-description {
-    font-size: 12px;
+    margin-top: 3px;
+    font-size: 11.5px;
+  }
+  .dish-preparation {
+    margin-top: 4px;
+    font-size: 11px;
+    line-height: 1.4;
+  }
+  .dish-preparation small {
+    display: none;
   }
 }
 @media (prefers-reduced-motion: reduce) {

@@ -60,57 +60,83 @@ async function fixture(page: Page, kind: "stalls" | "meals" = "stalls") {
   return state;
 }
 
-test("stall arrival evidence is immediately visible before ratings at four supported widths", async ({ page }, info) => {
+test("stall arrival evidence is immediately visible on desktop and cleanly expandable on mobile", async ({ page }, info) => {
   const state = await fixture(page);
+  state.detail.products = [meal(1).product, meal(2).product, meal(3).product];
   for (const width of [360, 390, 768, 1440]) {
-    await page.setViewportSize({ width, height: 844 });
+    await page.setViewportSize({ width, height: width <= 390 ? 660 : 844 });
     await page.goto("/stalls/1");
     await expect(page.locator(".stall-hero")).toBeVisible();
-    await page.screenshot({ path: info.outputPath(`stall-arrival-${width}.png`), fullPage: true });
     const guide = page.getByRole("region", { name: "到摊指引" });
-    await expect(guide).toBeVisible();
-    await expect(guide).toContainText("绿色棚顶，靠近南门便利店");
-    await expect(guide.locator(".visit-photo img")).toBeVisible();
-    await expect(guide).toContainText("非实时画面");
-    const address = await guide.locator(".visit-address").boundingBox();
-    const confirmed = await guide.locator(".visit-facts").boundingBox();
-    const rating = await page.locator(".overview-rating").boundingBox();
-    expect(address!.y).toBeLessThan(rating!.y);
-    expect(confirmed!.y).toBeLessThan(rating!.y);
-    if (width <= 390) expect(confirmed!.y + confirmed!.height).toBeLessThan(700);
+    if (width <= 390) {
+      const summary = page.locator(".stall-mobile-summary");
+      await expect(summary).toBeVisible();
+      await expect(summary).toContainText("南门1号");
+      await expect(summary.getByRole("link", { name: "查看路线" })).toBeVisible();
+      await expect(guide).toBeHidden();
+      // Real mobile browser height (660px): multiple dishes + add buttons immediately in viewport!
+      const visibleAdds = await page.locator(".product-row .qty-control .plus").evaluateAll((buttons) =>
+        buttons.filter((el) => {
+          const r = el.getBoundingClientRect();
+          return r.top >= 0 && r.bottom <= window.innerHeight;
+        }).length,
+      );
+      expect(visibleAdds).toBeGreaterThanOrEqual(2);
+      await summary.getByRole("button", { name: "位置与须知" }).click();
+      await expect(guide).toBeVisible();
+      await expect(guide).toContainText("绿色棚顶，靠近南门便利店");
+      await expect(guide.locator(".visit-photo img")).toBeVisible();
+      await expect(guide).toContainText("非实时画面");
+    } else {
+      await expect(guide).toBeVisible();
+      await expect(guide).toContainText("绿色棚顶，靠近南门便利店");
+      await expect(guide.locator(".visit-photo img")).toBeVisible();
+      await expect(guide).toContainText("非实时画面");
+      const address = await guide.locator(".visit-address").boundingBox();
+      const confirmed = await guide.locator(".visit-facts").boundingBox();
+      const rating = await page.locator(".overview-rating").boundingBox();
+      expect(address!.y).toBeLessThan(rating!.y);
+      expect(confirmed!.y).toBeLessThan(rating!.y);
+    }
+    await page.screenshot({ path: info.outputPath(`stall-arrival-${width}.png`), fullPage: true });
     await assertNoHorizontalOverflow(page);
   }
   expect(state.unexpected).toEqual([]);
 });
 
-test("stall without merchant recognition data shows an honest missing description and no scene image", async ({ page }) => {
+test("stall without merchant recognition data hides missing-note filler until store details are expanded", async ({ page }) => {
   const state = await fixture(page);
   state.detail.arrival_note = "";
   state.detail.arrival_image = "";
-  await page.setViewportSize({ width: 360, height: 844 });
+  await page.setViewportSize({ width: 360, height: 660 });
   await page.goto("/stalls/1");
+  await expect(page.getByRole("region", { name: "到摊指引" })).toBeHidden();
+  await page.getByRole("button", { name: "位置与须知" }).click();
   await expect(page.getByRole("region", { name: "到摊指引" })).toContainText("商家尚未补充认摊说明");
   await expect(page.locator(".visit-photo")).toHaveCount(0);
 });
 
-test("a stall without recognition material keeps the first meal action in the mobile viewport", async ({ page }, info) => {
+test("a stall without recognition material keeps the first meal action in a 660px mobile browser viewport", async ({ page }, info) => {
   const state = await fixture(page);
   Object.assign(state.detail, { arrival_note: "", arrival_image: "", usual_hours: "11:00–14:00",
     contact_phone: "13800000000", products: [meal(1).product], receiving_status: "recent", receiving_valid_for_seconds: 30 });
   for (const width of [360, 390, 768, 1440]) {
-    await page.setViewportSize({ width, height: 844 });
+    await page.setViewportSize({ width, height: width <= 390 ? 660 : 844 });
     await page.goto("/stalls/1");
     const guide = page.getByRole("region", { name: "到摊指引" });
-    await expect(guide.locator(".visit-address")).toHaveText("南门1号");
-    await expect(guide.locator(".visit-facts")).toContainText("商家");
-    await expect(guide).toContainText("商家尚未补充认摊说明");
     if (width <= 390) {
+      await expect(page.locator(".stall-mobile-summary")).toContainText("南门1号");
       const add = page.getByRole("button", { name: "添加第1页煎饼", exact: true });
       await expect(add).toBeInViewport({ ratio: 1 });
       await expect(page.locator(".product-bottom .price").first()).toBeInViewport({ ratio: 1 });
       expect((await add.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      await page.getByRole("button", { name: "位置与须知" }).click();
       await expect(guide.getByRole("button", { name: "联系与更多信息" })).toHaveAttribute("aria-expanded", "false");
       await expect(guide.getByText(/通常出摊/)).toBeHidden();
+    } else {
+      await expect(guide.locator(".visit-address")).toHaveText("南门1号");
+      await expect(guide.locator(".visit-facts")).toContainText("商家");
+      await expect(guide).toContainText("商家尚未补充认摊说明");
     }
     await assertNoHorizontalOverflow(page);
     await page.screenshot({ path: info.outputPath(`stall-first-meal-${width}.png`) });
@@ -119,11 +145,15 @@ test("a stall without recognition material keeps the first meal action in the mo
 });
 
 for (const width of [360, 390]) {
-  test(`mobile arrival utilities expand by keyboard while recognition stays visible at ${width}px`, async ({ page }, info) => {
+  test(`mobile arrival utilities expand by keyboard inside store drawer at ${width}px`, async ({ page }, info) => {
     const state = await fixture(page);
     Object.assign(state.detail, { usual_hours: "11:00–14:00", contact_phone: "13800000000" });
     await page.setViewportSize({ width, height: 844 });
     await page.goto("/stalls/1");
+    const drawerToggle = page.getByRole("button", { name: "位置与须知" });
+    await expect(drawerToggle).toHaveAttribute("aria-expanded", "false");
+    await drawerToggle.focus();
+    await page.keyboard.press("Enter");
     const guide = page.getByRole("region", { name: "到摊指引" });
     const toggle = guide.getByRole("button", { name: "联系与更多信息" });
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
@@ -168,8 +198,10 @@ for (const [status, reason] of [["stale", "位置已过期"], ["closed", "商家
   test(`a qualified ${status} stall describes current unavailability instead of lost ordering eligibility`, async ({ page }) => {
     const state = await fixture(page);
     Object.assign(state.detail, { status, can_order: false, accepting_orders: false, order_unavailable_reason: reason });
-    await page.setViewportSize({ width: 360, height: 844 });
+    await page.setViewportSize({ width: 360, height: 660 });
     await page.goto("/stalls/1");
+    await expect(page.locator(".mobile-summary-warning")).toContainText(reason!);
+    await page.getByRole("button", { name: "位置与须知" }).click();
     await expect(page.getByRole("region", { name: "到摊指引" }).locator(".visit-warning")).toContainText(reason!);
     await expect(page.getByRole("button", { name: "联系与更多信息" })).toHaveAttribute("aria-expanded", "false");
     await expect(page.locator(".overview-facts")).not.toContainText("暂未开通在线点单");

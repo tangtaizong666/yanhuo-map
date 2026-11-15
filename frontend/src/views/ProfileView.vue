@@ -1084,19 +1084,41 @@ async function deleteAccount() {
     grid-template-columns: 1fr;
   }
 }
-@media (max-width: 650px) {
+@media (max-width: 767px) {
   .profile-page {
-    padding-top: 23px;
+    padding-top: 8px;
+  }
+  .profile-page > .page-heading {
+    display: none;
   }
   .profile-layout {
     display: block;
   }
   .profile-sidebar {
-    margin-bottom: 25px;
-    gap: 15px;
+    margin-bottom: 14px;
+    gap: 10px;
   }
   .identity-card {
-    padding-top: 22px;
+    padding: 12px 14px 0;
+  }
+  .identity-card .avatar {
+    width: 48px;
+    height: 48px;
+    margin: 0 auto 8px;
+  }
+  .identity-card h2 {
+    font-size: 17px;
+    margin: 0 0 2px;
+  }
+  .identity-caption {
+    margin-top: 5px;
+  }
+  .profile-stats {
+    margin-top: 10px;
+    padding: 10px 0;
+  }
+  .profile-stats strong {
+    font-size: 16px;
   }
   .profile-menu {
     display: grid;
@@ -1142,10 +1164,6 @@ async function deleteAccount() {
   }
   .settings-card {
     padding: 23px 20px;
-  }
-  .identity-card .avatar {
-    width: 64px;
-    height: 64px;
   }
   .count-label {
     font-size: 10px;

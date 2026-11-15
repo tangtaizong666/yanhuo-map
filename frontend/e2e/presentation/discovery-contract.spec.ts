@@ -46,7 +46,11 @@ for (const [status, reason, warning] of [
     for (const width of [360, 390, 768, 1440]) {
       await page.setViewportSize({ width, height: 844 });
       await page.goto("/stalls/1");
-      await expect(page.locator(".stall-overview")).toBeVisible();
+      if (width <= 390) {
+        await expect(page.locator(".mobile-summary-warning")).toContainText(warning!);
+      } else {
+        await expect(page.locator(".stall-overview")).toBeVisible();
+      }
       await page.screenshot({ path: info.outputPath(`${status}-${width}.png`), fullPage: true, animations: "disabled" });
       await assertNoHorizontalOverflow(page);
     }
@@ -60,6 +64,7 @@ for (const [status, reason, warning] of [
     await expect(guide.locator(".visit-facts")).toContainText("上次预计");
     await expect(guide.locator(".visit-facts")).toContainText(status === "closed" ? "已收摊" : "状态待确认");
     await page.setViewportSize({ width: 360, height: 844 });
+    await page.getByRole("button", { name: "位置与须知" }).click();
     await expect(guide.locator(".visit-facts")).not.toContainText("收摊");
     await expect(guide.getByText(/上次预计/)).toBeHidden();
     await guide.getByRole("button", { name: "联系与更多信息" }).click();
@@ -107,10 +112,13 @@ test("available simulated payment remains explicitly simulated and does not chan
   state.detail.wechat_payment.reason = "";
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/stalls/1");
+  await page.getByRole("button", { name: "位置与须知" }).click();
   await expect(page.locator(".stall-payment-status")).toContainText("模拟微信支付");
   await expect(page.locator(".stall-payment-status")).toContainText("出餐后可模拟付款");
   Object.assign(state.detail, { transaction_enabled: false, can_order: false, order_unavailable_reason: "仅提供找摊信息服务" });
   await page.reload();
+  await expect(page.locator(".mobile-summary-warning")).toContainText("线下到访 · 暂未开通在线点单");
+  await page.getByRole("button", { name: "位置与须知" }).click();
   await expect(page.locator(".overview-facts")).toContainText("线下到访 · 暂未开通在线点单");
   await expect(page.locator(".stall-payment-status")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "添加椒盐鸡蛋煎饼", exact: true })).toHaveCount(0);
@@ -161,7 +169,10 @@ test("payment copy separates simulation from live across availability changes", 
       }
       await page.setViewportSize({ width: 360, height: 844 });
       await expect(payment).toBeVisible();
-      if (mode === "simulation") await expect(page.locator(".stall-payment-status")).toContainText(available ? "出餐后可模拟付款" : "当前不可用");
+      if (mode === "simulation") {
+        await page.getByRole("button", { name: "位置与须知" }).click();
+        await expect(page.locator(".stall-payment-status")).toContainText(available ? "出餐后可模拟付款" : "当前不可用");
+      }
       await assertNoHorizontalOverflow(page);
       await page.setViewportSize({ width: 1440, height: 900 });
     }

@@ -104,15 +104,15 @@ function choose(mode: "open" | "all" | "follow") {
 }
 @media (max-width: 767px) {
   .discovery-filters {
-    gap: 7px;
-    margin-bottom: 16px;
+    gap: 6px;
+    margin-bottom: 10px;
   }
   .filter-chips {
     gap: 5px;
   }
   .filter-chips button {
     font-size: 12px;
-    padding: 8px;
+    padding: 6px 9px;
     gap: 4px;
   }
   .sort-control svg {

@@ -89,7 +89,7 @@ def _refresh_open_demo_sessions(config=None, *, lock_rows: bool = False, now=Non
     if cfg.stale_minutes < MIN_AUTO_REFRESH_STALE_MINUTES:
         return 0
     now = now or timezone.now()
-    refresh_cutoff = now - timedelta(minutes=max(10, cfg.stale_minutes // 2))
+    refresh_cutoff = now - timedelta(minutes=min(15, max(10, cfg.stale_minutes // 2)))
 
     # Lock only `market_stall` rows (never join nullable `current_session` in a
     # `FOR NO KEY UPDATE` query, which PostgreSQL rejects on outer joins).

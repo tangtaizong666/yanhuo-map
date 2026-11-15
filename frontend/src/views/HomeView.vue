@@ -1410,29 +1410,29 @@ onMounted(() =>
     display: none;
   }
   .dish-grid {
-    gap: 12px;
+    gap: 10px;
   }
   .meal-inspiration {
-    margin-top: 28px;
-    padding-top: 23px;
+    margin-top: 20px;
+    padding-top: 16px;
   }
   .meal-inspiration h2,
   .meal-search-section h2 {
-    font-size: 20px;
+    font-size: 18px;
   }
   .section-caption {
     display: none;
   }
   .result-switch {
-    gap: 10px;
-    margin-bottom: 24px;
+    gap: 8px;
+    margin-bottom: 12px;
   }
   .home-page {
-    padding-top: 15px;
+    padding-top: 8px;
   }
   .discovery-toolbar {
     display: block;
-    margin-bottom: 15px;
+    margin-bottom: 8px;
   }
   .welcome-note {
     display: none;
@@ -1440,137 +1440,107 @@ onMounted(() =>
   .discovery-toolbar .search-box {
     width: 100%;
     max-width: none;
-    min-height: 46px;
-    border-radius: 13px;
+    min-height: 44px;
+    border-radius: 12px;
   }
   .search-box input {
     min-height: 44px;
   }
   .home-hero {
-    min-height: 132px;
-    border-radius: 19px;
-    box-shadow: 0 10px 26px rgba(92, 54, 24, 0.08);
+    min-height: 68px;
+    border-radius: 14px;
+    box-shadow: 0 6px 18px rgba(92, 54, 24, 0.06);
   }
   .hero-copy {
-    padding: 14px 17px;
-    width: 90%;
+    padding: 11px 14px;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    box-sizing: border-box;
   }
   .hero-kicker {
-    font-size: 11px;
-    letter-spacing: 1.2px;
-  }
-  .hero-kicker > span {
-    width: 12px;
+    display: none;
   }
   .hero-copy h1 {
-    font-size: 23px;
-    line-height: 1.42;
-    margin-top: 3px;
+    font-size: 17px;
+    line-height: 1.3;
+    margin: 0;
     letter-spacing: 0;
   }
   .hero-copy h1 span {
     display: inline;
   }
   .hero-copy p {
-    display: -webkit-box;
-    -webkit-line-clamp: 1;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-    font-size: 12px;
-    line-height: 1.5;
-    color: #6e5239;
-    margin: 4px 0 8px;
-    max-width: 72%;
+    display: none;
   }
   .hero-link {
     font-size: 12px;
-    gap: 8px;
-    margin-top: 0;
-    padding-bottom: 4px;
+    gap: 5px;
+    margin: 0;
+    padding: 5px 10px;
+    border-radius: 999px;
+    background: #fffdf8ea;
+    border: 1px solid #ead8be;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .hero-photo {
-    left: 40%;
+    left: 48%;
   }
   .hero-photo img {
     object-position: 60% 50%;
   }
   .hero-photo:after {
-    /* Keep the headline on solid cream: it runs past the photo's left edge. */
     background: linear-gradient(
       90deg,
       #f8ead3,
-      #f8ead3f2 30%,
-      #f8ead399 50%,
-      #f8ead300 78%,
-      #30180811
+      #f8ead3f4 34%,
+      #f8ead3aa 58%,
+      #f8ead31a 88%
     );
   }
-  .hero-stamp {
-    display: none;
-    right: 12px;
-    bottom: 17px;
-    padding: 6px 9px;
-    border-radius: 8px;
-    gap: 5px;
-  }
-  .hero-stamp svg {
-    width: 14px;
-  }
-  .hero-stamp span {
-    font-size: 7px;
-    letter-spacing: 0.5px;
-  }
-  .hero-stamp b {
-    font-size: 9px;
-  }
+  .hero-stamp,
   .hero-index {
     display: none;
-    right: 12px;
-    top: 12px;
-    font-size: 7px;
-  }
-  .hero-index span {
-    font-size: 10px;
   }
   .categories {
-    padding: 13px 0 12px;
-    margin-bottom: 15px;
-    gap: 3px;
+    padding: 8px 0 6px;
+    margin-bottom: 8px;
+    gap: 2px;
   }
   .categories button {
-    font-size: 12px;
-    gap: 5px;
-    min-height: 62px;
+    font-size: 11.5px;
+    gap: 4px;
+    min-height: 52px;
     padding: 0;
   }
   .category-icon {
-    width: 42px;
-    height: 42px;
+    width: 36px;
+    height: 36px;
     border-radius: 50%;
   }
   .category-icon svg {
-    width: 21px;
-    height: 21px;
+    width: 18px;
+    height: 18px;
   }
   .categories i {
-    bottom: -9px;
+    bottom: -6px;
     width: 3px;
     height: 3px;
   }
   .nearby-section .eyebrow {
     display: none;
-    font-size: 12px;
-    letter-spacing: 1.2px;
-    margin-bottom: 4px;
   }
   .nearby-section .section-heading {
-    margin-bottom: 7px;
+    margin-bottom: 5px;
   }
   .nearby-section h2 {
-    font-size: 21px;
+    font-size: 17px;
   }
   .count {
-    font-size: 12px;
+    font-size: 11.5px;
   }
   .map-shortcut {
     font-size: 12px;

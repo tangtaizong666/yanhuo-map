@@ -775,8 +775,6 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
     </div>
     <form v-else-if="stall" @submit.prevent="submit" class="checkout-layout">
       <div class="stack checkout-main">
-        <SimulationNotice v-if="isSimulation" :delivery="isDelivery" />
-        <ReceivingNotice :stall="stall" />
         <section class="card checkout-card">
           <div class="section-heading">
             <h2><Store :size="20" /> {{ stall.name }}</h2>
@@ -999,6 +997,8 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
             ><span class="character-count">{{ note.length }}/200</span></label
           >
         </details>
+        <SimulationNotice v-if="isSimulation" :delivery="isDelivery" />
+        <ReceivingNotice :stall="stall" />
       </div>
       <aside class="checkout-summary card">
         <span class="eyebrow">YOUR LITTLE HAPPINESS</span>
@@ -1688,15 +1688,15 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
   }
   .checkout-card,
   .checkout-summary {
-    padding: 18px;
+    padding: 13px 14px;
   }
   .checkout-page {
-    padding-top: 18px;
+    padding-top: 8px;
   }
   .checkout-product {
     display: grid;
-    grid-template-columns: 64px minmax(0, 1fr);
-    gap: 12px;
+    grid-template-columns: 58px minmax(0, 1fr);
+    gap: 10px;
   }
   .checkout-product-photo {
     grid-row: 1 / 3;
@@ -1707,16 +1707,16 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
     grid-column: 1 / -1;
   }
   .checkout-product img {
-    width: 64px;
-    height: 64px;
+    width: 58px;
+    height: 58px;
   }
   .product-text p {
     display: none;
   }
   .product-text h3 a {
     min-height: 0;
-    padding: 0 0 6px;
-    line-height: 1.5;
+    padding: 0 0 4px;
+    line-height: 1.4;
   }
   .quantity-control {
     grid-column: 2;
@@ -1724,38 +1724,41 @@ async function sendSubmission(record: CheckoutSubmission, recovering = false) {
     gap: 5px;
   }
   .checkout-card > .section-heading {
-    margin: 0 0 5px;
+    margin: 0 0 4px;
   }
   .checkout-card h2 {
-    font-size: 16px;
+    font-size: 15.5px;
   }
   .back-link {
-    margin-bottom: 12px;
+    margin-bottom: 0;
   }
   .checkout-summary h2 {
-    margin-bottom: 20px;
+    margin-bottom: 12px;
+    font-size: 16px;
   }
   .checkout-summary .eyebrow {
     display: none;
   }
   .checkout-page .page-heading {
-    margin-bottom: 22px;
+    margin-bottom: 8px;
   }
   .checkout-page .page-heading h1 {
-    font-size: 28px;
+    font-size: 20px;
+    margin: 0;
   }
-  .checkout-page .page-heading .eyebrow {
+  .checkout-page .page-heading .eyebrow,
+  .checkout-page .page-heading p {
     display: none;
   }
   .checkout-product {
-    padding: 14px 0;
+    padding: 10px 0;
   }
   .checkout-product:last-child {
     border-bottom: 0;
     padding-bottom: 0;
   }
   .pickup-address {
-    margin-top: 17px;
+    margin-top: 10px;
   }
 }
 </style>

@@ -1503,11 +1503,11 @@ async function submitReview() {
     position: static;
   }
 }
-@media (max-width: 600px) {
+@media (max-width: 767px) {
   .reorder-card {
-    padding: 21px 19px;
+    padding: 14px 15px;
     flex-wrap: wrap;
-    gap: 13px;
+    gap: 10px;
   }
   .reorder-card .btn {
     width: 100%;
@@ -1517,26 +1517,30 @@ async function submitReview() {
   }
   .back-link {
     min-height: 44px;
-    margin-bottom: 6px;
+    margin-bottom: 2px;
   }
   .order-detail-heading {
-    margin-bottom: 16px;
+    margin-bottom: 10px;
     align-items: flex-start;
-    gap: 10px;
+    gap: 8px;
   }
   .order-detail-heading h1 {
-    font-size: 22px;
-    line-height: 1.4;
-    letter-spacing: -0.3px;
-    margin: 4px 0 7px;
+    font-size: 19px;
+    line-height: 1.35;
+    letter-spacing: -0.2px;
+    margin: 2px 0 4px;
   }
   .order-detail-heading p {
     font-size: 12px;
-    line-height: 1.65;
+    line-height: 1.5;
   }
   .detail-layout,
   .detail-main {
-    gap: 14px;
+    gap: 10px;
+  }
+  .pickup-code {
+    padding: 14px;
+    margin-bottom: 14px;
   }
   .refresh-button {
     flex: none;
