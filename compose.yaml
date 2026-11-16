@@ -43,6 +43,8 @@ services:
       AMAP_KEY: ${AMAP_KEY:-}
       AMAP_SECURITY_CODE: ${AMAP_SECURITY_CODE:-}
       AMAP_PROXY_DAILY_LIMIT: ${AMAP_PROXY_DAILY_LIMIT:-20000}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_VISION_MODEL: ${DEEPSEEK_VISION_MODEL:-deepseek-flash}
       BRAND_NAME: ${BRAND_NAME:-烟火地图}
     depends_on:
       db:

@@ -192,6 +192,8 @@ PostgreSQL 专用并发测试需要 PostgreSQL/PostGIS 的 `DATABASE_URL`，不�
 
 生产配置默认关闭示例模式和线上支付、不建立示例账号，不公开数据库、后端或回调端口。独立 `release` 容器先完成迁移与静态收集，成功后应用及三个 worker 才启动。Caddy 将付款回调送到受限 `callback`，验签入队后由 `notification_worker` 处理；过期任务由 `worker` 执行，在途支付/退款查询由 `payment_worker` 执行。开发数据不会自动迁移进生产。开通付款后，即使暂停新支付，也应保留密钥挂载与付款查询任务处理既有交易。升级停写、发布门控、CSP 报告阶段和逐商户真实验收见[发布与48小时观察](docs/deployment-release.md)。
 
+若仅用于非营业公网路演/赛事全流程展示（保留 8 个示例摊位、模拟支付/配送及自动保活，同时强制 `DEBUG=False`、HTTPS 安全 Cookie、禁用真实支付并锁定 `student`/`vendor`/`admin` 默认体验密码防误删），可在独立演示主机上叠加 `compose.showcase.yaml` 启动：`docker compose --project-name yanhuo --env-file .env.showcase -f compose.yaml -f compose.showcase.yaml up -d --build`。切勿将演示库直接转为正式营业库。
+
 临时数据库备份示例（只包含数据库，不能替代完整灾备；服务器 Bash，保存在仅管理员可访问的目录）：
 
 ```bash

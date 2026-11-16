@@ -2112,6 +2112,8 @@ def user_detail_view(request, user_id):
         if (target.is_superuser or target.is_staff) and not request.user.is_superuser:
             raise BusinessError('仅超级管理员可修改或停用平台管理员账号。', 'forbidden', status=403)
         if 'is_active' in data and not data['is_active']:
+            if getattr(settings, 'SHOWCASE', False) and target.username in settings.PROTECTED_SHOWCASE_USERS:
+                raise BusinessError('公开演示环境的内置体验账号不可停用。', 'showcase_protected_account', status=403)
             if target.pk == request.user.pk:
                 raise BusinessError('不能停用当前正在使用的管理员账号。', 'self_deactivation_forbidden', status=400)
             if target.is_superuser:

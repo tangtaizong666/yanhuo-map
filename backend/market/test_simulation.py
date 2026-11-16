@@ -327,6 +327,64 @@ class SimulationTests(SimulationSetup, TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('SERVICES_SIMULATION_ENABLED requires', result.stderr)
 
+    def test_showcase_environment_enforces_hardened_public_demo_boundaries(self):
+        valid_showcase_env = {
+            **os.environ,
+            'DJANGO_ENV': 'showcase',
+            'DEMO_MODE': 'true',
+            'SERVICES_SIMULATION_ENABLED': 'true',
+            'WECHAT_PAY_ENABLED': 'false',
+            'DJANGO_SECRET_KEY': 's' * 64,
+            'DJANGO_ALLOWED_HOSTS': 'yanhuo.example.com',
+            'CSRF_TRUSTED_ORIGINS': 'https://yanhuo.example.com',
+            'DATABASE_URL': 'postgresql://yanhuo:secret@db:5432/yanhuo',
+        }
+        ok = subprocess.run(
+            [sys.executable, '-c', (
+                'import config.settings as s; '
+                'assert s.SHOWCASE and not s.PRODUCTION and not s.DEBUG; '
+                'assert s.SESSION_COOKIE_SECURE and s.CSRF_COOKIE_SECURE and s.SECURE_SSL_REDIRECT'
+            )],
+            cwd=settings.BASE_DIR, env=valid_showcase_env, capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        for bad, expected in (
+            ({'WECHAT_PAY_ENABLED': 'true'}, 'WECHAT_PAY_ENABLED must be false in showcase'),
+            ({'DEMO_MODE': 'false', 'SERVICES_SIMULATION_ENABLED': 'false'}, 'DEMO_MODE must be true in showcase'),
+            ({'DJANGO_SECRET_KEY': 'local-short'}, 'Showcase requires a random DJANGO_SECRET_KEY'),
+            ({'DJANGO_ALLOWED_HOSTS': '*'}, 'Showcase requires explicit DJANGO_ALLOWED_HOSTS'),
+            ({'DATABASE_URL': ''}, 'Showcase requires DATABASE_URL'),
+        ):
+            failed = subprocess.run([sys.executable, '-c', 'import config.settings'], cwd=settings.BASE_DIR,
+                env={**valid_showcase_env, **bad}, capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn(expected, failed.stderr)
+
+    def test_showcase_locks_builtin_demo_accounts_against_tampering(self):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        admin = User.objects.create_user('admin', password='Password123!', is_staff=True, is_superuser=True)
+        builtin_student = User.objects.create_user('student', password='Password123!')
+        custom_student = User.objects.create_user('visitor_alice', password='Password123!')
+        with override_settings(SHOWCASE=True):
+            self.api.force_authenticate(builtin_student)
+            pw_res = self.api.post('/api/v1/auth/password', {'old_password': 'Password123!', 'new_password': 'NewPassword456!'}, format='json')
+            self.assertEqual(pw_res.status_code, 403)
+            self.assertEqual(pw_res.data['code'], 'showcase_protected_account')
+            del_res = self.api.delete('/api/v1/auth/account', {'password': 'Password123!'}, format='json')
+            self.assertEqual(del_res.status_code, 403)
+            self.assertEqual(del_res.data['code'], 'showcase_protected_account')
+            rec_res = self.api.post('/api/v1/auth/recovery', {'password': 'Password123!'}, format='json')
+            self.assertEqual(rec_res.status_code, 403)
+            self.assertEqual(rec_res.data['code'], 'showcase_protected_account')
+
+            self.api.force_authenticate(admin)
+            deact_builtin = self.api.patch(f'/api/v1/ops/users/{builtin_student.pk}', {'is_active': False}, format='json')
+            self.assertEqual(deact_builtin.status_code, 403)
+            self.assertEqual(deact_builtin.data['code'], 'showcase_protected_account')
+            deact_custom = self.api.patch(f'/api/v1/ops/users/{custom_student.pk}', {'is_active': False}, format='json')
+            self.assertEqual(deact_custom.status_code, 200)
+
     def test_demo_stall_blocks_new_orders_when_online_simulator_disabled(self):
         with override_settings(SERVICES_SIMULATION_ENABLED=False):
             with self.assertRaises(BusinessError) as caught:

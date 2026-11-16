@@ -2,6 +2,7 @@
 import hashlib
 import re
 import secrets
+from django.conf import settings
 from django.contrib.auth import get_user_model, logout
 from django.db import transaction
 from django.utils import timezone
@@ -55,6 +56,8 @@ def manage_recovery(request):
         record = AccountRecovery.objects.filter(user=request.user).first()
         return private_response({'enabled': available(record, request.user),
                                  'created_at': record.created_at if record else None})
+    if getattr(settings, 'SHOWCASE', False) and request.user.username in settings.PROTECTED_SHOWCASE_USERS:
+        raise BusinessError('公开演示环境的内置体验账号不支持修改恢复码，请自行注册新账号体验。', 'showcase_protected_account', status=403)
     password = serializers.CharField(max_length=128, trim_whitespace=False).run_validation(request.data.get('password'))
     try:
         verified = login_attempt(request, request.user.username,
@@ -88,6 +91,8 @@ def reset_password(request):
     username = serializers.CharField(max_length=150).run_validation(request.data.get('username'))
     code = serializers.CharField(max_length=80).run_validation(request.data.get('recovery_code'))
     password = serializers.CharField(max_length=128, trim_whitespace=False).run_validation(request.data.get('new_password'))
+    if getattr(settings, 'SHOWCASE', False) and username in settings.PROTECTED_SHOWCASE_USERS:
+        raise BusinessError('公开演示环境的内置体验账号已锁定默认密码，不支持重设密码。', 'showcase_protected_account', status=403)
     normalized = re.sub(r'[\s-]', '', code).upper()
     failure = BusinessError('账号或恢复码不正确，或恢复码已经失效。', 'invalid_recovery', status=400)
     valid_code_format = bool(re.fullmatch(r'[0-9A-F]{32}', normalized))

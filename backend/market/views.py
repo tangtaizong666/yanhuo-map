@@ -185,6 +185,8 @@ def profile(request):
 @permission_classes([IsAuthenticated])
 @throttle_classes([AuthThrottle])
 def password(request):
+    if getattr(settings, 'SHOWCASE', False) and request.user.username in settings.PROTECTED_SHOWCASE_USERS:
+        raise BusinessError('公开演示环境的内置体验账号（student / vendor / admin）已锁定默认密码，请自行注册新账号体验改密。', 'showcase_protected_account', status=403)
     old = serializers.CharField(max_length=128, trim_whitespace=False).run_validation(request.data.get('old_password'))
     new = serializers.CharField(max_length=128, trim_whitespace=False).run_validation(request.data.get('new_password'))
     try:
@@ -213,6 +215,8 @@ def password(request):
 @permission_classes([IsAuthenticated])
 @throttle_classes([AuthThrottle])
 def account(request):
+    if getattr(settings, 'SHOWCASE', False) and request.user.username in settings.PROTECTED_SHOWCASE_USERS:
+        raise BusinessError('公开演示环境的内置体验账号不可注销，请自行注册新账号体验注销流程。', 'showcase_protected_account', status=403)
     from .models import MerchantApplication, PaymentAttempt, PaymentRefund
     from .simulation import enabled as simulation_enabled
     expire_pending_orders(user_id=request.user.pk)

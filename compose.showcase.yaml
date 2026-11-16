@@ -1,0 +1,41 @@
+# Public full-flow showcase overlay (non-commercial demo only).
+# Usage:
+#   docker compose --project-name yanhuo --env-file /etc/yanhuo/showcase.env \
+#     -f compose.yaml -f compose.showcase.yaml up -d --build
+#
+# Keeps DEBUG=False, HTTPS/secure cookies, PostgreSQL/PostGIS, and all three
+# background workers healthy while seeding the 8 demo stalls, enabling
+# simulated WeChat prepayment & campus delivery, keeping open demo sessions
+# fresh, and locking built-in demo accounts (student / vendor / admin) against
+# public password changes, deletion, or deactivation.
+services:
+  release:
+    command:
+      - sh
+      - -c
+      - >-
+        python manage.py migrate --noinput &&
+        python manage.py createcachetable &&
+        python manage.py collectstatic --noinput &&
+        python manage.py seed_demo &&
+        python manage.py prepare_simulation --enable-services &&
+        python manage.py refresh_demo_stalls --startup
+    environment: &showcase_environment
+      DJANGO_ENV: showcase
+      DEMO_MODE: "true"
+      SERVICES_SIMULATION_ENABLED: "true"
+      WECHAT_PAY_ENABLED: "false"
+  backend:
+    environment: *showcase_environment
+  callback:
+    environment: *showcase_environment
+  worker:
+    command: ["python", "manage.py", "expire_orders", "--loop", "--keep-demo-fresh"]
+    environment: *showcase_environment
+  payment_worker:
+    environment: *showcase_environment
+  notification_worker:
+    environment: *showcase_environment
+  web:
+    environment:
+      ADMIN_ALLOWED_IPS: ${ADMIN_ALLOWED_IPS:-127.0.0.1/32 ::1/128}

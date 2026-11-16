@@ -6,20 +6,23 @@ from django.core.exceptions import ImproperlyConfigured
 BASE_DIR = Path(__file__).resolve().parent.parent
 ENV = os.getenv('DJANGO_ENV', 'development')
 PRODUCTION = ENV == 'production'
-DEBUG = not PRODUCTION
+SHOWCASE = ENV == 'showcase'
+PUBLIC_DEPLOYMENT = PRODUCTION or SHOWCASE
+PROTECTED_SHOWCASE_USERS = frozenset({'student', 'vendor', 'admin'})
+DEBUG = not PUBLIC_DEPLOYMENT
 DEMO_MODE = os.getenv('DEMO_MODE', 'true' if not PRODUCTION else 'false').lower() == 'true'
 SERVICES_SIMULATION_ENABLED = os.getenv('SERVICES_SIMULATION_ENABLED', 'false').lower() == 'true'
 if SERVICES_SIMULATION_ENABLED and (PRODUCTION or not DEMO_MODE):
     raise ImproperlyConfigured('SERVICES_SIMULATION_ENABLED requires a non-production DEMO_MODE environment.')
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'local-development-only-change-before-deploy-yhdt')
 ALLOWED_HOSTS = os.getenv('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1,testserver').split(',')
-CSRF_TRUSTED_ORIGINS = [x for x in os.getenv('CSRF_TRUSTED_ORIGINS', '' if PRODUCTION else
+CSRF_TRUSTED_ORIGINS = [x for x in os.getenv('CSRF_TRUSTED_ORIGINS', '' if PUBLIC_DEPLOYMENT else
     'http://localhost:5173,http://127.0.0.1:5173,http://localhost:5183,http://127.0.0.1:5183').split(',') if x]
 BRAND_NAME = os.getenv('BRAND_NAME', '烟火地图')
 PUBLIC_BASE_URL = os.getenv('PUBLIC_BASE_URL', '').strip().rstrip('/')
 if PUBLIC_BASE_URL:
     public_url = urlparse(PUBLIC_BASE_URL)
-    if (public_url.scheme not in (('https',) if PRODUCTION else ('http', 'https'))
+    if (public_url.scheme not in (('https',) if PUBLIC_DEPLOYMENT else ('http', 'https'))
             or not public_url.netloc or public_url.username or public_url.password
             or public_url.query or public_url.fragment or public_url.path):
         raise ImproperlyConfigured('PUBLIC_BASE_URL must be a public origin without credentials, path, query or fragment.')
@@ -65,13 +68,19 @@ if min(CHECKOUT_MAX_ACTIVE_PER_STALL, CHECKOUT_MAX_ACTIVE_TOTAL, CHECKOUT_MAX_PO
     raise ImproperlyConfigured('Checkout limits must be positive.')
 if min(AUTH_FAILURE_WINDOW_SECONDS, AUTH_FAILURE_ACCOUNT_LIMIT, AUTH_FAILURE_IP_LIMIT) < 1:
     raise ImproperlyConfigured('Authentication failure limits must be positive.')
-if PRODUCTION:
+if PUBLIC_DEPLOYMENT:
+    _env_label = 'Production' if PRODUCTION else 'Showcase'
     if SECRET_KEY.startswith('local-') or len(SECRET_KEY) < 40:
-        raise ImproperlyConfigured('Production requires a random DJANGO_SECRET_KEY with at least 40 characters.')
-    if DEMO_MODE:
-        raise ImproperlyConfigured('DEMO_MODE must be false in production.')
+        raise ImproperlyConfigured(f'{_env_label} requires a random DJANGO_SECRET_KEY with at least 40 characters.')
     if not os.getenv('DJANGO_ALLOWED_HOSTS') or '*' in ALLOWED_HOSTS:
-        raise ImproperlyConfigured('Production requires explicit DJANGO_ALLOWED_HOSTS.')
+        raise ImproperlyConfigured(f'{_env_label} requires explicit DJANGO_ALLOWED_HOSTS.')
+if PRODUCTION and DEMO_MODE:
+    raise ImproperlyConfigured('DEMO_MODE must be false in production.')
+if SHOWCASE:
+    if not DEMO_MODE:
+        raise ImproperlyConfigured('DEMO_MODE must be true in showcase.')
+    if WECHAT_PAY_ENABLED:
+        raise ImproperlyConfigured('WECHAT_PAY_ENABLED must be false in showcase.')
 
 INSTALLED_APPS = [
     'django.contrib.admin', 'django.contrib.auth', 'django.contrib.contenttypes',
@@ -100,10 +109,10 @@ if database_url:
     DATABASES = {'default': {'ENGINE': 'django.db.backends.postgresql', 'NAME': unquote(parsed.path.lstrip('/')),
       'USER': unquote(parsed.username or ''), 'PASSWORD': unquote(parsed.password or ''),
       'HOST': parsed.hostname, 'PORT': parsed.port or 5432, 'CONN_MAX_AGE': 60,
-      'OPTIONS': {'sslmode': os.getenv('DB_SSLMODE', 'require' if PRODUCTION else 'prefer')}}}
+      'OPTIONS': {'sslmode': os.getenv('DB_SSLMODE', 'require' if PUBLIC_DEPLOYMENT else 'prefer')}}}
 else:
-    if PRODUCTION:
-        raise ImproperlyConfigured('Production requires DATABASE_URL for PostgreSQL/PostGIS.')
+    if PUBLIC_DEPLOYMENT:
+        raise ImproperlyConfigured(f"{'Production' if PRODUCTION else 'Showcase'} requires DATABASE_URL for PostgreSQL/PostGIS.")
     DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': BASE_DIR / 'db.sqlite3',
         'OPTIONS': {'timeout': 20, 'transaction_mode': 'IMMEDIATE'}}}
 
@@ -116,7 +125,7 @@ AUTH_PASSWORD_VALIDATORS = [
 # Throttle counters must survive restarts and be shared by every worker process.
 CACHES = {'default': {'BACKEND': 'django.core.cache.backends.db.DatabaseCache', 'LOCATION': 'yanhuo_cache',
     'OPTIONS': {'MAX_ENTRIES': 100000, 'CULL_FREQUENCY': 10}}} \
-    if PRODUCTION or os.getenv('DJANGO_CACHE', '') == 'database' else \
+    if PUBLIC_DEPLOYMENT or os.getenv('DJANGO_CACHE', '') == 'database' else \
     {'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
         'OPTIONS': {'MAX_ENTRIES': 100000, 'CULL_FREQUENCY': 10}}}
 REST_FRAMEWORK = {
@@ -129,10 +138,10 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'anon': '1200/hour',
         'user': '6000/hour',
-        'auth': '600/hour' if DEMO_MODE and not PRODUCTION else '30/hour',
-        'captcha': '600/hour' if DEMO_MODE and not PRODUCTION else '120/hour',
-        'upload': '600/hour' if DEMO_MODE and not PRODUCTION else '60/hour',
-        'ai_draft': '180/hour' if DEMO_MODE and not PRODUCTION else '30/hour',
+        'auth': '180/hour' if SHOWCASE else ('600/hour' if DEMO_MODE and not PRODUCTION else '30/hour'),
+        'captcha': '180/hour' if SHOWCASE else ('600/hour' if DEMO_MODE and not PRODUCTION else '120/hour'),
+        'upload': '600/hour' if DEMO_MODE and not PUBLIC_DEPLOYMENT else '60/hour',
+        'ai_draft': '180/hour' if DEMO_MODE and not PUBLIC_DEPLOYMENT else '30/hour',
     },
     'EXCEPTION_HANDLER': 'market.errors.exception_handler',
 }
@@ -153,10 +162,10 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 APPEND_SLASH = False
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'
-SESSION_COOKIE_SECURE = PRODUCTION
-CSRF_COOKIE_SECURE = PRODUCTION
-SECURE_SSL_REDIRECT = PRODUCTION
-SECURE_HSTS_SECONDS = 31536000 if PRODUCTION else 0
+SESSION_COOKIE_SECURE = PUBLIC_DEPLOYMENT
+CSRF_COOKIE_SECURE = PUBLIC_DEPLOYMENT
+SECURE_SSL_REDIRECT = PUBLIC_DEPLOYMENT
+SECURE_HSTS_SECONDS = 31536000 if PRODUCTION else (3600 if SHOWCASE else 0)
 SECURE_HSTS_INCLUDE_SUBDOMAINS = PRODUCTION
 SECURE_HSTS_PRELOAD = PRODUCTION
 SECURE_CONTENT_TYPE_NOSNIFF = True
