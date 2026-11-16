@@ -173,14 +173,24 @@
   gap: 16px;
 }
 .m-breadcrumb {
-  font-size: 12px;
+  font-size: 13px;
   color: #8d8073;
   display: flex;
-  gap: 15px;
+  gap: 10px;
   align-items: center;
 }
-.m-breadcrumb > strong {
+.m-crumb-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: #856a52;
   font-weight: 500;
+}
+.m-crumb-link:hover {
+  color: #b75620;
+}
+.m-breadcrumb > strong {
+  font-weight: 600;
   color: #43372d;
 }
 .m-breadcrumb > span {
@@ -1823,7 +1833,60 @@
 .m-work-stall-selector select { min-height: 44px; border: 0; background: transparent; color: #4b3829; font-size: 16px; max-width: calc(100% - 105px); }
 .m-setup-link { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; padding: 10px 12px; margin-bottom: 12px; background: #fff0d9; border-radius: 10px; font-size: 13px; color: #7d552e; line-height: 1.5; }
 .m-setup-link a { display: inline-flex; gap: 6px; align-items: center; min-height: 44px; font-weight: 700; }
-.m-back-link { display: inline-flex; min-height: 44px; align-items: center; color: #9b5427; font-size: 14px; }
+.m-heading-main {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-width: 0;
+}
+.m-back-link {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px 0 11px;
+  border-radius: 999px;
+  background: #fff2e2;
+  border: 1px solid #ecd4ba;
+  color: #93461a;
+  font-size: 13.5px;
+  font-weight: 700;
+  transition: background 0.15s;
+}
+.m-back-link:hover {
+  background: #fde6cc;
+}
+.m-home-shortcut {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  padding: 0 12px;
+  border-radius: 999px;
+  color: #846a53;
+  font-size: 13px;
+  font-weight: 600;
+}
+.m-home-shortcut:hover {
+  background: #f5ece0;
+  color: #5a422f;
+}
+.m-mobile-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 10px 0 6px;
+  margin-left: -6px;
+  border-radius: 999px;
+  background: #fff1e0;
+  border: 1px solid #edd5bb;
+  color: #96481b;
+  font-size: 13px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
 .m-more-page { display: grid; gap: 18px; max-width: 820px; }
 .m-more-menu { background: white; border: 1px solid var(--m-border); border-radius: 16px; padding: 0 16px; }
 .m-more-menu > a { display: flex; align-items: center; gap: 14px; min-height: 80px; padding: 12px 0; border-bottom: 1px solid #f0e9df; }

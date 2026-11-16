@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
+  ArrowLeft,
   ArrowUpRight,
   ClipboardCheck,
   KeyRound,
@@ -348,7 +349,18 @@ onMounted(async () => {
     <div class="o-workspace">
       <header class="o-topbar">
         <div class="o-topbar-title">
-          <ShieldCheck :size="20" style="color: #24372f; flex-shrink: 0" />
+          <RouterLink
+            v-if="section !== ''"
+            to="/ops"
+            class="o-back-overview"
+          >
+            <ArrowLeft :size="15" /><span>返回概览</span>
+          </RouterLink>
+          <ShieldCheck
+            v-else
+            :size="20"
+            style="color: #24372f; flex-shrink: 0"
+          />
           <h1>{{ currentNav.label }}</h1>
         </div>
         <div class="o-topbar-actions">

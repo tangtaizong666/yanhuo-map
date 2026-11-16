@@ -384,7 +384,9 @@ async function deleteAccount() {
             to="/merchant"
             ><Store :size="18" /> 商家工作台
             <ChevronRight :size="15" /></RouterLink
-          ><RouterLink v-else-if="!session.user.is_staff" to="/merchant/apply"
+          ><RouterLink
+            v-else-if="!session.user.is_staff"
+            to="/merchant/apply?returnTo=/me"
             ><Store :size="18" />{{
               session.user.merchant_application_status
                 ? "我的入驻申请"

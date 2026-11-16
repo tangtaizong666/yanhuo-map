@@ -188,6 +188,7 @@ function label(path: string) {
   if (path === "/me") return "返回个人中心";
   if (path.startsWith("/checkout/")) return "返回订单确认";
   if (path.startsWith("/orders/")) return "返回订单详情";
+  if (/^\/stalls\/\d+\/products\/\d+$/.test(path)) return "返回餐点详情";
   if (path.startsWith("/stalls/")) return "返回菜单";
   return "返回附近摊位";
 }
@@ -556,7 +557,12 @@ export function installBrowseReturn(router: Router) {
       if (sourcePath(from.path) && detailPath(to.path)) {
         current.snapshot = capture(from.path, to.path);
         nextOrigin = current.key;
-      } else if (sourcePath(from.path) && returnablePath(to.path)) {
+      } else if (
+        (sourcePath(from.path) && returnablePath(to.path)) ||
+        (to.path === "/map" &&
+          to.query.route === "1" &&
+          (sourcePath(from.path) || /^\/stalls\/\d+\/products\/\d+$/.test(from.path)))
+      ) {
         current.snapshot = undefined;
         nextOrigin = current.key;
       }
@@ -667,6 +673,13 @@ export function installBrowseReturn(router: Router) {
     }
 
     if (toTier === "consumer-hub") {
+      if (
+        target.path === "/map" &&
+        target.query.route === "1" &&
+        (fromTier === "consumer-context" || fromTier === "consumer-leaf")
+      ) {
+        return rawPush(to);
+      }
       if (fromTier === "consumer-hub" || fromTier === "consumer-leaf") {
         return router.replace(to);
       }

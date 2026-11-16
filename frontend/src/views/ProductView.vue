@@ -461,6 +461,7 @@ onUnmounted(() => {
                       routeUrl(stall.latitude, stall.longitude, stall.name, {
                         stallId: stall.id,
                         address: stall.address,
+                        returnTo: `/stalls/${stallId}/products/${product.id}`,
                       })
                     "
                     >路线<ArrowUpRight :size="15"

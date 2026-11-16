@@ -11,6 +11,7 @@ import {
 } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
+  ArrowLeft,
   Bike,
   Check,
   CheckCircle2,
@@ -1478,7 +1479,20 @@ onUnmounted(() => {
     </p>
     <p v-if="historyBusy" role="status">正在加载历史订单…</p>
     <div v-if="showQueueSummary" class="m-simple-list-label">
-      <h3>{{ queueTitle }}</h3>
+      <div class="m-list-label-main">
+        <button
+          v-if="
+            cancellationOnly ||
+            !primaryStages.some((item) => item.value === filter)
+          "
+          type="button"
+          class="m-queue-back-btn"
+          @click="selectStage('pending')"
+        >
+          <ArrowLeft :size="15" />返回出餐台
+        </button>
+        <h3>{{ queueTitle }}</h3>
+      </div>
       <span
         >{{ ordersReady ? shownOrders.length : "—" }} 单<span
           v-if="filter === 'ready'"
@@ -1742,6 +1756,13 @@ onUnmounted(() => {
         <div v-if="selectedOrder" class="m-orders-drawer-content">
           <header class="m-orders-drawer-header">
             <div>
+              <button
+                type="button"
+                class="m-drawer-back-btn"
+                @click="closeDetails"
+              >
+                <ArrowLeft :size="16" />返回订单列表
+              </button>
               <h2 id="m-orders-detail-heading">订单详情</h2>
               <p class="m-drawer-order-number">#{{ selectedOrder.number }}</p>
               <span
@@ -3142,11 +3163,52 @@ onUnmounted(() => {
 .m-orders-drawer-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   gap: 18px;
-  padding: 24px 28px;
+  padding: 20px 26px;
   background: #fffbf4;
   border-bottom: 1px solid #eee2d1;
+}
+.m-list-label-main {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.m-queue-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 44px;
+  padding: 0 12px 0 9px;
+  border-radius: 999px;
+  border: 1px solid #ead3b8;
+  background: #fff2e2;
+  color: #93461a;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.m-queue-back-btn:hover {
+  background: #fde5ca;
+}
+.m-drawer-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 44px;
+  padding: 0 11px 0 7px;
+  margin: -4px 0 6px -6px;
+  border: 1px solid #edd5bb;
+  border-radius: 999px;
+  background: #fff2e2;
+  color: #93461a;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.m-drawer-back-btn:hover {
+  background: #fde5ca;
 }
 .m-orders-drawer-header h2 {
   margin: 8px 0 0;

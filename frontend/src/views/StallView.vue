@@ -272,6 +272,7 @@ onUnmounted(() => {
                   routeUrl(stall.latitude, stall.longitude, stall.name, {
                     stallId: stall.id,
                     address: stall.address,
+                    returnTo: `/stalls/${stall.id}`,
                   })
                 "
               >

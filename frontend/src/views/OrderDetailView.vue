@@ -316,6 +316,7 @@ const navigationUrl = computed(() =>
         {
           stallId: order.value.stall_id,
           address: order.value.pickup_address,
+          returnTo: `/orders/${order.value.id}`,
         },
       )
     : "",

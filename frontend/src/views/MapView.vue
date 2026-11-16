@@ -6,6 +6,7 @@ import {
   MapPin,
   Navigation,
   Compass,
+  ArrowLeft,
   ArrowUpRight,
   LocateFixed,
   RefreshCw,
@@ -22,13 +23,18 @@ import { useSession } from "../stores/session";
 import { loadAMap, locate } from "../lib/amap";
 import { api, confirmedText, statusText } from "../lib/api";
 import { copyText } from "../lib/engagement";
+import { safeReturnTo } from "../lib/identity";
 import { notify } from "../lib/notify";
 import type { Stall, StallMap } from "../lib/types";
 import StallCard from "../components/StallCard.vue";
 import DiscoveryFilters from "../components/DiscoveryFilters.vue";
 import StallVisitInfo from "../components/StallVisitInfo.vue";
 import StallShare from "../components/StallShare.vue";
-import { returnViewState, useBrowseReturn } from "../lib/browseReturn";
+import {
+  returnViewState,
+  useBrowseReturn,
+  useDetailReturn,
+} from "../lib/browseReturn";
 const route = useRoute(), router = useRouter();
 const bounds = ref("");
 const {
@@ -163,13 +169,51 @@ const originPresets = computed(() => {
     if (Number.isFinite(item.latitude) && Number.isFinite(item.longitude)) {
       list.push({
         key: `area:${item.id}`,
-        label: item.name.replace(/^哈尔滨理工大学南区[·\s]*/, ""),
+        label:
+          item.name
+            .replace(/^(?:哈尔滨理工大学|哈理工)(?:南区|东区|西区)?[\s·•-]*/, "")
+            .trim() || item.name,
         lat: item.latitude,
         lng: item.longitude,
       });
     }
   }
   return list;
+});
+const routeFallback = computed(() => {
+  if (typeof route.query.from === "string" && route.query.from) {
+    const target = safeReturnTo(route.query.from);
+    if (target && target !== "/" && !target.startsWith("/map")) {
+      return target;
+    }
+  }
+  if (routeTarget.value?.stallId) {
+    return `/stalls/${routeTarget.value.stallId}`;
+  }
+  return "";
+});
+const detailReturn = useDetailReturn(
+  () => routeFallback.value || "/",
+  "返回摊位",
+);
+const routeBackTarget = computed(() => {
+  const originTarget = detailReturn.target.value;
+  if (
+    originTarget &&
+    originTarget !== "/" &&
+    !originTarget.startsWith("/map")
+  ) {
+    return originTarget;
+  }
+  return routeFallback.value;
+});
+const routeBackLabel = computed(() => {
+  const target = routeBackTarget.value;
+  if (!target) return "";
+  if (target.startsWith("/orders/")) return "返回订单详情";
+  if (/^\/stalls\/\d+\/products\/\d+$/.test(target)) return "返回餐点详情";
+  if (target.startsWith("/stalls/")) return "返回摊位";
+  return detailReturn.label.value;
 });
 function haversineMeters(
   lat1: number,
@@ -722,8 +766,140 @@ onUnmounted(() => {
         <LocateFixed :size="16" />{{ locating ? "正在定位" : "定位我的位置" }}
       </button>
     </div>
-    <div class="map-layout" :class="{ 'map-fallback': !!mapError }">
+    <div
+      class="map-layout"
+      :class="{
+        'map-fallback': !!mapError,
+        'has-active-route': !!routeTarget,
+      }"
+    >
+      <section
+        v-if="routeTarget"
+        class="route-planner-card"
+        aria-label="站内步行路线"
+      >
+        <div class="route-planner-topbar">
+          <a
+            v-if="routeBackTarget"
+            :href="routeBackTarget"
+            class="route-back-btn"
+            @click="detailReturn.go"
+          >
+            <ArrowLeft :size="15" />{{ routeBackLabel }}
+          </a>
+          <span v-else class="route-badge">
+            <Navigation :size="13" />站内步行路线
+          </span>
+          <button
+            type="button"
+            class="route-close-btn"
+            aria-label="关闭路线指引"
+            @click="closeRoute"
+          >
+            <X :size="15" /><span>退出路线</span>
+          </button>
+        </div>
+
+        <div class="route-planner-title">
+          <div class="route-title-line">
+            <span v-if="routeBackTarget" class="route-badge">
+              <Navigation :size="12" />步行路线
+            </span>
+            <h2>前往「{{ routeTarget.name }}」</h2>
+          </div>
+          <p v-if="routeTarget.address" class="route-dest-address">
+            {{ routeTarget.address }}
+          </p>
+        </div>
+
+        <div class="route-origins" role="group" aria-label="选择步行起点">
+          <span class="route-origins-label">起点：</span>
+          <button
+            v-for="preset in originPresets"
+            :key="preset.key"
+            type="button"
+            :class="[
+              'route-origin-chip',
+              { active: activeOrigin?.key === preset.key && !pickingOrigin },
+            ]"
+            @click="selectOrigin(preset.key)"
+          >
+            {{ preset.label }}
+          </button>
+          <button
+            v-if="!mapError"
+            type="button"
+            :class="[
+              'route-origin-chip',
+              'pick-chip',
+              { active: pickingOrigin },
+            ]"
+            @click="togglePickOrigin"
+          >
+            <Compass :size="13" />{{
+              pickingOrigin ? "轻点右侧地图…" : "点图选起点"
+            }}
+          </button>
+        </div>
+
+        <div v-if="routeLoading" class="route-metrics" role="status">
+          正在计算校园步行路线…
+        </div>
+        <div v-else-if="routePlan" class="route-metrics">
+          <strong>
+            {{
+              routePlan.mode === "walking"
+                ? `步行约 ${routePlan.distanceMeters} 米 · 约 ${routePlan.durationMinutes} 分钟`
+                : `直线约 ${routePlan.distanceMeters} 米 · 预计步行 ${routePlan.durationMinutes} 分钟（${routePlan.bearing}）`
+            }}
+          </strong>
+          <small>
+            从「{{ activeOrigin?.label || "校区起点" }}」出发 · 站内直接看图
+          </small>
+        </div>
+
+        <details v-if="routePlan?.steps.length" class="route-steps-details">
+          <summary>
+            <span>查看分段步行指引（{{ routePlan.steps.length }} 段）</span>
+            <ChevronDown :size="15" />
+          </summary>
+          <ol class="route-steps-list">
+            <li v-for="(step, idx) in routePlan.steps" :key="idx">
+              <span>{{ step.instruction }}</span>
+              <small v-if="step.distance">{{ step.distance }}米</small>
+            </li>
+          </ol>
+        </details>
+
+        <div class="route-planner-actions">
+          <RouterLink
+            v-if="
+              routeTarget.stallId &&
+              routeBackTarget !== `/stalls/${routeTarget.stallId}`
+            "
+            :to="`/stalls/${routeTarget.stallId}`"
+            class="btn btn-secondary"
+          >
+            <Store :size="15" />查看摊位
+          </RouterLink>
+          <button
+            type="button"
+            class="btn btn-ghost"
+            @click="copyRouteDestination"
+          >
+            <Check v-if="routeCopied" :size="15" />
+            <Copy v-else :size="15" />
+            {{ routeCopied ? "已复制位置" : "复制地址" }}
+          </button>
+        </div>
+      </section>
       <aside class="map-sidebar">
+        <div v-if="routeTarget" class="route-sidebar-subhead">
+          <span>附近其他摊位 · {{ stalls.length }} 家</span>
+          <button type="button" @click="closeRoute">
+            <Search :size="13" />搜全部摊位
+          </button>
+        </div>
         <div class="map-list-controls">
           <div class="search-box">
             <Search :size="17" /><input
@@ -836,108 +1012,47 @@ onUnmounted(() => {
       </aside>
       <section
         class="map-canvas"
-        :class="{ 'has-active-route': !!routeTarget, 'is-picking-point': pickingOrigin || pickingMyPosition }"
+        :class="{
+          'has-active-route': !!routeTarget,
+          'is-picking-point': pickingOrigin || pickingMyPosition,
+        }"
         aria-label="摊位地图"
       >
         <div ref="mapNode" class="map-container"></div>
-        <section
-          v-if="routeTarget"
-          class="route-planner-card"
-          aria-label="站内步行路线"
+        <div
+          v-if="routeTarget && !mapError"
+          class="map-route-hud"
+          :class="{ 'is-picking': pickingOrigin }"
         >
-          <div class="route-planner-head">
-            <div class="route-planner-title">
-              <span class="route-badge"><Navigation :size="14" />站内步行路线</span>
-              <h2>前往「{{ routeTarget.name }}」</h2>
-              <p v-if="routeTarget.address" class="route-dest-address">
-                {{ routeTarget.address }}
-              </p>
-            </div>
+          <template v-if="pickingOrigin">
+            <Compass :size="15" />
+            <span>请在地图上轻点你当前所在的位置作为步行起点</span>
+            <button type="button" @click="pickingOrigin = false">
+              取消选点
+            </button>
+          </template>
+          <template v-else>
+            <Navigation :size="14" />
+            <span>
+              前往「{{ routeTarget.name }}」
+              <b v-if="routePlan">
+                ·
+                {{
+                  routePlan.mode === "walking"
+                    ? `步行约 ${routePlan.distanceMeters} 米（约 ${routePlan.durationMinutes} 分钟）`
+                    : `直线约 ${routePlan.distanceMeters} 米`
+                }}
+              </b>
+            </span>
             <button
               type="button"
-              class="route-close-btn"
-              aria-label="关闭路线指引"
+              aria-label="退出路线预览"
               @click="closeRoute"
             >
-              <X :size="16" />
+              <X :size="14" />退出
             </button>
-          </div>
-
-          <div class="route-origins" role="group" aria-label="选择步行起点">
-            <span class="route-origins-label">起点：</span>
-            <button
-              v-for="preset in originPresets"
-              :key="preset.key"
-              type="button"
-              :class="[
-                'route-origin-chip',
-                { active: activeOrigin?.key === preset.key && !pickingOrigin },
-              ]"
-              @click="selectOrigin(preset.key)"
-            >
-              {{ preset.label }}
-            </button>
-            <button
-              v-if="!mapError"
-              type="button"
-              :class="['route-origin-chip', 'pick-chip', { active: pickingOrigin }]"
-              @click="togglePickOrigin"
-            >
-              <Compass :size="13" />{{ pickingOrigin ? "轻点地图选起点…" : "点图选起点" }}
-            </button>
-          </div>
-
-          <div v-if="routeLoading" class="route-metrics" role="status">
-            正在计算校园步行路线…
-          </div>
-          <div v-else-if="routePlan" class="route-metrics">
-            <strong>
-              {{
-                routePlan.mode === "walking"
-                  ? `步行约 ${routePlan.distanceMeters} 米 · 约 ${routePlan.durationMinutes} 分钟`
-                  : `直线约 ${routePlan.distanceMeters} 米 · 预计步行 ${routePlan.durationMinutes} 分钟（${routePlan.bearing}）`
-              }}
-            </strong>
-            <small>
-              从「{{ activeOrigin?.label || "校区起点" }}」出发 · 无需跳转外部 App
-            </small>
-          </div>
-
-          <details
-            v-if="routePlan?.steps.length"
-            class="route-steps-details"
-          >
-            <summary>
-              <span>查看分段步行指引（{{ routePlan.steps.length }} 段）</span>
-              <ChevronDown :size="15" />
-            </summary>
-            <ol class="route-steps-list">
-              <li v-for="(step, idx) in routePlan.steps" :key="idx">
-                <span>{{ step.instruction }}</span>
-                <small v-if="step.distance">{{ step.distance }}米</small>
-              </li>
-            </ol>
-          </details>
-
-          <div class="route-planner-actions">
-            <RouterLink
-              v-if="routeTarget.stallId"
-              :to="`/stalls/${routeTarget.stallId}`"
-              class="btn btn-secondary"
-            >
-              <Store :size="15" />返回摊位
-            </RouterLink>
-            <button
-              type="button"
-              class="btn btn-ghost"
-              @click="copyRouteDestination"
-            >
-              <Check v-if="routeCopied" :size="15" />
-              <Copy v-else :size="15" />
-              {{ routeCopied ? "已复制位置" : "复制地址" }}
-            </button>
-          </div>
-        </section>
+          </template>
+        </div>
         <p
           v-if="pickingMyPosition && !routeTarget"
           class="map-pick-banner"
@@ -1094,6 +1209,48 @@ onUnmounted(() => {
   overflow: hidden;
   background: #fff;
 }
+.map-layout.has-active-route:not(.map-fallback) {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.map-layout.has-active-route:not(.map-fallback) .route-planner-card {
+  grid-column: 1;
+  grid-row: 1;
+}
+.map-layout.has-active-route:not(.map-fallback) .map-sidebar {
+  grid-column: 1;
+  grid-row: 2;
+}
+.map-layout.has-active-route:not(.map-fallback) .map-list-controls {
+  display: none;
+}
+.map-layout.has-active-route:not(.map-fallback) .map-canvas {
+  grid-column: 2;
+  grid-row: 1 / -1;
+}
+.route-sidebar-subhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #84705c;
+}
+.route-sidebar-subhead button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 44px;
+  padding: 0 10px;
+  border-radius: 999px;
+  color: #9e4c1d;
+  font-size: 12px;
+  font-weight: 600;
+}
+.route-sidebar-subhead button:hover {
+  background: #fbf1e3;
+}
 .map-sidebar {
   border-right: 1px solid var(--line);
   display: flex;
@@ -1192,18 +1349,32 @@ onUnmounted(() => {
 }
 .map-fallback {
   display: flex;
-  flex-direction: column-reverse;
+  flex-direction: column;
   height: auto;
   min-height: 0;
 }
-.map-fallback .map-sidebar {
-  border: 0;
-  padding: 0 6px;
+.map-fallback .route-planner-card {
+  order: 1;
+  width: calc(100% - 32px);
+  max-width: 760px;
+  max-height: none;
+  margin: 14px auto 4px;
+  border: 1px solid #e7d5bd;
+  border-radius: 16px;
 }
 .map-fallback .map-canvas {
+  order: 2;
   min-height: 0;
   height: auto;
   background: #fffaf1;
+}
+.map-fallback .map-sidebar {
+  order: 3;
+  border: 0;
+  padding: 0 6px;
+}
+.map-fallback .route-sidebar-subhead {
+  display: none;
 }
 .map-fallback .map-container {
   display: none;
@@ -1283,9 +1454,10 @@ onUnmounted(() => {
 }
 .selected-stall {
   position: absolute;
-  left: 24px;
+  left: 20px;
   right: 72px;
   bottom: 20px;
+  max-width: 460px;
   border-radius: 15px;
   background: #fffcf7f5;
   backdrop-filter: blur(10px);
@@ -1352,80 +1524,99 @@ onUnmounted(() => {
   cursor: crosshair;
 }
 .route-planner-card {
-  position: absolute;
-  left: 18px;
-  top: 18px;
-  z-index: 4;
-  width: min(392px, calc(100% - 84px));
-  max-height: calc(100% - 36px);
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  max-height: 430px;
   overflow-y: auto;
-  border-radius: 16px;
-  background: rgba(255, 252, 246, 0.97);
-  backdrop-filter: blur(10px);
-  border: 1px solid #e7d5bd;
-  box-shadow: 0 12px 32px rgba(56, 36, 18, 0.14);
-  padding: 14px 16px;
+  background: #fffaf2;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid #e7d5bd;
+  padding: 12px 16px 14px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 9px;
+  scrollbar-width: thin;
+  scrollbar-color: #e8d9c6 transparent;
 }
-.map-fallback .route-planner-card {
-  position: relative;
-  left: auto;
-  top: auto;
-  width: calc(100% - 32px);
-  max-width: 760px;
-  max-height: none;
-  margin: 14px auto;
-}
-.route-planner-head {
+.route-planner-topbar {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
+}
+.route-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 44px;
+  padding: 0 11px 0 8px;
+  margin-left: -4px;
+  border-radius: 999px;
+  color: #8f4318;
+  background: #fbeedd;
+  border: 1px solid #edd4b8;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.route-back-btn:hover {
+  background: #f8e3c8;
 }
 .route-planner-title {
   min-width: 0;
 }
+.route-title-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
 .route-badge {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   font-size: 11px;
   font-weight: 700;
   color: #b45118;
   background: #fdead9;
   border-radius: 999px;
-  padding: 3px 9px;
+  padding: 3px 8px;
+  flex-shrink: 0;
 }
 .route-planner-title h2 {
-  font-size: 16px;
-  margin: 6px 0 2px;
+  font-size: 15px;
+  margin: 0;
   color: #35261a;
   overflow-wrap: anywhere;
 }
 .route-dest-address {
-  margin: 0;
+  margin: 3px 0 0;
   font-size: 12px;
   color: #7b6651;
-  line-height: 1.5;
+  line-height: 1.45;
   overflow-wrap: anywhere;
 }
 .route-close-btn {
-  width: 44px;
-  height: 44px;
+  min-height: 44px;
+  padding: 0 10px;
   flex-shrink: 0;
-  border-radius: 12px;
-  display: grid;
-  place-items: center;
-  color: #7b6651;
-  background: #f6ede0;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #755f4a;
+  background: #f5ece0;
+}
+.route-close-btn:hover {
+  background: #eee0cd;
 }
 .route-origins {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 5px;
 }
 .route-origins-label {
   font-size: 12px;
@@ -1436,8 +1627,8 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  min-height: 38px;
-  padding: 6px 11px;
+  min-height: 44px;
+  padding: 6px 12px;
   border-radius: 999px;
   border: 1px solid #e4d4be;
   background: #fffdf9;
@@ -1455,18 +1646,18 @@ onUnmounted(() => {
   border-style: dashed;
 }
 .route-metrics {
-  background: #fbf3e6;
+  background: #fffdf8;
   border: 1px solid #ecdac2;
-  border-radius: 12px;
-  padding: 10px 12px;
+  border-radius: 11px;
+  padding: 8px 11px;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
   font-size: 13px;
   color: #6f563e;
 }
 .route-metrics strong {
-  font-size: 14px;
+  font-size: 13.5px;
   color: #8f3e12;
 }
 .route-metrics small {
@@ -1475,9 +1666,9 @@ onUnmounted(() => {
 }
 .route-steps-details {
   border: 1px solid #eadbc7;
-  border-radius: 12px;
+  border-radius: 11px;
   background: #fffdf9;
-  padding: 0 12px;
+  padding: 0 11px;
 }
 .route-steps-details summary {
   list-style: none;
@@ -1499,16 +1690,16 @@ onUnmounted(() => {
 }
 .route-steps-list {
   margin: 0;
-  padding: 2px 0 12px 18px;
+  padding: 2px 0 10px 18px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
   border-top: 1px dashed #eadbc7;
 }
 .route-steps-list li {
   font-size: 12px;
   color: #5b4735;
-  line-height: 1.55;
+  line-height: 1.5;
 }
 .route-steps-list small {
   margin-left: 6px;
@@ -1523,7 +1714,69 @@ onUnmounted(() => {
   min-height: 44px;
   flex: 1;
   font-size: 12px;
-  padding: 8px 12px;
+  padding: 6px 12px;
+}
+.map-route-hud {
+  position: absolute;
+  left: 16px;
+  top: 16px;
+  z-index: 4;
+  max-width: calc(100% - 76px);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 5px 3px 13px;
+  border-radius: 999px;
+  background: rgba(255, 252, 246, 0.94);
+  backdrop-filter: blur(8px);
+  border: 1px solid #e6d4bc;
+  box-shadow: 0 6px 18px rgba(56, 36, 18, 0.1);
+  color: #4b3726;
+  font-size: 12.5px;
+}
+.map-route-hud > svg {
+  flex-shrink: 0;
+  color: #c95817;
+}
+.map-route-hud > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.map-route-hud > span b {
+  color: #9d4513;
+  font-weight: 700;
+}
+.map-route-hud > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 44px;
+  min-width: 44px;
+  justify-content: center;
+  padding: 0 11px;
+  border-radius: 999px;
+  background: #f5ebe0;
+  color: #6d5641;
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.map-route-hud > button:hover {
+  background: #ecdcc9;
+}
+.map-route-hud.is-picking {
+  background: rgba(53, 38, 26, 0.92);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: #fffaf2;
+}
+.map-route-hud.is-picking > svg {
+  color: #ffb87a;
+}
+.map-route-hud.is-picking > button {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
 }
 .map-pick-banner {
   position: absolute;
@@ -1607,7 +1860,7 @@ onUnmounted(() => {
   }
   .map-layout {
     display: flex;
-    flex-direction: column-reverse;
+    flex-direction: column;
     height: auto;
     border: 0;
     border-radius: 0;
@@ -1616,6 +1869,7 @@ onUnmounted(() => {
     overflow: visible;
   }
   .map-canvas {
+    order: 1;
     height: clamp(216px, 34dvh, 260px);
     min-height: 216px;
     border-radius: 15px;
@@ -1628,39 +1882,38 @@ onUnmounted(() => {
     min-height: 0;
     box-shadow: none;
   }
-  .map-canvas.has-active-route {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    height: auto;
-    min-height: 0;
-    border: 0;
-    border-radius: 0;
-    background: none;
-    box-shadow: none;
-    overflow: visible;
-  }
-  .map-canvas.has-active-route .map-container {
-    position: relative;
-    height: 210px;
-    border-radius: 15px;
-    overflow: hidden;
-    border: 1px solid #e7dcc9;
-    box-shadow: 0 8px 20px rgba(60, 37, 20, 0.06);
-  }
-  .map-canvas.has-active-route .route-planner-card {
-    position: relative;
-    left: auto;
-    top: auto;
+  .route-planner-card {
+    order: 2;
     width: 100%;
     max-height: none;
+    border-radius: 15px;
+    border: 1px solid #e7d5bd;
+    background: #fffcf6;
+    box-shadow: 0 8px 20px rgba(56, 36, 18, 0.06);
+    padding: 12px 14px;
     margin: 0;
+  }
+  .route-sidebar-subhead {
+    display: none;
+  }
+  .map-route-hud {
+    display: none;
+  }
+  .map-route-hud.is-picking {
+    display: inline-flex;
+    left: 10px;
+    top: 10px;
+    max-width: calc(100% - 66px);
   }
   .route-origin-chip {
     min-height: 44px;
     padding: 8px 13px;
   }
+  .route-steps-details summary {
+    min-height: 44px;
+  }
   .map-sidebar {
+    order: 3;
     border: 0;
     border-radius: 17px;
     background: none;

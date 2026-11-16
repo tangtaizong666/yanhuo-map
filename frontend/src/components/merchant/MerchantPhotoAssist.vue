@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
-import { Camera, Check, ImagePlus, RefreshCw, SlidersHorizontal, Sparkles, Upload, X } from "lucide-vue-next";
+import { ArrowLeft, Camera, Check, ImagePlus, RefreshCw, SlidersHorizontal, Sparkles, Upload, X } from "lucide-vue-next";
 import { api } from "../../lib/api";
 import { prepareDishPhoto } from "../../lib/imagePrepare";
 import { ownedImage } from "../../lib/media";
@@ -33,6 +33,7 @@ type AiDraftResponse = {
 
 const props = defineProps<{
   open: boolean;
+  fromEditor?: boolean;
   stall: any;
   discoveryOnly?: boolean;
   categories: string[];
@@ -46,6 +47,7 @@ const emit = defineEmits<{
   close: [];
   submitDraft: [draft: AssistDraft];
   handoffToEditor: [draft: AssistDraft];
+  backToEditor: [draft: AssistDraft];
   openPendingRecovery: [];
 }>();
 
@@ -427,6 +429,11 @@ function handoff() {
   cancelInFlight();
   emit("handoffToEditor", JSON.parse(JSON.stringify(draft)));
 }
+function returnToManualEditor() {
+  if (locked.value) return;
+  cancelInFlight();
+  emit("backToEditor", JSON.parse(JSON.stringify(draft)));
+}
 </script>
 
 <template>
@@ -446,7 +453,16 @@ function handoff() {
       >
         <header :inert="discardOpen">
           <div>
-            <span class="assist-eyebrow">拍照辅助上架</span>
+            <button
+              v-if="fromEditor"
+              type="button"
+              class="assist-back-btn"
+              :disabled="locked"
+              @click="returnToManualEditor"
+            >
+              <ArrowLeft :size="15" />返回手动填写
+            </button>
+            <span v-else class="assist-eyebrow">拍照辅助上架</span>
             <h2 id="photo-assist-title">拍菜识图上架</h2>
           </div>
           <button
@@ -926,6 +942,24 @@ function handoff() {
   background: #f6eee4;
   color: #473b30;
   flex-shrink: 0;
+}
+.assist-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 44px;
+  padding: 0 11px 0 7px;
+  margin: -4px 0 4px -6px;
+  border-radius: 999px;
+  border: 1px solid #edd5bb;
+  background: #fff2e2;
+  color: #93461a;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.assist-back-btn:hover:not(:disabled) {
+  background: #fde5ca;
 }
 .assist-form {
   display: flex;

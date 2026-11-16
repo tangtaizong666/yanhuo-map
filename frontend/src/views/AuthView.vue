@@ -258,7 +258,10 @@ async function submit() {
 
 <template>
   <div :class="['page', 'auth-page', { 'merchant-auth-page': merchantLogin }]">
-    <RouterLink to="/" class="back-link"
+    <RouterLink
+      to="/"
+      class="back-link"
+      @click="session.setConsumerPreview(true)"
       ><ArrowLeft :size="18" /> 返回逛逛</RouterLink
     >
     <div class="auth-layout">

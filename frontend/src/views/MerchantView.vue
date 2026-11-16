@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { Store, MapPin, ClipboardList, Utensils, Settings2, ArrowUpRight, LogOut, RefreshCw, ArrowRight, CircleHelp } from "lucide-vue-next";
+import { Store, MapPin, ClipboardList, Utensils, Settings2, ArrowLeft, ArrowUpRight, LogOut, RefreshCw, ArrowRight, CircleHelp } from "lucide-vue-next";
 import { api } from "../lib/api";
+import { safeReturnTo } from "../lib/identity";
 import { useSession } from "../stores/session";
 import { attentionOrders, type OrderCounts } from "../lib/orderPages";
 import { notify } from "../lib/notify";
@@ -36,6 +37,71 @@ const sectionLabels: Record<string, string> = {
 };
 const current = computed(() => ({ label: sectionLabels[section.value] || nav.value.find(n => n.id === section.value)?.label || "商家工作台" }));
 const activeNav = computed(() => section.value === "" || (orderWorkspace.value && !discoveryOnly.value) ? "" : section.value === "products" ? "products" : "more");
+const lastMainSection = ref<"" | "products" | "more" | null>(null);
+watch(
+  section,
+  (sec) => {
+    if (sec === "" || sec === "products" || sec === "more") {
+      lastMainSection.value = sec;
+    }
+  },
+  { immediate: true },
+);
+const subpageBack = computed(() => {
+  const sec = section.value;
+  if (["store", "analytics", "reviews"].includes(sec)) {
+    if (lastMainSection.value === "") {
+      return {
+        to: "/merchant",
+        label: discoveryOnly.value ? "返回今天出摊" : "返回接单台",
+      };
+    }
+    if (lastMainSection.value === "products") {
+      return { to: "/merchant/products", label: "返回菜品管理" };
+    }
+    return { to: "/merchant/more", label: "返回更多" };
+  }
+  if (sec === "orders") {
+    if (discoveryOnly.value) {
+      return lastMainSection.value === "more"
+        ? { to: "/merchant/more", label: "返回更多" }
+        : { to: "/merchant", label: "返回今天出摊" };
+    }
+    const qFilter = String(route.query.filter || "");
+    if (
+      lastMainSection.value === "more" ||
+      lastMainSection.value === "products" ||
+      ["all", "completed", "cancelled", "followup"].includes(qFilter)
+    ) {
+      if (lastMainSection.value === "products") {
+        return { to: "/merchant/products", label: "返回菜品管理" };
+      }
+      if (lastMainSection.value === "") {
+        return { to: "/merchant", label: "返回接单台" };
+      }
+      return { to: "/merchant/more", label: "返回更多" };
+    }
+  }
+  return null;
+});
+const onboardingBack = computed(() => {
+  if (typeof route.query.returnTo === "string" && route.query.returnTo) {
+    const target = safeReturnTo(route.query.returnTo);
+    if (
+      target &&
+      !target.startsWith("/merchant") &&
+      !target.startsWith("/ops")
+    ) {
+      return {
+        to: target,
+        label: target === "/me" ? "返回个人中心" : "返回上一页",
+      };
+    }
+  }
+  return session.user
+    ? { to: "/me", label: "返回个人中心" }
+    : { to: "/", label: "返回首页" };
+});
 const allowed = computed(
   () => !!session.user && session.user.is_merchant,
 );
@@ -476,7 +542,23 @@ async function renewCurrentLocation() {
 </script>
 <template>
   <div v-if="!allowed" class="m-application-page">
-    <RouterLink class="brand" to="/merchant"><span class="brand-mark"><Store :size="25" /></span><span>烟火地图<small>商家入驻</small></span></RouterLink>
+    <div class="m-application-topbar">
+      <RouterLink
+        :to="onboardingBack.to"
+        class="m-back-link"
+        @click="session.setConsumerPreview(true)"
+      >
+        <ArrowLeft :size="17" />{{ onboardingBack.label }}
+      </RouterLink>
+      <RouterLink
+        class="brand"
+        to="/"
+        @click="session.setConsumerPreview(true)"
+      >
+        <span class="brand-mark"><Store :size="24" /></span>
+        <span>烟火地图<small>商家入驻</small></span>
+      </RouterLink>
+    </div>
     <MerchantOnboarding :key="session.user?.id || 'guest'" @approved="applicationApproved" />
     <div class="m-application-footer">
       <RouterLink to="/" class="m-text-link" @click="session.setConsumerPreview(true)">去学生端逛逛 <ArrowUpRight :size="14" /></RouterLink>
@@ -498,8 +580,28 @@ async function renewCurrentLocation() {
     </aside>
     <div class="m-workspace">
       <header class="m-topbar">
-        <div class="m-mobile-brand"><Store :size="23" /><h1>{{ current.label }}</h1></div>
-        <div class="m-breadcrumb">烟火地图 <span>/</span><strong>{{ current.label }}</strong></div>
+        <div class="m-mobile-brand">
+          <RouterLink
+            v-if="subpageBack"
+            :to="subpageBack.to"
+            class="m-mobile-back"
+            :aria-label="subpageBack.label"
+          >
+            <ArrowLeft :size="18" />
+            <span>返回</span>
+          </RouterLink>
+          <Store v-else :size="23" />
+          <h1>{{ current.label }}</h1>
+        </div>
+        <div class="m-breadcrumb">
+          <RouterLink to="/merchant" class="m-crumb-link">商家工作台</RouterLink>
+          <template v-if="['store', 'analytics', 'reviews'].includes(section)">
+            <span>/</span>
+            <RouterLink to="/merchant/more" class="m-crumb-link">更多</RouterLink>
+          </template>
+          <span>/</span>
+          <strong>{{ current.label }}</strong>
+        </div>
         <div class="m-topbar-right">
           <span v-if="session.config?.demo_mode" class="m-preview-label">{{ session.config.services_simulation_enabled ? '模拟体验' : '示例环境' }}</span>
           <button type="button" class="m-refresh-button m-guide-button" aria-label="使用说明" @click="guideOpen = true"><CircleHelp :size="18" /><span>说明</span></button>
@@ -508,8 +610,23 @@ async function renewCurrentLocation() {
       </header>
       <div class="m-content">
         <div class="m-page-heading">
-          <h1>{{ current.label }}</h1>
-          <RouterLink v-if="!['', 'products', 'more'].includes(section)" to="/merchant/more" class="m-back-link">返回更多</RouterLink>
+          <div class="m-heading-main">
+            <RouterLink
+              v-if="subpageBack"
+              :to="subpageBack.to"
+              class="m-back-link"
+            >
+              <ArrowLeft :size="17" />{{ subpageBack.label }}
+            </RouterLink>
+            <h1>{{ current.label }}</h1>
+          </div>
+          <RouterLink
+            v-if="subpageBack && subpageBack.to !== '/merchant'"
+            to="/merchant"
+            class="m-home-shortcut"
+          >
+            {{ discoveryOnly ? "回今天出摊" : "回接单台" }}
+          </RouterLink>
         </div>
         <div v-if="loading" class="m-panel m-empty"><span class="spinner" /><p>正在读取工作台…</p></div>
         <template v-else>
@@ -554,7 +671,8 @@ async function renewCurrentLocation() {
   </div>
 </template>
 <style scoped>
-.m-application-page { max-width: 920px; margin: 0 auto; padding: 28px 18px; }
+.m-application-page { max-width: 920px; margin: 0 auto; padding: 20px 18px 28px; }
+.m-application-topbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 4px; }
 .m-application-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-top: 8px; }
 .m-more-final-action { width: 100%; max-width: 820px; margin-top: 24px; }
 .m-due-actions { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }

@@ -295,7 +295,11 @@ export function routeUrl(
   lat: number,
   lng: number,
   name: string,
-  extra?: { stallId?: number | null; address?: string | null },
+  extra?: {
+    stallId?: number | null;
+    address?: string | null;
+    returnTo?: string | null;
+  },
 ) {
   const params = [
     "route=1",
@@ -307,6 +311,13 @@ export function routeUrl(
   }
   if (extra?.address) {
     params.push(`addr=${encodeURIComponent(extra.address)}`);
+  }
+  if (
+    extra?.returnTo &&
+    extra.returnTo.startsWith("/") &&
+    !extra.returnTo.startsWith("//")
+  ) {
+    params.push(`from=${encodeURIComponent(extra.returnTo)}`);
   }
   return `/map?${params.join("&")}`;
 }

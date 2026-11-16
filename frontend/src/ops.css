@@ -422,6 +422,25 @@
   min-width: 0;
 }
 
+.o-back-overview {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 44px;
+  padding: 0 12px 0 9px;
+  border-radius: 999px;
+  background: #eae4d8;
+  border: 1px solid #dbd2c2;
+  color: #24372f;
+  font-size: 12.5px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.o-back-overview:hover {
+  background: #dfd7c8;
+}
+
 .o-topbar-title h1 {
   margin: 0;
   font-size: 19px;

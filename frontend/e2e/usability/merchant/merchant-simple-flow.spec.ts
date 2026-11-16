@@ -55,6 +55,10 @@ async function fixture(page: Page, discoveryOnly = false) {
     const detail = path.match(/^\/merchant\/orders\/([^/]+)$/);
     if (detail) return send(orders.find(row => row.id === detail[1]));
     if (path === "/merchant/metrics") return send({ today: { revenue_cents: 0, orders_created: orders.length, orders_completed: 1 }, series: [], top_products: [], recent_payments: [] });
+    if (path === "/merchant/stalls/1971/services") return send({ mode: "live", wechat: { enabled: true }, delivery: { enabled: false, points: [] } });
+    if (path === "/merchant/stalls/1971/delivery") return send({ enabled: false, fee_cents: 0, min_order_cents: 0, max_active_orders: 3, estimated_minutes: 25, available_points: [], selected_point_ids: [] });
+    if (path === "/merchant/reviews") return send([]);
+    if (path === "/merchant/application") return send({ status: "draft", source: "self", business_name: "", stall_name: "", contact_phone: "", area_id: null, category: "", address_note: "", description: "" });
     state.unexpected.push(`${route.request().method()} ${path}`);
     return route.fulfill({ status: 500, json: { detail: "Unexpected fixture request" } });
   });
@@ -171,5 +175,52 @@ test("discovery merchants retain old-order reminders before logout", async ({ pa
   await expect(page.getByRole("button", { name: "开启声音提醒", exact: true })).toBeVisible();
   const logout = page.locator(".m-content").getByRole("button", { name: "退出登录", exact: true });
   expect(await logout.evaluate(element => !!(document.querySelector("#notifications")!.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+  expect(state.unexpected).toEqual([]);
+});
+
+test("merchant secondary pages, order history, drawer, and onboarding expose >=44px back navigation on mobile and desktop", async ({ page }) => {
+  const state = await fixture(page);
+  for (const width of [390, 1440]) {
+    await page.setViewportSize({ width, height: 844 });
+    // 1. Jumping from workbench (/merchant) to store settings returns directly to 接单台.
+    await page.goto("/merchant");
+    await page.getByRole("link", { name: "更换位置", exact: true }).click();
+    await expect(page).toHaveURL(/\/merchant\/store#location$/);
+    const backWorkbench = width <= 767
+      ? page.locator(".m-mobile-back")
+      : page.locator(".m-page-heading .m-back-link");
+    await expect(backWorkbench).toBeVisible();
+    expect((await backWorkbench.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await assertNoHorizontalOverflow(page);
+    await backWorkbench.click();
+    await expect(page).toHaveURL(/\/merchant$/);
+
+    // 2. Entering analytics / reviews / history orders from More returns to 更多, and history queue exposes 返回出餐台.
+    await page.goto("/merchant/more");
+    await page.getByRole("link", { name: /收款与经营数据/ }).click();
+    await expect(page).toHaveURL(/\/merchant\/analytics$/);
+    const backMore = width <= 767
+      ? page.locator(".m-mobile-back")
+      : page.locator(".m-page-heading .m-back-link");
+    await expect(backMore).toBeVisible();
+    expect((await backMore.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await assertNoHorizontalOverflow(page);
+    await backMore.click();
+    await expect(page).toHaveURL(/\/merchant\/more$/);
+
+    await page.getByRole("link", { name: /历史订单/ }).click();
+    await expect(page).toHaveURL(/\/merchant\/orders\?filter=all$/);
+    const backQueue = page.getByRole("button", { name: "返回出餐台", exact: true });
+    await expect(backQueue).toBeVisible();
+    expect((await backQueue.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+
+    // Open order detail drawer and verify left-aligned 返回订单列表 button.
+    await page.locator(".merchant-order").first().getByRole("button", { name: /详情/ }).click();
+    const drawerBack = page.getByRole("button", { name: "返回订单列表", exact: true });
+    await expect(drawerBack).toBeVisible();
+    expect((await drawerBack.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await drawerBack.click();
+    await expect(drawerBack).not.toBeVisible();
+  }
   expect(state.unexpected).toEqual([]);
 });

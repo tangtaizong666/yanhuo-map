@@ -21,8 +21,9 @@ async function fixture(page: Page, mapEnabled = false) {
           addControl() {} on() {} add() {} remove() {} destroy() {}
           panTo(center: number[]) { this.center = center; }
           setZoomAndCenter(zoom: number, center: number[]) { this.zoom = zoom; this.center = center; }
+          setFitView() {}
         },
-        Marker: class { on() {} }, Scale: class {},
+        Marker: class { on() {} }, Polyline: class {}, Scale: class {},
       };
     }
   }, { food: products[0], mapEnabled });
@@ -570,5 +571,68 @@ test("long session replacements preserve root ancestor and chained unwind clicks
   });
   await expect(page).toHaveURL(/\/$/);
   expect(await page.evaluate(() => Number(history.state?.position ?? 0))).toBe(homePos);
+  expect(state.writes).toEqual([]);
+});
+
+test("desktop route planner docks in sidebar without covering map canvas and preserves source return", async ({ page }) => {
+  const state = await fixture(page, true);
+  state.stall.latitude = 31.0012;
+  state.stall.longitude = 121.0015;
+  (state as any).order99 = {
+    id: "99",
+    number: "YH202611140099",
+    stall_id: 71,
+    stall_name: state.stall.name,
+    pickup_address: state.stall.address,
+    pickup_latitude: 31.0012,
+    pickup_longitude: 121.0015,
+    merchant_contact_phone: "13800000000",
+    status: "preparing",
+    payment_method: "wechat",
+    payment_status: "paid",
+    fulfillment_type: "pickup",
+    total_cents: 800,
+    pickup_code: null,
+    prep_minutes: 8,
+    note: "",
+    contact_phone: "13800000000",
+    created_at: new Date().toISOString(),
+    items: [{ product_id: 711, name: "鸡蛋煎饼1", image: "", unit_price_cents: 800, quantity: 1, portions: [] }],
+    review: null,
+  };
+  await page.route("**/api/v1/orders/99", route => route.fulfill({ json: (state as any).order99 }));
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/orders/99");
+  await page.getByRole("link", { name: "路线", exact: true }).click();
+  await expect(page).toHaveURL(/\/map\?route=1/);
+
+  const routeCard = page.getByRole("region", { name: "站内步行路线" });
+  const mapCanvas = page.getByRole("region", { name: "摊位地图" });
+  await expect(routeCard).toBeVisible();
+  await expect(mapCanvas).toBeVisible();
+
+  const cardBox = (await routeCard.boundingBox())!;
+  const canvasBox = (await mapCanvas.boundingBox())!;
+  // Desktop route card sits completely inside the left rail and never overlaps the map canvas.
+  expect(cardBox.x + cardBox.width).toBeLessThanOrEqual(canvasBox.x + 2);
+  expect(canvasBox.width).toBeGreaterThanOrEqual(700);
+
+  const backOrder = routeCard.getByRole("link", { name: "返回订单详情", exact: true });
+  await expect(backOrder).toBeVisible();
+  expect((await backOrder.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await backOrder.click();
+  await expect(page).toHaveURL(/\/orders\/99$/);
+
+  // Search page also exposes a >=44px back-to-home link across mobile and desktop widths.
+  await page.goto("/search?q=煎饼");
+  for (const width of [360, 390, 768, 1440]) {
+    await page.setViewportSize({ width, height: 844 });
+    const searchBack = page.getByRole("link", { name: "返回首页", exact: true });
+    await expect(searchBack).toBeVisible();
+    expect((await searchBack.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
+  }
   expect(state.writes).toEqual([]);
 });

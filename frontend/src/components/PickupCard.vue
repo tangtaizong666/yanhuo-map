@@ -37,6 +37,7 @@ const navigation = computed(() =>
         {
           stallId: props.order.stall_id,
           address: props.order.pickup_address,
+          returnTo: `/orders/${props.order.id}`,
         },
       )
     : "",

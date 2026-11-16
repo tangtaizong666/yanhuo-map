@@ -262,6 +262,7 @@ onUnmounted(reset);
           routeUrl(stall.latitude, stall.longitude, stall.name, {
             stallId: stall.id,
             address: stall.address,
+            returnTo: compact ? null : `/stalls/${stall.id}`,
           })
         "
         @click="directions"

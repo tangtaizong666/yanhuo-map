@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   Search,
+  ArrowLeft,
   ArrowUpRight,
   MapPin,
   Utensils,
@@ -348,12 +349,12 @@ onMounted(() =>
 </script>
 <template>
   <div class="page home-page" :class="{ 'search-page': searching }">
-    <div class="discovery-toolbar">
-      <div class="welcome-note">
-        <span class="little-sun">✳</span
-        ><span>{{
-          searching ? "找一份心动的好味道" : "下课了，去吃点好的。"
-        }}</span>
+    <div class="discovery-toolbar" :class="{ 'is-searching': searching }">
+      <RouterLink v-if="searching" to="/" class="search-back-link">
+        <ArrowLeft :size="16" /><span>返回首页</span>
+      </RouterLink>
+      <div v-else class="welcome-note">
+        <span class="little-sun">✳</span><span>下课了，去吃点好的。</span>
       </div>
       <form class="search-box" @submit.prevent="search">
         <Search :size="18" /><input
@@ -1085,8 +1086,25 @@ onMounted(() =>
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 24px;
+  gap: 16px;
   margin-bottom: 22px;
+}
+.search-back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 44px;
+  padding: 0 13px 0 9px;
+  border-radius: 999px;
+  background: #fff2e2;
+  border: 1px solid #ecd4ba;
+  color: #93461a;
+  font-size: 13px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.search-back-link:hover {
+  background: #fde5ca;
 }
 .welcome-note {
   display: flex;
@@ -1433,6 +1451,20 @@ onMounted(() =>
   .discovery-toolbar {
     display: block;
     margin-bottom: 8px;
+  }
+  .discovery-toolbar.is-searching {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .discovery-toolbar.is-searching .search-back-link {
+    padding: 0 11px 0 8px;
+    font-size: 12.5px;
+  }
+  .discovery-toolbar.is-searching .search-box {
+    flex: 1;
+    min-width: 0;
+    width: auto;
   }
   .welcome-note {
     display: none;

@@ -224,7 +224,10 @@ watch(products, (list) => {
     notify(`已核对菜单，「${removedName}」已删除`, "success");
   }
 });
-function openPhotoAssist(trigger?: EventTarget | null) {
+const photoAssistFromEditor = ref(false);
+let editorSnapshotBeforeAssist: AssistDraft | null = null;
+function openPhotoAssist(trigger?: EventTarget | null, fromEditor = false) {
+  photoAssistFromEditor.value = fromEditor;
   photoAssistError.value = "";
   photoAssistReturnFocus =
     trigger instanceof HTMLElement
@@ -237,15 +240,28 @@ function openPhotoAssist(trigger?: EventTarget | null) {
 function closePhotoAssist(restoreFocus = true) {
   if (!photoAssistOpen.value) return;
   photoAssistOpen.value = false;
+  photoAssistFromEditor.value = false;
+  editorSnapshotBeforeAssist = null;
   photoAssistError.value = "";
   if (!modal.value) document.body.style.overflow = photoAssistPreviousOverflow;
   if (restoreFocus) nextTick(() => photoAssistReturnFocus?.focus());
 }
 function switchEditorToPhotoAssist() {
   if (saving.value || uploading.value) return;
+  const snapshot = JSON.parse(JSON.stringify(form)) as AssistDraft;
   const trigger = returnFocus;
   closeEditor(true);
-  openPhotoAssist(trigger);
+  openPhotoAssist(trigger, true);
+  editorSnapshotBeforeAssist = snapshot;
+}
+function returnPhotoAssistToEditor(assistDraft: AssistDraft) {
+  const hasAssistContent = Boolean(
+    assistDraft.image || assistDraft.name.trim() || assistDraft.description.trim(),
+  );
+  const merged = hasAssistContent
+    ? assistDraft
+    : editorSnapshotBeforeAssist || assistDraft;
+  handoffFromPhotoAssist(merged);
 }
 function handoffFromPhotoAssist(assistDraft: AssistDraft) {
   const trigger = photoAssistReturnFocus;
@@ -1069,6 +1085,7 @@ function tasteValues(groups: Draft["taste_options"]) {
   </section>
   <MerchantPhotoAssist
     :open="photoAssistOpen"
+    :from-editor="photoAssistFromEditor"
     :stall="stall"
     :discovery-only="discoveryOnly"
     :categories="categories"
@@ -1079,6 +1096,7 @@ function tasteValues(groups: Draft["taste_options"]) {
     @close="closePhotoAssist()"
     @submit-draft="submitPhotoAssistDraft"
     @handoff-to-editor="handoffFromPhotoAssist"
+    @back-to-editor="returnPhotoAssistToEditor"
     @open-pending-recovery="openPendingFromPhotoAssist"
   />
   <Teleport to="body"
