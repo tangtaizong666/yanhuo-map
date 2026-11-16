@@ -254,24 +254,43 @@ function switchEditorToPhotoAssist() {
   openPhotoAssist(trigger, true);
   editorSnapshotBeforeAssist = snapshot;
 }
+function mergeWithEditorSnapshot(assistDraft: AssistDraft): AssistDraft {
+  const base = editorSnapshotBeforeAssist;
+  if (!base) return assistDraft;
+  return {
+    name: assistDraft.name.trim() ? assistDraft.name : base.name,
+    description: assistDraft.description.trim()
+      ? assistDraft.description
+      : base.description,
+    image: assistDraft.image || base.image,
+    category: assistDraft.category.trim() ? assistDraft.category : base.category,
+    price: assistDraft.price.trim() ? assistDraft.price : base.price,
+    stock:
+      assistDraft.image && assistDraft.stock.trim()
+        ? assistDraft.stock
+        : base.stock || assistDraft.stock,
+    is_active: base.is_active,
+    display_availability: assistDraft.image
+      ? assistDraft.display_availability
+      : base.display_availability,
+    taste_options: assistDraft.taste_options?.length
+      ? assistDraft.taste_options
+      : base.taste_options,
+  };
+}
 function returnPhotoAssistToEditor(assistDraft: AssistDraft) {
-  const hasAssistContent = Boolean(
-    assistDraft.image || assistDraft.name.trim() || assistDraft.description.trim(),
-  );
-  const merged = hasAssistContent
-    ? assistDraft
-    : editorSnapshotBeforeAssist || assistDraft;
-  handoffFromPhotoAssist(merged);
+  handoffFromPhotoAssist(assistDraft);
 }
 function handoffFromPhotoAssist(assistDraft: AssistDraft) {
+  const merged = mergeWithEditorSnapshot(assistDraft);
   const trigger = photoAssistReturnFocus;
   closePhotoAssist(false);
   discardOpen.value = false;
   editSaveUncertain.value = false;
   editingId.value = null;
-  Object.assign(form, assistDraft);
+  Object.assign(form, merged);
   original = blank();
-  extrasForcedOpen.value = Boolean(assistDraft.image || assistDraft.description);
+  extrasForcedOpen.value = Boolean(merged.image || merged.description);
   formError.value = "";
   returnFocus = trigger;
   previousOverflow = photoAssistPreviousOverflow;

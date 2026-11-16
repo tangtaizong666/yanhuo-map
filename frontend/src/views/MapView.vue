@@ -180,10 +180,12 @@ const originPresets = computed(() => {
   }
   return list;
 });
+const ALLOWED_ROUTE_RETURN_RE =
+  /^\/(?:stalls\/\d+(?:\/products\/\d+)?|orders\/[^/?#]+|search|cart|me)(?:[?#].*)?$/;
 const routeFallback = computed(() => {
   if (typeof route.query.from === "string" && route.query.from) {
     const target = safeReturnTo(route.query.from);
-    if (target && target !== "/" && !target.startsWith("/map")) {
+    if (target && ALLOWED_ROUTE_RETURN_RE.test(target)) {
       return target;
     }
   }
@@ -691,6 +693,15 @@ watch(
     void updateWalkingRoute();
   },
   { immediate: true },
+);
+watch(
+  () => !!routeTarget.value,
+  () => {
+    void nextTick(() => {
+      map?.resize?.();
+      if (routePlan.value) drawRouteOnMap();
+    });
+  },
 );
 watch(stalls, () => {
   // A summary cannot update arrival photos, notes or closing time. Refresh the

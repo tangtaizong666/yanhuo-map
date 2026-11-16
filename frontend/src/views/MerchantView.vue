@@ -419,6 +419,12 @@ watch(
     metricsError.value = "";
     refreshing.value = false;
     loading.value = allowed.value;
+    lastMainSection.value =
+      section.value === "" ||
+      section.value === "products" ||
+      section.value === "more"
+        ? section.value
+        : null;
     if (mounted && allowed.value) void refresh();
   },
   { flush: "sync" },

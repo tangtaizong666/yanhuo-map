@@ -624,6 +624,11 @@ test("desktop route planner docks in sidebar without covering map canvas and pre
   await backOrder.click();
   await expect(page).toHaveURL(/\/orders\/99$/);
 
+  // Direct load with forged/non-consumer `from` ignores the untrusted target and falls back safely to stall.
+  await page.goto("/map?route=1&to=121.0015,31.0012&name=东门煎饼摊&stall=71&from=/ops");
+  const safeBackStall = routeCard.getByRole("link", { name: "返回摊位", exact: true });
+  await expect(safeBackStall).toHaveAttribute("href", "/stalls/71");
+
   // Search page also exposes a >=44px back-to-home link across mobile and desktop widths.
   await page.goto("/search?q=煎饼");
   for (const width of [360, 390, 768, 1440]) {

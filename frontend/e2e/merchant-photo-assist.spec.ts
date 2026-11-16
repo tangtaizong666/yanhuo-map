@@ -397,5 +397,18 @@ test("skipping AI wait and retaking photo ignores late stale AI response", async
     name: "现炸脆皮臭豆腐",
     image: "/media/merchants/2101/dish2abcdef123456.jpg",
   });
+
+  // Switching from manual editor -> photo assist -> 返回手动填写 preserves unsaved manual fields.
+  await page.getByRole("button", { name: "添加商品", exact: true }).click();
+  const manualDialog = page.getByRole("dialog", { name: "添加新商品", exact: true });
+  await manualDialog.getByLabel("商品名称").fill("手抓饼加蛋");
+  await manualDialog.getByLabel("单价（元）").fill("9.5");
+  await manualDialog.getByRole("button", { name: "去拍照上架", exact: true }).click();
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "返回手动填写", exact: true }).click();
+  await expect(manualDialog).toBeVisible();
+  await expect(manualDialog.getByLabel("商品名称")).toHaveValue("手抓饼加蛋");
+  await expect(manualDialog.getByLabel("单价（元）")).toHaveValue("9.5");
+
   expect(state.unexpected).toEqual([]);
 });
