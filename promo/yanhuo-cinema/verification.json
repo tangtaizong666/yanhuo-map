@@ -1,0 +1,25 @@
+{
+  "file": "yanhuo-cinema-1080p60.mp4",
+  "bytes": 36362971,
+  "sha256": "1f9192b4d7e11fad535fa98f7c48cb04292b9966764407aabb86230c13034dd2",
+  "duration_seconds": 81.5,
+  "width": 1920,
+  "height": 1080,
+  "fps": "60/1",
+  "decoded_video_frames": 4890,
+  "expected_video_frames": 4890,
+  "video_codec": "h264",
+  "color_parameters": [
+    "yuv420p",
+    "tv",
+    "bt709",
+    "bt709",
+    "bt709"
+  ],
+  "audio_codec": "aac",
+  "audio_sample_rate": 48000,
+  "audio_channels": 2,
+  "integrated_loudness_lufs": -14.4,
+  "true_peak_dbtp": -0.7,
+  "decode_check": "passed; decoded 4890/4890 frames @ 60fps & 48kHz stereo audio with zero errors"
+}

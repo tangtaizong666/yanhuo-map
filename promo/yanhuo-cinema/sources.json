@@ -1,0 +1,90 @@
+{
+  "checked_on": "2026-11-26",
+  "deliverable": "yanhuo-cinema-1080p60.mp4",
+  "title": "烟火地图 ·《烟火志》三创赛官方品牌宣传片（1080p60 · 含专业旁白字幕）",
+  "specs": {
+    "duration_seconds": 81.5,
+    "width": 1920,
+    "height": 1080,
+    "fps": 60,
+    "frames": 4890,
+    "color": "yuv420p / tv / bt709",
+    "audio": "48000 Hz stereo AAC, EBU R128 mastered (-14.3 LUFS)"
+  },
+  "disclosure": "全国大学生电子商务“创新、创意及创业”挑战赛路演与品牌宣传片。三端界面截图取自本项目真实隔离运行的 Vue 3 + Django 系统（明确标明模拟演示环境，不发生真实扣款或配送）；餐点实拍采用 Wikimedia CC0/CC BY/CC BY-SA 许可素材，氛围场景板为项目自绘与 AI 艺术生成，非特定入驻商户实拍或实时营业承诺。",
+  "live_app_captures": [
+    "assets/screens/student-home.png",
+    "assets/screens/student-pickup.png",
+    "assets/screens/merchant-workbench.png",
+    "assets/screens/merchant-ready.png",
+    "assets/screens/ops-overview.png",
+    "assets/screens/ops-orders.png"
+  ],
+  "licensed_food_photography": [
+    {
+      "file": "assets/plates/food-noodles-griddle.jpg",
+      "author": "Fumikas Sagisavas",
+      "work_url": "https://commons.wikimedia.org/wiki/File:Grilled_cold_noodles_(20241111).jpg",
+      "license": "CC0 1.0",
+      "license_url": "http://creativecommons.org/publicdomain/zero/1.0/deed.en"
+    },
+    {
+      "file": "assets/plates/food-skewers.jpg",
+      "author": "Guilhem Vellut",
+      "work_url": "https://commons.wikimedia.org/wiki/File:Lamb_skewers,_Iris,_183_Rue_Saint-Martin,_Paris_001.jpg",
+      "license": "CC BY 2.0",
+      "license_url": "https://creativecommons.org/licenses/by/2.0"
+    },
+    {
+      "file": "assets/plates/food-jianbing-making.jpg",
+      "author": "N509FZ",
+      "work_url": "https://commons.wikimedia.org/wiki/File:Preparing_Jianbing_in_Binhai,_Tianjin_(20191006080542).jpg",
+      "license": "CC BY-SA 4.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/4.0"
+    },
+    {
+      "file": "assets/plates/food-lemon-tea.jpg",
+      "author": "Andy Li",
+      "work_url": "https://commons.wikimedia.org/wiki/File:Iced_lemon_tea_-_Rawlab_Juice_%26_Tea.jpg",
+      "license": "CC0 1.0",
+      "license_url": "http://creativecommons.org/publicdomain/zero/1.0/deed.en"
+    }
+  ],
+  "editorial_generated_plates": [
+    {
+      "file": "assets/plates/hero-griddle.jpg",
+      "origin": "AI-generated editorial cinema plate (2026-11-26) for Yanhuo Map promo",
+      "note": "场景氛围创作，非真实商户实拍"
+    },
+    {
+      "file": "assets/plates/hero-griddle-alt.jpg",
+      "origin": "Extracted from project roadshow visual deck (烟火志 ISSUE 01)",
+      "note": "场景氛围创作，非真实商户实拍"
+    },
+    {
+      "file": "assets/plates/night-alley-walk.jpg",
+      "origin": "Extracted from project roadshow visual deck (烟火志 ISSUE 01)",
+      "note": "场景氛围创作，非真实商户实拍"
+    },
+    {
+      "file": "assets/plates/diorama-pavilion.jpg",
+      "origin": "Extracted from project roadshow visual deck (烟火志 ISSUE 01)",
+      "note": "校门固定保温交接点概念建筑微缩示意"
+    },
+    {
+      "file": "assets/plates/photo-assist-hands.jpg",
+      "origin": "Extracted from project roadshow visual deck (烟火志 ISSUE 01)",
+      "note": "商家拍图辅助上架概念示意"
+    }
+  ],
+  "audio_and_voiceover": {
+    "voiceover": "edge-tts (zh-CN-YunxiNeural) studio-paced narration with synced Chinese subtitles",
+    "score_and_foley": "Original procedural Rhodes electric piano score, warm sub-bass groove, optical prism chimes, mechanical split-flap clacks, and sidechain VO ducking (tools/create_audio.py). Zero third-party music copyright risk."
+  },
+  "creative_references": [
+    "https://dribbble.com/",
+    "https://www.pinterest.com/",
+    "https://gsap.com/showcase/",
+    "https://recent.design/?ref=godly"
+  ]
+}

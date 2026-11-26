@@ -1,0 +1,241 @@
+{
+  "title": "烟火地图 ·《烟火志》三创赛官方品牌宣传片",
+  "voice": "zh-CN-YunxiNeural",
+  "fps": 60,
+  "width": 1920,
+  "height": 1080,
+  "duration_seconds": 81.5,
+  "total_frames": 4890,
+  "cues": [
+    {
+      "id": "c1_hook",
+      "label": "ACT I · 22:10 校门口",
+      "start": 1.1,
+      "end": 6.918,
+      "duration": 5.818,
+      "wav": "audio/vo_clips/c1_hook.wav",
+      "text": "晚上十点下课，校门口这口八块钱的热乎烤冷面，为什么总让人两难？",
+      "subtitles": [
+        {
+          "start": 1.1,
+          "end": 5.282,
+          "text": "晚上十点下课，校门口这口 8 块钱的热乎烤冷面"
+        },
+        {
+          "start": 5.282,
+          "end": 6.918,
+          "text": "为什么总让人两难？"
+        }
+      ]
+    },
+    {
+      "id": "c2_pain",
+      "label": "ACT I · 跑空与溢价",
+      "start": 7.668,
+      "end": 13.009,
+      "duration": 5.341,
+      "wav": "audio/vo_clips/c2_pain.wav",
+      "text": "走过去怕扑空，点外卖翻一倍，小摊贩也被挡在合规与高抽佣之外。",
+      "subtitles": [
+        {
+          "start": 7.668,
+          "end": 10.148,
+          "text": "走过去怕扑空，点外卖翻一倍"
+        },
+        {
+          "start": 10.148,
+          "end": 13.009,
+          "text": "小摊贩也被挡在合规与高抽佣之外"
+        }
+      ]
+    },
+    {
+      "id": "c3_freshness",
+      "label": "ACT II · 60分钟鲜度闸门",
+      "start": 14.309,
+      "end": 25.666,
+      "duration": 11.357,
+      "wav": "audio/vo_clips/c3_freshness.wav",
+      "text": "于是，我们做了烟火地图。摊主一键确认出摊，全校实时可见；超过六十分钟未续期，系统自动落下停单闸门，彻底告别跑空。",
+      "subtitles": [
+        {
+          "start": 14.309,
+          "end": 16.858,
+          "text": "于是，我们做了烟火地图"
+        },
+        {
+          "start": 16.858,
+          "end": 20.335,
+          "text": "摊主一键确认出摊，全校实时可见"
+        },
+        {
+          "start": 20.335,
+          "end": 25.666,
+          "text": "超 60 分钟未续期自动落闸停单，彻底告别跑空"
+        }
+      ]
+    },
+    {
+      "id": "c4_compliance",
+      "label": "ACT III · A/B分层与5%光学分账",
+      "start": 26.966,
+      "end": 41.883,
+      "duration": 14.916,
+      "wav": "audio/vo_clips/c4_compliance.wav",
+      "text": "面对监管红线，系统硬核分层：流动摊零门槛免费找摊，持证店才开放线上预付。微信特约直连分账，九成五直达摊主，平台只收百分之五技术服务费，不设二清资金池。",
+      "subtitles": [
+        {
+          "start": 26.966,
+          "end": 32.087,
+          "text": "面对监管红线：流动摊免费找摊，持证店才开放交易"
+        },
+        {
+          "start": 32.087,
+          "end": 38.321,
+          "text": "微信特约直连分账：95% 直达摊主，仅 5% 技术服务费"
+        },
+        {
+          "start": 38.321,
+          "end": 41.883,
+          "text": "平台零二清资金池，不碰商户一分钱"
+        }
+      ]
+    },
+    {
+      "id": "c5_live_app",
+      "label": "ACT IV · 三端全栈实机联动",
+      "start": 43.183,
+      "end": 58.07,
+      "duration": 14.887,
+      "wav": "audio/vo_clips/c5_live_app.wav",
+      "text": "这不是纸面构想，而是已经跑通的三端全栈实机。学生端逐份备注口味，预付锁单，凭四位码两秒即取；商家端专为油手忙时打造，一键出餐，还能拍张照辅助上架。",
+      "subtitles": [
+        {
+          "start": 43.183,
+          "end": 47.673,
+          "text": "不是纸面构想，而是已跑通的三端全栈实机"
+        },
+        {
+          "start": 47.673,
+          "end": 53.108,
+          "text": "学生端逐份备注、预付锁单、凭 4 位码两秒即取"
+        },
+        {
+          "start": 53.108,
+          "end": 58.07,
+          "text": "商家端油手大键一键出餐，拍张照辅助轻松上架"
+        }
+      ]
+    },
+    {
+      "id": "c6_governance",
+      "label": "ACT V · 保温交接点与平台治理",
+      "start": 59.32,
+      "end": 67.072,
+      "duration": 7.752,
+      "wav": "audio/vo_clips/c6_governance.wav",
+      "text": "搭配校门固定保温交接点，与独立脱敏的平台治理台，让校方监管放心，让校园烟火有序生长。",
+      "subtitles": [
+        {
+          "start": 59.32,
+          "end": 63.411,
+          "text": "搭配校门固定保温交接点与独立脱敏治理台"
+        },
+        {
+          "start": 63.411,
+          "end": 67.072,
+          "text": "让校方监管放心，让校园烟火有序生长"
+        }
+      ]
+    },
+    {
+      "id": "c7_finale",
+      "label": "ACT VI · 烟火志终章",
+      "start": 69.472,
+      "end": 78.065,
+      "duration": 8.593,
+      "wav": "audio/vo_clips/c7_finale.wav",
+      "text": "一盏摊灯，一份热食，一座有温度的数字校园。烟火地图，少跑一次空，留住校门口的热乎气。",
+      "subtitles": [
+        {
+          "start": 69.472,
+          "end": 73.564,
+          "text": "一盏摊灯，一份热食，一座有温度的数字校园"
+        },
+        {
+          "start": 73.564,
+          "end": 78.065,
+          "text": "烟火地图 · 少跑一次空，留住校门口的热乎气"
+        }
+      ]
+    }
+  ],
+  "scenes": [
+    {
+      "id": "s01_hero_griddle",
+      "title": "22:10 校门口 · 烤冷面烟火开场",
+      "start": 0.0,
+      "end": 7.218
+    },
+    {
+      "id": "s02_empty_gate",
+      "title": "人呢？又跑空了？",
+      "start": 7.218,
+      "end": 9.591
+    },
+    {
+      "id": "s03_receipt_dissection",
+      "title": "价格断层 · ¥8.00 vs ¥16.50 热敏小票对决",
+      "start": 9.591,
+      "end": 13.709
+    },
+    {
+      "id": "s04_brand_map",
+      "title": "烟火地图揭幕 · 校门动态地图",
+      "start": 13.709,
+      "end": 20.215
+    },
+    {
+      "id": "s05_freshness_flap",
+      "title": "60分钟鲜度翻页闸门 · 超时自动停单",
+      "start": 20.215,
+      "end": 26.366
+    },
+    {
+      "id": "s06_dual_track",
+      "title": "G2026 A/B 双轨合规高速路牌",
+      "start": 26.366,
+      "end": 33.529
+    },
+    {
+      "id": "s07_optical_prism",
+      "title": "微信特约光学分账 · 95% 直达 / 5% 零二清",
+      "start": 33.529,
+      "end": 42.583
+    },
+    {
+      "id": "s08_student_live",
+      "title": "学生端实机 · 逐份备注与 4 位取餐码",
+      "start": 42.583,
+      "end": 51.52
+    },
+    {
+      "id": "s09_merchant_ai",
+      "title": "商家端实机 · 油手大键与拍图辅助上架",
+      "start": 51.52,
+      "end": 58.72
+    },
+    {
+      "id": "s10_handoff_ops",
+      "title": "校门保温交接点 × /ops 独立脱敏治理台",
+      "start": 58.72,
+      "end": 67.922
+    },
+    {
+      "id": "s11_montage_finale",
+      "title": "烟火志终章 · 一盏摊灯一份热食",
+      "start": 67.922,
+      "end": 81.5
+    }
+  ]
+}
